@@ -28,4 +28,6 @@ router.post("/:id/convert", validateBody(convertLeadSchema), opportunityControll
 router.get("/:id/activities", activityController.listForLead);
 router.post("/:id/activities", validateBody(createActivitySchema), activityController.createForLead);
 
+router.get("/:id/consent", leadController.getConsent);
+
 export default router;
