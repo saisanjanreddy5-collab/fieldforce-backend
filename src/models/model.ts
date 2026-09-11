@@ -202,6 +202,33 @@ export async function createTables(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
 
+    // Schema evolution - additional fields captured on the New Lead form
+    // (Customer / Contact / Inquiry / Store tabs), added after the initial
+    // leads table was already live, same pattern as the reference mobile app.
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS start_date TIMESTAMPTZ`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS qualified_person VARCHAR(255)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS financial_status VARCHAR(100)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS welcome_message_sent BOOLEAN DEFAULT false`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_score DECIMAL(5,2)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS has_store_location BOOLEAN`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS store_name VARCHAR(255)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS store_address TEXT`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS store_pincode VARCHAR(20)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS store_city VARCHAR(100)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS store_state VARCHAR(100)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS carpet_area VARCHAR(50)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS frontage VARCHAR(50)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS ownership VARCHAR(50)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS investment_capacity DECIMAL(12,2)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS existing_business VARCHAR(255)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS expected_opening DATE`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS gst_number VARCHAR(20)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS pan_number VARCHAR(20)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS drug_licence_number VARCHAR(50)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS fssai_number VARCHAR(50)`,
+    `ALTER TABLE consents ADD COLUMN IF NOT EXISTS notes TEXT`,
+
     // Indexes - grouped together here rather than scattered between tables
     `CREATE INDEX IF NOT EXISTS idx_states_zone_id ON states(zone_id)`,
     `CREATE INDEX IF NOT EXISTS idx_districts_state_id ON districts(state_id)`,

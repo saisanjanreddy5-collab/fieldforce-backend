@@ -53,3 +53,8 @@ export const listShares = asyncHandler(async (req: Request, res: Response) => {
   const shares = await leadService.listLeadShares(String(req.params.id), req.user!.id);
   sendSuccess(res, shares);
 });
+
+export const getConsent = asyncHandler(async (req: Request, res: Response) => {
+  const consent = await leadService.getLeadConsent(String(req.params.id), req.user!.id);
+  sendSuccess(res, consent);
+});
