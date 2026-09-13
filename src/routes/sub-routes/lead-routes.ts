@@ -2,11 +2,13 @@ import { Router } from "express";
 import * as leadController from "../../controllers/lead-controller";
 import * as opportunityController from "../../controllers/opportunity-controller";
 import * as activityController from "../../controllers/activity-controller";
+import * as microsoftController from "../../controllers/microsoft-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
 import { createLeadSchema, listLeadsQuerySchema, shareLeadSchema, updateLeadSchema } from "../../validators/lead-validator";
 import { convertLeadSchema } from "../../validators/opportunity-validator";
 import { createActivitySchema } from "../../validators/activity-validator";
+import { createTeamsMeetingSchema, sendLeadEmailSchema } from "../../validators/microsoft-validator";
 
 const router = Router();
 
@@ -29,5 +31,12 @@ router.get("/:id/activities", activityController.listForLead);
 router.post("/:id/activities", validateBody(createActivitySchema), activityController.createForLead);
 
 router.get("/:id/consent", leadController.getConsent);
+
+router.post("/:id/microsoft/email", validateBody(sendLeadEmailSchema), microsoftController.sendEmailForLead);
+router.post(
+  "/:id/microsoft/teams-meeting",
+  validateBody(createTeamsMeetingSchema),
+  microsoftController.createMeetingForLead
+);
 
 export default router;

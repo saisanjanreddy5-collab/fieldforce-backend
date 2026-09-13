@@ -229,6 +229,20 @@ export async function createTables(): Promise<void> {
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS fssai_number VARCHAR(50)`,
     `ALTER TABLE consents ADD COLUMN IF NOT EXISTS notes TEXT`,
 
+    // One row per salesperson who has connected their own Microsoft 365
+    // account (Outlook + Teams) - each person authorizes individually via
+    // delegated OAuth, so emails/meetings are sent as themselves, not a
+    // shared system identity.
+    `CREATE TABLE IF NOT EXISTS microsoft_connections (
+      user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      ms_account_email VARCHAR(255) NOT NULL,
+      access_token TEXT NOT NULL,
+      refresh_token TEXT NOT NULL,
+      token_expires_at TIMESTAMPTZ NOT NULL,
+      connected_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+
     // Indexes - grouped together here rather than scattered between tables
     `CREATE INDEX IF NOT EXISTS idx_states_zone_id ON states(zone_id)`,
     `CREATE INDEX IF NOT EXISTS idx_districts_state_id ON districts(state_id)`,
