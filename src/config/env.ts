@@ -10,6 +10,19 @@ const envSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(1, "JWT_REFRESH_SECRET is required"),
   JWT_REFRESH_EXPIRES_IN: z.string().default("7d"),
   CORS_ALLOWED_ORIGINS: z.string().default(""),
+
+  // Microsoft 365 integration (Outlook mail + Teams meetings) - each
+  // salesperson connects their own Microsoft account via delegated OAuth;
+  // these three identify our app registration to Microsoft, they don't
+  // belong to any one user. Optional at the env level (not every
+  // environment has this configured yet, e.g. production until its own
+  // .env is updated) - services check for their presence at call time
+  // instead of crashing the whole server on startup.
+  MS_TENANT_ID: z.string().optional(),
+  MS_CLIENT_ID: z.string().optional(),
+  MS_CLIENT_SECRET: z.string().optional(),
+  MS_REDIRECT_URI: z.string().default("http://localhost:8000/api/integrations/microsoft/callback"),
+  FRONTEND_URL: z.string().default("http://localhost:5173"),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import authRoutes from "./sub-routes/auth-routes";
 import userRoutes from "./sub-routes/user-routes";
+import microsoftRoutes from "./sub-routes/microsoft-routes";
 import leadRoutes from "./sub-routes/lead-routes";
 import opportunityRoutes from "./sub-routes/opportunity-routes";
 import activityRoutes from "./sub-routes/activity-routes";
@@ -11,6 +12,7 @@ const router = Router();
 
 router.use("/auth", authRoutes);
 router.use("/users", userRoutes);
+router.use("/integrations/microsoft", microsoftRoutes);
 router.use("/leads", leadRoutes);
 router.use("/opportunities", opportunityRoutes);
 router.use("/activities", activityRoutes);
