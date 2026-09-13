@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authRoutes from "./sub-routes/auth-routes";
+import userRoutes from "./sub-routes/user-routes";
 import leadRoutes from "./sub-routes/lead-routes";
 import opportunityRoutes from "./sub-routes/opportunity-routes";
 import activityRoutes from "./sub-routes/activity-routes";
@@ -9,6 +10,7 @@ import dashboardRoutes from "./sub-routes/dashboard-routes";
 const router = Router();
 
 router.use("/auth", authRoutes);
+router.use("/users", userRoutes);
 router.use("/leads", leadRoutes);
 router.use("/opportunities", opportunityRoutes);
 router.use("/activities", activityRoutes);

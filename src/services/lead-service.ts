@@ -79,6 +79,7 @@ interface LeadRow {
   updated_at: string;
   owner_name: string | null;
   has_overdue_activity?: boolean;
+  consent_pending?: boolean;
 }
 
 export interface LeadConsentInput {
@@ -231,6 +232,7 @@ function toPublicLead(row: LeadRow) {
     updatedAt: row.updated_at,
     ownerName: row.owner_name,
     hasOverdueActivity: row.has_overdue_activity ?? undefined,
+    consentPending: row.consent_pending ?? undefined,
   };
 }
 
@@ -426,7 +428,10 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
        EXISTS (
          SELECT 1 FROM activities a
          WHERE a.lead_id = l.id AND a.due_date < now() AND a.status <> 'completed'
-       ) AS has_overdue_activity
+       ) AS has_overdue_activity,
+       NOT EXISTS (
+         SELECT 1 FROM consents c WHERE c.lead_id = l.id AND c.captured = true
+       ) AS consent_pending
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
      WHERE ${conditions.join(" AND ")}
