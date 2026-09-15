@@ -235,21 +235,43 @@ export async function createTeamsMeetingForLead(
   endTime: string,
   requestingUserId: string
 ): Promise<{ joinUrl: string }> {
-  await getLeadById(leadId, requestingUserId); // enforces visibility, result unused otherwise
+  const lead = await getLeadById(leadId, requestingUserId);
+  if (!lead.email) {
+    throw new ApiError(422, "This lead has no email address on file");
+  }
 
   const accessToken = await getValidAccessToken(requestingUserId);
 
-  const response = await fetch(`${GRAPH_BASE_URL}/me/onlineMeetings`, {
+  // A dedicated "online meeting" (POST /me/onlineMeetings) needs the
+  // OnlineMeetings.ReadWrite permission, which this app was never granted.
+  // A calendar event with isOnlineMeeting:true only needs Calendars.ReadWrite
+  // (already granted) and Microsoft attaches a Teams link to it the same way.
+  // Adding the lead as an attendee (not just creating the meeting for
+  // ourselves) is what makes Microsoft actually send them a real calendar
+  // invite with the join link - same as inviting anyone to a normal meeting.
+  const response = await fetch(`${GRAPH_BASE_URL}/me/events`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ subject, startDateTime: startTime, endDateTime: endTime }),
+    body: JSON.stringify({
+      subject,
+      start: { dateTime: startTime, timeZone: "UTC" },
+      end: { dateTime: endTime, timeZone: "UTC" },
+      isOnlineMeeting: true,
+      onlineMeetingProvider: "teamsForBusiness",
+      attendees: [
+        {
+          emailAddress: { address: lead.email, name: lead.fullName },
+          type: "required",
+        },
+      ],
+    }),
   });
 
   if (!response.ok) {
     throw new ApiError(502, `Microsoft rejected the Teams meeting: ${await response.text()}`);
   }
 
-  const meeting = (await response.json()) as { joinWebUrl: string; id: string };
+  const event = (await response.json()) as { onlineMeeting: { joinUrl: string }; id: string };
 
   await createActivityForLead(
     leadId,
@@ -258,11 +280,11 @@ export async function createTeamsMeetingForLead(
       subject,
       dueDate: startTime,
       status: "pending",
-      details: { joinUrl: meeting.joinWebUrl },
-      externalRefId: meeting.id,
+      details: { joinUrl: event.onlineMeeting.joinUrl },
+      externalRefId: event.id,
     },
     requestingUserId
   );
 
-  return { joinUrl: meeting.joinWebUrl };
+  return { joinUrl: event.onlineMeeting.joinUrl };
 }
