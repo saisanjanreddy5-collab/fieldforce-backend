@@ -8,6 +8,7 @@ interface UserRow {
   role: Role;
   designation: string | null;
   manager_id: string | null;
+  smartflo_agent_number: string | null;
   is_active: boolean;
   created_at: string;
 }
@@ -20,6 +21,7 @@ function toPublicUser(row: UserRow) {
     role: row.role,
     designation: row.designation,
     managerId: row.manager_id,
+    smartfloAgentNumber: row.smartflo_agent_number,
     isActive: row.is_active,
     createdAt: row.created_at,
   };
