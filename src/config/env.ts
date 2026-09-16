@@ -23,6 +23,11 @@ const envSchema = z.object({
   MS_CLIENT_SECRET: z.string().optional(),
   MS_REDIRECT_URI: z.string().default("http://localhost:8000/api/integrations/microsoft/callback"),
   FRONTEND_URL: z.string().default("http://localhost:5173"),
+
+  // Smartflo (Tata Tele) click-to-call - a single static API token for the
+  // whole account, not per-user like Microsoft 365. Optional for the same
+  // reason as the MS_ vars above.
+  SMARTFLO_API_TOKEN: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

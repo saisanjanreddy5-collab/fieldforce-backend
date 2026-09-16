@@ -3,6 +3,7 @@ import * as leadController from "../../controllers/lead-controller";
 import * as opportunityController from "../../controllers/opportunity-controller";
 import * as activityController from "../../controllers/activity-controller";
 import * as microsoftController from "../../controllers/microsoft-controller";
+import * as smartfloController from "../../controllers/smartflo-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
 import { createLeadSchema, listLeadsQuerySchema, shareLeadSchema, updateLeadSchema } from "../../validators/lead-validator";
@@ -38,5 +39,7 @@ router.post(
   validateBody(createTeamsMeetingSchema),
   microsoftController.createMeetingForLead
 );
+
+router.post("/:id/call", smartfloController.callLead);
 
 export default router;

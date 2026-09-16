@@ -229,6 +229,11 @@ export async function createTables(): Promise<void> {
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS fssai_number VARCHAR(50)`,
     `ALTER TABLE consents ADD COLUMN IF NOT EXISTS notes TEXT`,
 
+    // Each salesperson's own Smartflo agent identifier (their real phone
+    // number, agent ID, or extension as registered in Smartflo) - click-to-call
+    // rings this number first, then connects it to the lead.
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS smartflo_agent_number VARCHAR(50)`,
+
     // One row per salesperson who has connected their own Microsoft 365
     // account (Outlook + Teams) - each person authorizes individually via
     // delegated OAuth, so emails/meetings are sent as themselves, not a

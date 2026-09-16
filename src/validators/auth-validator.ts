@@ -13,6 +13,7 @@ export const registerSchema = z.object({
   stateId: z.string().uuid().optional(),
   districtId: z.string().uuid().optional(),
   areaId: z.string().uuid().optional(),
+  smartfloAgentNumber: z.string().optional(),
 });
 
 export const loginSchema = z.object({

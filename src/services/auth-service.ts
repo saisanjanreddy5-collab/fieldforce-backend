@@ -18,6 +18,7 @@ interface UserRow {
   state_id: string | null;
   district_id: string | null;
   area_id: string | null;
+  smartflo_agent_number: string | null;
   is_active: boolean;
   created_at: string;
 }
@@ -34,6 +35,7 @@ export interface RegisterInput {
   stateId?: string;
   districtId?: string;
   areaId?: string;
+  smartfloAgentNumber?: string;
 }
 
 function toPublicUser(row: UserRow) {
@@ -49,6 +51,7 @@ function toPublicUser(row: UserRow) {
     stateId: row.state_id,
     districtId: row.district_id,
     areaId: row.area_id,
+    smartfloAgentNumber: row.smartflo_agent_number,
     isActive: row.is_active,
   };
 }
@@ -74,8 +77,8 @@ export async function registerUser(input: RegisterInput) {
   const passwordHash = await bcrypt.hash(input.password, 10);
 
   const result = await pool.query<UserRow>(
-    `INSERT INTO users (name, email, password_hash, role, designation, manager_id, sales_team_id, zone_id, state_id, district_id, area_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    `INSERT INTO users (name, email, password_hash, role, designation, manager_id, sales_team_id, zone_id, state_id, district_id, area_id, smartflo_agent_number)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      RETURNING *`,
     [
       input.name,
@@ -89,6 +92,7 @@ export async function registerUser(input: RegisterInput) {
       input.stateId ?? null,
       input.districtId ?? null,
       input.areaId ?? null,
+      input.smartfloAgentNumber ?? null,
     ]
   );
 
