@@ -43,9 +43,20 @@ export interface OpportunityInput {
 export interface ListOpportunitiesFilters {
   stage?: string;
   leadId?: string;
+  category?: string;
+  ownerId?: string;
   search?: string;
   page: number;
   limit: number;
+}
+
+interface OpportunityListRow extends OpportunityRow {
+  lead_full_name: string;
+  lead_category: string | null;
+  lead_store_city: string | null;
+  lead_store_state: string | null;
+  owner_id: string | null;
+  owner_name: string | null;
 }
 
 function toPublicOpportunity(row: OpportunityRow) {
@@ -63,6 +74,21 @@ function toPublicOpportunity(row: OpportunityRow) {
     updatedBy: row.updated_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+// The Kanban board needs to show more than the raw opportunity row (the
+// lead's name, category tag, city, and assigned salesperson) - a separate
+// mapper rather than bloating every other call site with unused joins.
+function toPublicOpportunityListItem(row: OpportunityListRow) {
+  return {
+    ...toPublicOpportunity(row),
+    leadFullName: row.lead_full_name,
+    leadCategory: row.lead_category,
+    leadStoreCity: row.lead_store_city,
+    leadStoreState: row.lead_store_state,
+    ownerId: row.owner_id,
+    ownerName: row.owner_name,
   };
 }
 
@@ -145,24 +171,36 @@ export async function listOpportunitiesForUser(requestingUserId: string, filters
     params.push(filters.leadId);
     conditions.push(`o.lead_id = $${params.length}`);
   }
+  if (filters.category) {
+    params.push(filters.category);
+    conditions.push(`l.category = $${params.length}`);
+  }
+  if (filters.ownerId) {
+    params.push(filters.ownerId);
+    conditions.push(`l.owner_id = $${params.length}`);
+  }
   if (filters.search) {
     params.push(`%${filters.search}%`);
-    conditions.push(`o.name ILIKE $${params.length}`);
+    conditions.push(`(o.name ILIKE $${params.length} OR l.full_name ILIKE $${params.length})`);
   }
 
   params.push(filters.limit, (filters.page - 1) * filters.limit);
 
-  const result = await pool.query<OpportunityRow>(
+  const result = await pool.query<OpportunityListRow>(
     `${SUBTREE_CTE}
-     SELECT o.* FROM opportunities o
+     SELECT o.*, l.full_name AS lead_full_name, l.category AS lead_category,
+       l.store_city AS lead_store_city, l.store_state AS lead_store_state,
+       l.owner_id AS owner_id, u.name AS owner_name
+     FROM opportunities o
      JOIN leads l ON l.id = o.lead_id
+     LEFT JOIN users u ON u.id = l.owner_id
      WHERE ${conditions.join(" AND ")}
      ORDER BY o.created_at DESC
      LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
 
-  return result.rows.map(toPublicOpportunity);
+  return result.rows.map(toPublicOpportunityListItem);
 }
 
 export async function getOpportunityById(id: string, requestingUserId: string) {

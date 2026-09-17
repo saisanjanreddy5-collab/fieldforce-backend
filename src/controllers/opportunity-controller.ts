@@ -21,6 +21,8 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   const query = req.validatedQuery as unknown as {
     stage?: string;
     leadId?: string;
+    category?: string;
+    ownerId?: string;
     search?: string;
     page: number;
     limit: number;
