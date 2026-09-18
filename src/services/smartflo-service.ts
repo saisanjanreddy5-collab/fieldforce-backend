@@ -2,13 +2,27 @@ import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { SMARTFLO_BASE_URL, isSmartfloConfigured } from "../config/smartflo";
 import { env } from "../config/env";
-import { createActivityForLead } from "./activity-service";
+import { createActivityForLead, mergeActivityDetailsByExternalRefId } from "./activity-service";
 import { getLeadById } from "./lead-service";
 
 interface ClickToCallResponse {
   success: boolean;
   message: string;
   ref_id?: string;
+}
+
+// Shape of the payload Smartflo posts to our webhook when a call hangs up
+// (configured in their dashboard as "Call hangup (Missed or Answered)").
+// Only ref_id is guaranteed - it is the same value returned as ref_id from
+// click_to_call, which is how we match the callback back to our Activity.
+export interface SmartfloWebhookPayload {
+  ref_id?: string;
+  recording_url?: string;
+  duration?: string | number;
+  billsec?: string | number;
+  call_status?: string;
+  call_connected?: boolean | string;
+  hangup_cause?: string;
 }
 
 function assertConfigured(): void {
@@ -66,4 +80,44 @@ export async function initiateCallForLead(leadId: string, requestingUserId: stri
   );
 
   return { refId: body.ref_id ?? "" };
+}
+
+export function isWebhookSecretValid(providedSecret: string | undefined): boolean {
+  if (!env.SMARTFLO_WEBHOOK_SECRET) return true;
+  return providedSecret === env.SMARTFLO_WEBHOOK_SECRET;
+}
+
+function parseSeconds(value: string | number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const seconds = Number(value);
+  return Number.isFinite(seconds) ? seconds : undefined;
+}
+
+function formatDuration(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.round(totalSeconds % 60);
+  return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
+}
+
+export async function handleWebhookEvent(payload: SmartfloWebhookPayload): Promise<void> {
+  if (!payload.ref_id) return;
+
+  const durationSeconds = parseSeconds(payload.billsec) ?? parseSeconds(payload.duration);
+  const connected =
+    payload.call_connected === true ||
+    payload.call_connected === "true" ||
+    payload.call_status?.toLowerCase() === "answered";
+
+  const patch: Record<string, unknown> = {
+    outcome:
+      connected && durationSeconds !== undefined
+        ? `Connected · ${formatDuration(durationSeconds)}`
+        : connected
+          ? "Connected"
+          : `Not answered${payload.hangup_cause ? ` (${payload.hangup_cause})` : ""}`,
+  };
+  if (payload.recording_url) patch.recordingUrl = payload.recording_url;
+  if (durationSeconds !== undefined) patch.durationSeconds = durationSeconds;
+
+  await mergeActivityDetailsByExternalRefId(payload.ref_id, patch);
 }

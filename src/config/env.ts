@@ -28,6 +28,13 @@ const envSchema = z.object({
   // whole account, not per-user like Microsoft 365. Optional for the same
   // reason as the MS_ vars above.
   SMARTFLO_API_TOKEN: z.string().optional(),
+
+  // Shared secret Smartflo sends back as a custom header on its webhook
+  // (configured in their dashboard under API Connect > Webhook) so the
+  // public /api/integrations/smartflo/webhook route can tell a genuine
+  // Smartflo callback apart from a random internet request. Optional so the
+  // webhook still works before this is set up on both sides.
+  SMARTFLO_WEBHOOK_SECRET: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
