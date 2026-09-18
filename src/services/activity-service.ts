@@ -290,6 +290,24 @@ export async function updateActivity(id: string, updates: ActivityInput, request
   return toPublicActivity(result.rows[0]);
 }
 
+// Called by the Smartflo webhook, which has no CRM user session - it
+// identifies the call purely by the ref_id we stored as external_ref_id
+// when the click-to-call was initiated, so there is no visibility check
+// here (there is no requesting user to check visibility for).
+export async function mergeActivityDetailsByExternalRefId(
+  externalRefId: string,
+  patch: Record<string, unknown>
+): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE activities
+     SET details = details || $2::jsonb, updated_at = now()
+     WHERE external_ref_id = $1
+     RETURNING id`,
+    [externalRefId, JSON.stringify(patch)]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 export async function deleteActivity(id: string, requestingUserId: string): Promise<void> {
   const visible = await isActivityVisibleToUser(id, requestingUserId);
   if (!visible) {
