@@ -14,6 +14,12 @@ export const registerSchema = z.object({
   districtId: z.string().uuid().optional(),
   areaId: z.string().uuid().optional(),
   smartfloAgentNumber: z.string().optional(),
+  territory: z.string().optional(),
+  employeeCode: z.string().optional(),
+  dateOfJoining: z.string().optional(),
+  status: z.enum(["active", "on_leave", "onboarding"]).optional(),
+  levelId: z.string().uuid().optional(),
+  officeId: z.string().uuid().optional(),
 });
 
 export const loginSchema = z.object({

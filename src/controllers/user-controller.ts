@@ -7,3 +7,8 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   const users = await userService.listUsers(req.user!.id, req.user!.role);
   sendSuccess(res, users);
 });
+
+export const update = asyncHandler(async (req: Request, res: Response) => {
+  const user = await userService.updateUser(String(req.params.id), req.body);
+  sendSuccess(res, user, "User updated");
+});

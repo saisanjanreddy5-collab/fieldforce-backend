@@ -23,6 +23,9 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     leadId?: string;
     category?: string;
     ownerId?: string;
+    zoneId?: string;
+    territory?: string;
+    salesTeamId?: string;
     search?: string;
     page: number;
     limit: number;

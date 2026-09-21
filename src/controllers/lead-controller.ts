@@ -8,6 +8,11 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, lead, "Lead created", 201);
 });
 
+export const listTerritories = asyncHandler(async (_req: Request, res: Response) => {
+  const territories = await leadService.listDistinctTerritories();
+  sendSuccess(res, territories);
+});
+
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const query = req.validatedQuery as unknown as {
     status?: string;

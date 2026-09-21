@@ -108,6 +108,25 @@ export async function isActivityVisibleToUser(activityId: string, userId: string
   return (result.rowCount ?? 0) > 0;
 }
 
+// Narrower than isActivityVisibleToUser: true only when the parent lead's
+// (or, for opportunity-linked activities, the opportunity's lead's) owner is
+// in the requesting user's subtree. Excludes lead_shares, mirroring
+// isLeadInOwnerScope/isOpportunityInOwnerScope - visibility via a shared
+// lead does not extend to updating/deleting that lead's activities.
+export async function isActivityInOwnerScope(activityId: string, userId: string): Promise<boolean> {
+  const result = await pool.query(
+    `${SUBTREE_CTE}
+     SELECT 1 FROM activities a
+     LEFT JOIN opportunities o ON o.id = a.opportunity_id
+     JOIN leads l ON l.id = COALESCE(a.lead_id, o.lead_id)
+     WHERE a.id = $2
+       AND l.is_deleted = false
+       AND l.owner_id IN (SELECT id FROM subtree)`,
+    [userId, activityId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 async function insertActivity(
   input: ActivityInput,
   requestingUserId: string,
@@ -249,8 +268,8 @@ export async function getActivityById(id: string, requestingUserId: string) {
 }
 
 export async function updateActivity(id: string, updates: ActivityInput, requestingUserId: string) {
-  const visible = await isActivityVisibleToUser(id, requestingUserId);
-  if (!visible) {
+  const inScope = await isActivityInOwnerScope(id, requestingUserId);
+  if (!inScope) {
     throw new ApiError(403, "You do not have access to this activity");
   }
 
@@ -309,14 +328,19 @@ export async function mergeActivityDetailsByExternalRefId(
 }
 
 export async function deleteActivity(id: string, requestingUserId: string): Promise<void> {
-  const visible = await isActivityVisibleToUser(id, requestingUserId);
-  if (!visible) {
+  const inScope = await isActivityInOwnerScope(id, requestingUserId);
+  if (!inScope) {
     throw new ApiError(403, "You do not have access to this activity");
   }
 
   await pool.query("DELETE FROM activities WHERE id = $1", [id]);
 }
 
+// Intentionally uses the broad view scope, not isActivityInOwnerScope.
+// Commenting is treated as a collaborative action on a visible activity, not
+// a modification of the activity's own core record (that's updateActivity/
+// deleteActivity, which do require owner scope) - so anyone the activity is
+// shared with can add a comment, same as they can view it.
 export async function addComment(activityId: string, comment: string, userId: string) {
   const visible = await isActivityVisibleToUser(activityId, userId);
   if (!visible) {
