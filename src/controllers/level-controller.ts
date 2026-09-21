@@ -12,3 +12,8 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   const level = await levelService.createLevel(req.body);
   sendSuccess(res, level, "Level created", 201);
 });
+
+export const update = asyncHandler(async (req: Request, res: Response) => {
+  const level = await levelService.updateLevel(String(req.params.id), req.body);
+  sendSuccess(res, level, "Level updated");
+});

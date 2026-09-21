@@ -501,6 +501,320 @@ export async function createTables(): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_location_pings_user_captured ON location_pings(user_id, captured_at)`,
     `CREATE INDEX IF NOT EXISTS idx_attendance_user_id ON attendance(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_attendance_user_status ON attendance(user_id, status)`,
+
+    // --- Sales Force Management rebuild, Phase 1 (People wizard + geography) ---
+    // `mobile` is a general contact number - distinct from
+    // smartflo_agent_number, which is specifically the telephony number used
+    // for the Call button.
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS mobile VARCHAR(20)`,
+    // Secondary, matrix-style reporting line (e.g. a dotted-line to a
+    // functional head) alongside the primary manager_id. Nullable and
+    // unused by any authorization/subtree logic - display and org-chart
+    // only, same as designation/level_id.
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS dotted_line_manager_id UUID REFERENCES users(id) ON DELETE SET NULL`,
+    // Postgres has no "ADD CONSTRAINT IF NOT EXISTS", so the existing
+    // status check (inline on the original ADD COLUMN) is dropped and
+    // recreated with 'exited' added - safe to re-run since DROP IF EXISTS
+    // never fails, and CHECK constraints don't need unique names guarded
+    // separately.
+    `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_status_check`,
+    `ALTER TABLE users ADD CONSTRAINT users_status_check CHECK (status IN ('active','on_leave','onboarding','exited'))`,
+
+    // `states` already existed (for lead geography) but was never seeded or
+    // exposed via an API - only `zones` was. Seeding a standard India
+    // zone/state grouping here (not the specific, somewhat inconsistent
+    // grouping shown in the reference mockup) so the Region -> State
+    // drill-down in the People wizard has real options to pick from.
+    // districts/areas remain untouched and unseeded - "Territory" in the
+    // wizard maps to the existing free-text users.territory column, not to
+    // this deeper hierarchy.
+    `INSERT INTO states (name, zone_id)
+     SELECT v.name, z.id FROM zones z
+     JOIN (VALUES
+       ('Maharashtra','West'), ('Gujarat','West'), ('Goa','West'), ('Madhya Pradesh','West'),
+       ('Delhi','North'), ('Uttar Pradesh','North'), ('Punjab','North'), ('Haryana','North'),
+       ('Rajasthan','North'), ('Uttarakhand','North'), ('Himachal Pradesh','North'), ('Jammu and Kashmir','North'), ('Chandigarh','North'),
+       ('Karnataka','South'), ('Tamil Nadu','South'), ('Andhra Pradesh','South'), ('Telangana','South'), ('Kerala','South'), ('Puducherry','South'),
+       ('West Bengal','East'), ('Odisha','East'), ('Bihar','East'), ('Jharkhand','East'), ('Assam','East')
+     ) AS v(name, zone)
+     ON z.name = v.zone
+     ON CONFLICT (name, zone_id) DO NOTHING`,
+
+    // --- Sales Force Management rebuild, Phase 2 (Offices enrichment) ---
+    // India's official GST state codes are a fixed, published government
+    // numbering (e.g. Maharashtra = 27) - real data, not invented, matching
+    // the reference mockup's "Maharashtra . 27" display exactly.
+    `ALTER TABLE states ADD COLUMN IF NOT EXISTS gst_code VARCHAR(2)`,
+    `UPDATE states SET gst_code = v.code FROM (VALUES
+       ('Jammu and Kashmir','01'), ('Himachal Pradesh','02'), ('Punjab','03'), ('Chandigarh','04'),
+       ('Uttarakhand','05'), ('Haryana','06'), ('Delhi','07'), ('Rajasthan','08'), ('Uttar Pradesh','09'),
+       ('Bihar','10'), ('West Bengal','19'), ('Jharkhand','20'), ('Odisha','21'), ('Assam','18'),
+       ('Madhya Pradesh','23'), ('Gujarat','24'), ('Goa','30'), ('Kerala','32'), ('Tamil Nadu','33'),
+       ('Puducherry','34'), ('Karnataka','29'), ('Andhra Pradesh','37'), ('Telangana','36'), ('Maharashtra','27')
+     ) AS v(name, code) WHERE states.name = v.name AND states.gst_code IS NULL`,
+
+    // office type/GST state/address breakdown/location tag - all nullable,
+    // no backfill invented for offices created before this phase (same
+    // "don't guess-match existing rows" rule already applied to zone_id).
+    `ALTER TABLE offices ADD COLUMN IF NOT EXISTS type VARCHAR(30) CHECK (type IN ('head_office','regional_office','branch'))`,
+    `ALTER TABLE offices ADD COLUMN IF NOT EXISTS state_id UUID REFERENCES states(id) ON DELETE SET NULL`,
+    `ALTER TABLE offices ADD COLUMN IF NOT EXISTS address_line_2 VARCHAR(255)`,
+    `ALTER TABLE offices ADD COLUMN IF NOT EXISTS city VARCHAR(100)`,
+    `ALTER TABLE offices ADD COLUMN IF NOT EXISTS pincode VARCHAR(10)`,
+    // Same DECIMAL(9,6) precision already used for activities/attendance
+    // coordinates - the "location tag" field in the reference mockup is a
+    // single lat,lng pair for field check-ins / distance-based expense
+    // claims (per its own helper text), stored as two columns for real
+    // distance math rather than one opaque string.
+    `ALTER TABLE offices ADD COLUMN IF NOT EXISTS latitude DECIMAL(9,6)`,
+    `ALTER TABLE offices ADD COLUMN IF NOT EXISTS longitude DECIMAL(9,6)`,
+
+    // --- Sales Force Management rebuild, Phase 3 (Levels & axes) ---
+    // approval_ceiling is configuration only, same "foundation, not
+    // enforcement" idea as incentive_plans/commission_rules - nothing reads
+    // it to actually gate an approval yet (that's the later Approval bands
+    // phase). headcount_limit NULL means unlimited, matching the reference
+    // mockup's "1 person - unlimited" wording; current headcount itself is
+    // computed from users.level_id (like offices.employeeCount), not stored.
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS description TEXT`,
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS headcount_limit INTEGER`,
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS approval_ceiling NUMERIC`,
+
+    // Structure axes: per the approved Phase 3 scope, this is a toggle UI
+    // only - Geography is the one axis with a real hierarchy behind it
+    // (zones/states from Phase 1); product_division/customer_category/
+    // channel are seeded as inert toggles with no lookup tables or pickers
+    // anywhere else, since building those out was explicitly deferred when
+    // Phase 1 scoped out Division/channel and Customer categories.
+    `CREATE TABLE IF NOT EXISTS structure_axes (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      key VARCHAR(50) NOT NULL UNIQUE,
+      label VARCHAR(100) NOT NULL,
+      description VARCHAR(255),
+      is_enabled BOOLEAN NOT NULL DEFAULT true,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `INSERT INTO structure_axes (key, label, description, sort_order) VALUES
+      ('geography', 'Geography', 'Zone -> State -> Territory', 0),
+      ('product_division', 'Product division', 'No lookup data yet - toggle only', 1),
+      ('customer_category', 'Customer category', 'No lookup data yet - toggle only', 2),
+      ('channel', 'Channel', 'No lookup data yet - toggle only', 3)
+    ON CONFLICT (key) DO NOTHING`,
+
+    // --- Sales Force Management rebuild, Phase 4 (Permissions v2) ---
+    // Per-employee grants/revokes on top of the Phase 3A role baseline.
+    // Foundation only, same as role_permissions was in Phase 3A itself -
+    // nothing in requirePermission consults this table yet, so an override
+    // here changes what the Permissions screen SHOWS as this person's
+    // effective access, not what the backend actually enforces. Rows are
+    // never hard-deleted on "clear" (cleared_at/cleared_by instead) so the
+    // full grant/revoke history stays queryable for the override log.
+    `CREATE TABLE IF NOT EXISTS user_permission_overrides (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      permission VARCHAR(100) NOT NULL,
+      grant_type VARCHAR(10) NOT NULL CHECK (grant_type IN ('grant','revoke')),
+      reason VARCHAR(255),
+      expires_at TIMESTAMPTZ,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      cleared_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      cleared_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_user_permission_overrides_user_id ON user_permission_overrides(user_id)`,
+
+    // --- Sales Force Management rebuild, Phase 7 (Reporting lines) ---
+    // Pure audit trail of manager_id changes - a row is written whenever
+    // user-service.ts's updateUser actually changes someone's manager,
+    // nothing more. Deliberately not an effective-dated scheduling system:
+    // manager changes still take effect immediately, same as today: this
+    // just remembers that they happened, for the "Transfers & history" list.
+    `CREATE TABLE IF NOT EXISTS manager_change_log (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      old_manager_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      new_manager_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      changed_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_manager_change_log_user_id ON manager_change_log(user_id)`,
+
+    // --- Sales Force Management rebuild, Phase 8 (Approval bands) ---
+    // Configuration only, same spirit as levels.approval_ceiling (Phase 3):
+    // an escalation ladder per request type, editable and visible, but not
+    // consulted by any enforcement code, because FieldForce has no
+    // request/workflow system anywhere today to plug it into. The UI must
+    // label this "configuration only" rather than implying it's live.
+    `CREATE TABLE IF NOT EXISTS approval_bands (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      request_type VARCHAR(30) NOT NULL CHECK (request_type IN ('discount','customer_creation','credit_limit','expense_claim')),
+      band_name VARCHAR(100) NOT NULL,
+      range_from NUMERIC NOT NULL DEFAULT 0,
+      range_to NUMERIC,
+      approver_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      sla_hours INTEGER,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_approval_bands_request_type ON approval_bands(request_type)`,
+
+    // --- Sales Force Management rebuild: permission catalog retrofit ---
+    // Phase 3's closeout set a standing rule for everything built afterward:
+    // any new backend module wires to requirePermission from day one instead
+    // of requireRole, so it actually participates in this table rather than
+    // just being decoration next to routes the catalog can't influence.
+    // Phases 4, 7 and 8 (role_permissions/user_permission_overrides,
+    // manager_change_log, approval_bands) missed that and shipped on
+    // requireRole - these rows are the retrofit, seeded to reproduce exactly
+    // what those requireRole gates already allowed (see each route file for
+    // the mapping) so this is a mechanism change, not a behavior change.
+    // role_permissions.update and user_permission_overrides.create/.delete
+    // stay admin-only in role_permissions purely for this screen's own
+    // display purposes - the routes that mutate authorization data itself
+    // deliberately keep requireRole(ADMIN_ONLY) as their real gate (see
+    // role-permission-routes.ts / user-permission-override-routes.ts), so a
+    // misconfigured grant here can never lock every admin out of fixing it.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','role_permissions.view'), ('admin','role_permissions.update'),
+      ('admin','user_permission_overrides.view'), ('admin','user_permission_overrides.create'), ('admin','user_permission_overrides.delete'),
+      ('admin','manager_change_log.view'),
+      ('admin','approval_bands.view'), ('admin','approval_bands.create'), ('admin','approval_bands.update'), ('admin','approval_bands.delete')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','role_permissions.view'),
+      ('manager','manager_change_log.view'),
+      ('manager','approval_bands.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
+    // --- Sales Force Management rebuild v2 (mockup parity pass) ---
+    // levels becomes the single source for both the designation ladder AND
+    // the richer "Role" concept the mockup shows (Administrator, Finance
+    // and the 6 hierarchy levels all live here now). Per the user's
+    // explicit decision: keep the real 3-tier security model
+    // (admin/manager/agent, unchanged everywhere in the backend) and treat
+    // these as display-only labels layered on top, rather than building a
+    // fully dynamic custom-role system. security_tier is which of the 3
+    // real tiers a level's people actually get at login. record_scope is
+    // foundation-only (stored + shown on the Permissions screen, not yet
+    // consulted by the real leads/opportunities/activities visibility
+    // queries, which keep using the existing subtree logic) - same
+    // "foundation only" pattern already used for approval_ceiling.
+    // sees_label_override/approval_label_override/can_edit_label are narrow
+    // free-text escape hatches for the handful of rows (Administrator,
+    // Finance) whose real behavior doesn't reduce to a clean function of
+    // record_scope/approval_ceiling - everywhere else those columns stay
+    // NULL and the Roles & access screen derives the display text from the
+    // real data instead of duplicating it.
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS security_tier VARCHAR(10) NOT NULL DEFAULT 'manager' CHECK (security_tier IN ('admin','manager','agent'))`,
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS is_cross_cutting BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS record_scope VARCHAR(30) NOT NULL DEFAULT 'own_and_below' CHECK (record_scope IN ('own_only','own_and_below','own_below_peers_readonly','whole_region','everything'))`,
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS sees_label_override VARCHAR(60)`,
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS approval_label_override VARCHAR(50)`,
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS can_edit_label VARCHAR(60)`,
+    `INSERT INTO levels (name, sort_order, description, headcount_limit, approval_ceiling, security_tier, is_cross_cutting, record_scope, sees_label_override, approval_label_override, can_edit_label) VALUES
+      ('Administrator', -1, 'System', NULL, NULL, 'admin', true, 'everything', NULL, 'Config only', 'All records + config'),
+      ('Chief Executive Officer', 1, 'Top of the tree - sees everything', NULL, NULL, 'manager', false, 'own_and_below', NULL, NULL, 'Read-only'),
+      ('Business Head', 2, 'Division owner - sets targets', 2, 10000000, 'manager', false, 'own_and_below', NULL, NULL, 'Own division'),
+      ('National Sales Head', 3, 'All zones for a division', 2, 5000000, 'manager', false, 'own_and_below', NULL, NULL, 'Own tree'),
+      ('Regional Sales Manager', 4, 'Zone owner - approves for the region', 4, 2500000, 'manager', false, 'own_and_below', NULL, NULL, 'Own tree'),
+      ('Area Sales Manager', 5, 'Area owner - first-line approver', 4, 1000000, 'manager', false, 'own_and_below', NULL, NULL, 'Own tree'),
+      ('Sales Officer', 6, 'Owns leads and customers', 4, NULL, 'agent', false, 'own_only', NULL, 'raises only', 'Own records'),
+      ('Finance', 99, 'Cross-cutting', NULL, NULL, 'manager', true, 'own_and_below', 'Credit and billing', 'credit only', 'Credit fields')
+    ON CONFLICT (name) DO NOTHING`,
+
+    // Real lookup data for the Product division / Customer category axes
+    // (Phase 3 left these as toggle-only with nothing behind them). The
+    // wizard's single "Division / channel" field stores one combined value
+    // (e.g. "Pharma - Retail") rather than two independently-picked axes,
+    // matching how the reference UI actually presents that one field.
+    `CREATE TABLE IF NOT EXISTS division_channels (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      label VARCHAR(100) NOT NULL UNIQUE,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `INSERT INTO division_channels (label, sort_order) VALUES
+      ('Pharma - Retail', 0), ('Pharma - FOFO', 1), ('Pharma - PCD', 2), ('Pharma - Institutional', 3),
+      ('Wellness - Retail', 4), ('Ayurvedic - Retail', 5)
+    ON CONFLICT (label) DO NOTHING`,
+    `CREATE TABLE IF NOT EXISTS customer_categories (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      label VARCHAR(100) NOT NULL UNIQUE,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `INSERT INTO customer_categories (label, sort_order) VALUES
+      ('FOFO', 0), ('COCO', 1), ('Stockist', 2), ('B2B', 3), ('Institutes', 4), ('PCD', 5), ('Ethical', 6), ('Lifestyle', 7)
+    ON CONFLICT (label) DO NOTHING`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS division_channel_id UUID REFERENCES division_channels(id) ON DELETE SET NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS customer_category_id UUID REFERENCES customer_categories(id) ON DELETE SET NULL`,
+    `UPDATE structure_axes SET description = 'Pharma / Wellness / Ayurvedic, each with its own channel mix' WHERE key = 'product_division' AND description = 'No lookup data yet - toggle only'`,
+    `UPDATE structure_axes SET description = 'FOFO / COCO / Stockist / B2B / Institutes / PCD / Ethical / Lifestyle' WHERE key = 'customer_category' AND description = 'No lookup data yet - toggle only'`,
+
+    // Approval bands' approver moves from a specific person to a role/level
+    // name, matching the reference UI - an escalation ladder names WHO
+    // (by position) a request goes to, not a specific individual who might
+    // leave the role. Safe to alter directly: this table only ever held
+    // test data, deleted before this migration.
+    `ALTER TABLE approval_bands DROP COLUMN IF EXISTS approver_user_id`,
+    `ALTER TABLE approval_bands ADD COLUMN IF NOT EXISTS approver_level_id UUID REFERENCES levels(id) ON DELETE SET NULL`,
+    `ALTER TABLE approval_bands ADD COLUMN IF NOT EXISTS countersigned_by_level_id UUID REFERENCES levels(id) ON DELETE SET NULL`,
+
+    // Backs both "Transfers & history" (territory reassignment) and the
+    // richer bulk re-assign modal's record-count preview. Per the user's
+    // explicit decision: no new job-scheduler infrastructure - a transfer
+    // is written as 'scheduled' with its effective_date, and applied
+    // lazily (status flips to 'completed', the actual territory/owner
+    // change is made) the next time anything reads this table, the same
+    // compute-on-read spirit already used elsewhere in this rebuild.
+    `CREATE TABLE IF NOT EXISTS scheduled_transfers (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      transfer_type VARCHAR(20) NOT NULL CHECK (transfer_type IN ('territory','bulk_reassign','exit')),
+      from_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      to_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      old_territory VARCHAR(150),
+      new_territory VARCHAR(150),
+      effective_date DATE NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'scheduled' CHECK (status IN ('scheduled','completed')),
+      lead_count INTEGER NOT NULL DEFAULT 0,
+      opportunity_count INTEGER NOT NULL DEFAULT 0,
+      note VARCHAR(255),
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      applied_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_scheduled_transfers_status_date ON scheduled_transfers(status, effective_date)`,
+    `CREATE INDEX IF NOT EXISTS idx_scheduled_transfers_from_user ON scheduled_transfers(from_user_id)`,
+
+    // Foundation only, same as approval_bands: FieldForce has no live
+    // approval-request flow anywhere for a delegate to actually receive,
+    // so this just records who covers for whom and when - configuration,
+    // not enforcement.
+    `CREATE TABLE IF NOT EXISTS delegations (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      delegate_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      start_date DATE NOT NULL,
+      end_date DATE NOT NULL,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_delegations_user_id ON delegations(user_id)`,
+
+    // New modules, wired to requirePermission from day one per the
+    // post-Phase-3 rule. division_channels/customer_categories are plain
+    // reference-data lookups with no permission gate, same precedent as
+    // geography's states/zones (open read for any authenticated user).
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','territory_transfers.view'), ('admin','territory_transfers.create'),
+      ('admin','delegations.view'), ('admin','delegations.create'), ('admin','delegations.delete')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','territory_transfers.view'), ('manager','territory_transfers.create'),
+      ('manager','delegations.view'), ('manager','delegations.create'), ('manager','delegations.delete')
+    ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {

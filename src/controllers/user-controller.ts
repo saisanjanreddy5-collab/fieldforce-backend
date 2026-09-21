@@ -9,6 +9,6 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const update = asyncHandler(async (req: Request, res: Response) => {
-  const user = await userService.updateUser(String(req.params.id), req.body);
+  const user = await userService.updateUser(String(req.params.id), req.body, req.user!.id);
   sendSuccess(res, user, "User updated");
 });

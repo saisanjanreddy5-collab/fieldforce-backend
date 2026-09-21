@@ -7,5 +7,6 @@ const router = Router();
 router.use(requireAuth);
 
 router.get("/zones", geographyController.listZones);
+router.get("/states", geographyController.listStates);
 
 export default router;
