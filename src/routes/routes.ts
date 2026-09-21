@@ -16,6 +16,14 @@ import targetRoutes from "./sub-routes/target-routes";
 import incentivePlanRoutes from "./sub-routes/incentive-plan-routes";
 import commissionRuleRoutes from "./sub-routes/commission-rule-routes";
 import userIncentivePlanRoutes from "./sub-routes/user-incentive-plan-routes";
+import structureAxisRoutes from "./sub-routes/structure-axis-routes";
+import rolePermissionRoutes from "./sub-routes/role-permission-routes";
+import userPermissionOverrideRoutes from "./sub-routes/user-permission-override-routes";
+import managerChangeLogRoutes from "./sub-routes/manager-change-log-routes";
+import approvalBandRoutes from "./sub-routes/approval-band-routes";
+import classificationRoutes from "./sub-routes/classification-routes";
+import scheduledTransferRoutes from "./sub-routes/scheduled-transfer-routes";
+import delegationRoutes from "./sub-routes/delegation-routes";
 
 const router = Router();
 
@@ -36,6 +44,14 @@ router.use("/targets", targetRoutes);
 router.use("/incentive-plans", incentivePlanRoutes);
 router.use("/commission-rules", commissionRuleRoutes);
 router.use("/user-incentive-plans", userIncentivePlanRoutes);
+router.use("/structure-axes", structureAxisRoutes);
+router.use("/role-permissions", rolePermissionRoutes);
+router.use("/user-permission-overrides", userPermissionOverrideRoutes);
+router.use("/manager-change-log", managerChangeLogRoutes);
+router.use("/approval-bands", approvalBandRoutes);
+router.use("/classification", classificationRoutes);
+router.use("/scheduled-transfers", scheduledTransferRoutes);
+router.use("/delegations", delegationRoutes);
 
 router.get("/health", (_req, res) => {
   res.json({ success: true, message: "FieldForce API is running" });

@@ -6,9 +6,16 @@ interface OfficeRow {
   name: string;
   region: string | null;
   code: string | null;
+  type: string | null;
   address: string | null;
+  address_line_2: string | null;
+  city: string | null;
+  pincode: string | null;
   zone_id: string | null;
+  state_id: string | null;
   phone: string | null;
+  latitude: string | null;
+  longitude: string | null;
   is_active: boolean;
   created_by: string | null;
   updated_by: string | null;
@@ -21,9 +28,16 @@ export interface CreateOfficeInput {
   name: string;
   region?: string;
   code?: string;
+  type?: string;
   address?: string;
+  addressLine2?: string;
+  city?: string;
+  pincode?: string;
   zoneId?: string;
+  stateId?: string;
   phone?: string;
+  latitude?: number;
+  longitude?: number;
   isActive?: boolean;
 }
 
@@ -31,9 +45,16 @@ export interface UpdateOfficeInput {
   name?: string;
   region?: string;
   code?: string;
+  type?: string;
   address?: string;
+  addressLine2?: string;
+  city?: string;
+  pincode?: string;
   zoneId?: string;
+  stateId?: string;
   phone?: string;
+  latitude?: number;
+  longitude?: number;
   isActive?: boolean;
 }
 
@@ -43,9 +64,16 @@ function toPublicOffice(row: OfficeRow) {
     name: row.name,
     region: row.region,
     code: row.code,
+    type: row.type,
     address: row.address,
+    addressLine2: row.address_line_2,
+    city: row.city,
+    pincode: row.pincode,
     zoneId: row.zone_id,
+    stateId: row.state_id,
     phone: row.phone,
+    latitude: row.latitude === null ? null : Number(row.latitude),
+    longitude: row.longitude === null ? null : Number(row.longitude),
     isActive: row.is_active,
     employeeCount: Number(row.employee_count ?? 0),
     createdBy: row.created_by,
@@ -107,16 +135,26 @@ export async function createOffice(input: CreateOfficeInput, requestingUserId: s
   }
 
   const result = await pool.query<{ id: string }>(
-    `INSERT INTO offices (name, region, code, address, zone_id, phone, is_active, created_by, updated_by)
-     VALUES ($1, $2, $3, $4, $5, $6, COALESCE($7, true), $8, $8)
+    `INSERT INTO offices (
+       name, region, code, type, address, address_line_2, city, pincode, zone_id, state_id, phone,
+       latitude, longitude, is_active, created_by, updated_by
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, COALESCE($14, true), $15, $15)
      RETURNING id`,
     [
       input.name,
       input.region ?? null,
       input.code ?? null,
+      input.type ?? null,
       input.address ?? null,
+      input.addressLine2 ?? null,
+      input.city ?? null,
+      input.pincode ?? null,
       input.zoneId ?? null,
+      input.stateId ?? null,
       input.phone ?? null,
+      input.latitude ?? null,
+      input.longitude ?? null,
       input.isActive ?? null,
       requestingUserId,
     ]
@@ -157,9 +195,16 @@ export async function updateOffice(id: string, updates: UpdateOfficeInput, reque
     name: updates.name,
     region: normalize(updates.region),
     code: normalize(updates.code),
+    type: normalize(updates.type),
     address: normalize(updates.address),
+    address_line_2: normalize(updates.addressLine2),
+    city: normalize(updates.city),
+    pincode: normalize(updates.pincode),
     zone_id: normalize(updates.zoneId),
+    state_id: normalize(updates.stateId),
     phone: normalize(updates.phone),
+    latitude: updates.latitude,
+    longitude: updates.longitude,
     is_active: updates.isActive,
   };
 
