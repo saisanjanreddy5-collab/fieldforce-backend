@@ -251,6 +251,24 @@ export async function isLeadVisibleToUser(leadId: string, userId: string): Promi
   return (result.rowCount ?? 0) > 0;
 }
 
+// Narrower than isLeadVisibleToUser: true only when the lead's owner is in
+// the requesting user's own subtree (Rule A). Deliberately excludes
+// lead_shares (Rule B) - a lead shared with someone grants them visibility
+// only, not the right to update/delete/share it further. Used by the
+// mutating operations below; isLeadVisibleToUser remains the check for
+// read-only access (getLeadById, listLeadShares, getLeadConsent).
+export async function isLeadInOwnerScope(leadId: string, userId: string): Promise<boolean> {
+  const result = await pool.query(
+    `${SUBTREE_CTE}
+     SELECT 1 FROM leads l
+     WHERE l.id = $2
+       AND l.is_deleted = false
+       AND l.owner_id IN (SELECT id FROM subtree)`,
+    [userId, leadId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 // Builds column/placeholder/value triples from a { column: value } map,
 // skipping any key whose value is undefined - avoids manual $N counting,
 // which is easy to get wrong on a wide table like this one.
@@ -270,8 +288,50 @@ function buildInsert(fieldMap: Record<string, unknown>): { columns: string[]; pl
   return { columns, placeholders, values };
 }
 
+// When the creator doesn't explicitly pick an owner, try to auto-assign the
+// lead instead of defaulting it to themselves: first by an exact match
+// between the lead's territory and a salesperson's own territory (the most
+// specific signal, since a territory belongs to exactly one salesperson),
+// then by the existing state+category assignment_rules table.
+async function resolveAutoAssignee(input: CreateLeadInput, creatorId: string): Promise<string> {
+  if (input.territory) {
+    const territoryMatch = await pool.query<{ id: string }>(
+      "SELECT id FROM users WHERE territory = $1 AND is_active = true",
+      [input.territory]
+    );
+    if (territoryMatch.rows.length > 0) {
+      return territoryMatch.rows[0].id;
+    }
+  }
+
+  if (input.stateId) {
+    const ruleMatch = await pool.query<{ assigned_user_id: string }>(
+      `SELECT assigned_user_id FROM assignment_rules
+       WHERE state_id = $1 AND (category = $2 OR category IS NULL)
+       ORDER BY category IS NULL ASC
+       LIMIT 1`,
+      [input.stateId, input.category ?? null]
+    );
+    if (ruleMatch.rows.length > 0) {
+      return ruleMatch.rows[0].assigned_user_id;
+    }
+  }
+
+  return creatorId;
+}
+
+// Distinct territory values actually in use across leads, for the
+// Territory filter dropdown - territory is free text, not a managed list,
+// so this is the closest thing to "the territories that exist" today.
+export async function listDistinctTerritories(): Promise<string[]> {
+  const result = await pool.query<{ territory: string }>(
+    "SELECT DISTINCT territory FROM leads WHERE territory IS NOT NULL AND territory <> '' ORDER BY territory ASC"
+  );
+  return result.rows.map((row) => row.territory);
+}
+
 export async function createLead(input: CreateLeadInput, creatorId: string) {
-  const ownerId = input.ownerId ?? creatorId;
+  const ownerId = input.ownerId ?? (await resolveAutoAssignee(input, creatorId));
 
   const { columns, placeholders, values } = buildInsert({
     full_name: input.fullName,
@@ -444,8 +504,8 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
 }
 
 export async function updateLead(leadId: string, updates: Partial<CreateLeadInput>, requestingUserId: string) {
-  const visible = await isLeadVisibleToUser(leadId, requestingUserId);
-  if (!visible) {
+  const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
+  if (!inScope) {
     throw new ApiError(403, "You do not have access to this lead");
   }
 
@@ -536,8 +596,8 @@ export async function updateLead(leadId: string, updates: Partial<CreateLeadInpu
 }
 
 export async function deleteLead(leadId: string, requestingUserId: string): Promise<void> {
-  const visible = await isLeadVisibleToUser(leadId, requestingUserId);
-  if (!visible) {
+  const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
+  if (!inScope) {
     throw new ApiError(403, "You do not have access to this lead");
   }
 
@@ -548,8 +608,8 @@ export async function deleteLead(leadId: string, requestingUserId: string): Prom
 }
 
 export async function shareLead(leadId: string, targetUserId: string, sharedByUserId: string): Promise<void> {
-  const visible = await isLeadVisibleToUser(leadId, sharedByUserId);
-  if (!visible) {
+  const inScope = await isLeadInOwnerScope(leadId, sharedByUserId);
+  if (!inScope) {
     throw new ApiError(403, "You do not have access to this lead");
   }
 
@@ -562,8 +622,8 @@ export async function shareLead(leadId: string, targetUserId: string, sharedByUs
 }
 
 export async function unshareLead(leadId: string, targetUserId: string, requestingUserId: string): Promise<void> {
-  const visible = await isLeadVisibleToUser(leadId, requestingUserId);
-  if (!visible) {
+  const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
+  if (!inScope) {
     throw new ApiError(403, "You do not have access to this lead");
   }
 

@@ -234,6 +234,224 @@ export async function createTables(): Promise<void> {
     // rings this number first, then connects it to the lead.
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS smartflo_agent_number VARCHAR(50)`,
 
+    // A salesperson's own territory - free text, same column shape as the
+    // existing leads.territory - so a new lead can be auto-assigned to
+    // whichever salesperson's territory matches it exactly. Unique (when
+    // set) because a territory belongs to exactly one salesperson.
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS territory VARCHAR(150)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_territory_unique ON users(territory) WHERE territory IS NOT NULL`,
+
+    // The 4 fixed regions leads/salespeople roll up to - a short, essentially
+    // static list, so it's seeded here rather than needing its own admin UI.
+    `INSERT INTO zones (name) VALUES ('West'), ('North'), ('South'), ('East') ON CONFLICT (name) DO NOTHING`,
+
+    // --- Sales Force Management: Phase 0 (DB foundation) ---
+    // roles/levels/offices are deliberately minimal here - each grows its
+    // own columns in the phase that actually uses them (roles gets wired to
+    // auth in the Permissions phase, levels gets approval-ceiling fields in
+    // the Levels & axes phase, offices gets address/GST/location-pin fields
+    // in the Offices phase). Not linked to users.role or auth yet.
+    `CREATE TABLE IF NOT EXISTS roles (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name VARCHAR(100) NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `INSERT INTO roles (name) VALUES ('admin'), ('manager'), ('agent') ON CONFLICT (name) DO NOTHING`,
+
+    `CREATE TABLE IF NOT EXISTS levels (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name VARCHAR(100) NOT NULL UNIQUE,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+
+    `CREATE TABLE IF NOT EXISTS offices (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name VARCHAR(150) NOT NULL UNIQUE,
+      region VARCHAR(150),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+
+    // --- Sales Force Management: Phase 1A (People core) ---
+    // All nullable/additive. `status` is a display/filter label only (it
+    // does not gate login - is_active still does that); employee_code is
+    // free text the admin types, no auto-numbering scheme exists yet.
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS employee_code VARCHAR(50)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_employee_code_unique ON users(employee_code) WHERE employee_code IS NOT NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS date_of_joining DATE`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active','on_leave','onboarding'))`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS level_id UUID REFERENCES levels(id) ON DELETE SET NULL`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS office_id UUID REFERENCES offices(id) ON DELETE SET NULL`,
+
+    // Foundation for Phase 1B (Targets): the moment an opportunity actually
+    // transitions into 'won', not a user-editable expected/target close
+    // date. Nullable and additive - existing opportunities already sitting
+    // in 'won' have no way to know when that happened, so they stay NULL
+    // rather than being backfilled with a guess.
+    `ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS won_at TIMESTAMPTZ`,
+
+    // Phase 1B: a person's target for one specific period. period_start/end
+    // are plain calendar DATEs (not derived on the fly) so the achievement
+    // query has a fixed, explicit range to compare won_at against - see
+    // target-service.ts for the IST-based boundary math. The unique
+    // constraint blocks a second target for the exact same person+period.
+    `CREATE TABLE IF NOT EXISTS targets (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      period_type VARCHAR(20) NOT NULL CHECK (period_type IN ('monthly','quarterly','annual')),
+      period_start DATE NOT NULL,
+      period_end DATE NOT NULL,
+      target_amount DECIMAL(14,2) NOT NULL,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (user_id, period_type, period_start)
+    )`,
+
+    // Phase 1C: configuration only - no formula, no calculation reads these
+    // tables anywhere yet. Deliberately separate from targets (no FK
+    // between them) per the approved architecture: a target is what someone
+    // is expected to achieve, an incentive plan is a future payout program,
+    // and nothing here computes one from the other.
+    `CREATE TABLE IF NOT EXISTS incentive_plans (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name VARCHAR(150) NOT NULL UNIQUE,
+      description TEXT,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      effective_start_date DATE NOT NULL,
+      effective_end_date DATE,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (effective_end_date IS NULL OR effective_end_date >= effective_start_date)
+    )`,
+
+    // rule_type is a free-text label the admin types (e.g. "Percentage of
+    // value") - never parsed or enforced. config is an empty-by-default
+    // JSONB bucket for whatever a future formula needs (percentage, slab
+    // boundaries, thresholds, etc.) - same "don't know the shape yet, don't
+    // invent it" idea already used for activities.details elsewhere in this
+    // schema. Nothing reads config today.
+    `CREATE TABLE IF NOT EXISTS commission_rules (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      incentive_plan_id UUID NOT NULL REFERENCES incentive_plans(id) ON DELETE CASCADE,
+      name VARCHAR(150) NOT NULL,
+      description TEXT,
+      rule_type VARCHAR(100),
+      config JSONB NOT NULL DEFAULT '{}'::jsonb,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (incentive_plan_id, name)
+    )`,
+
+    // Foundation only, per the approved scope - a simple explicit
+    // assignment (no overlap/uniqueness rules invented, since whether a
+    // person can hold the same plan twice with a gap isn't a defined
+    // business rule). No UI reads this table yet in this phase.
+    `CREATE TABLE IF NOT EXISTS user_incentive_plans (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      incentive_plan_id UUID NOT NULL REFERENCES incentive_plans(id) ON DELETE CASCADE,
+      effective_start_date DATE NOT NULL,
+      effective_end_date DATE,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (effective_end_date IS NULL OR effective_end_date >= effective_start_date)
+    )`,
+
+    // --- Phase 2: Offices (standalone master data only - no Attendance,
+    // Expenses, Leave, or any other module reads office_id yet). All
+    // additive; the original `region` free-text column stays as-is for
+    // backward compatibility with existing rows - it is not migrated into
+    // zone_id automatically, since guess-matching text to a zone would be
+    // inventing data. zone_id is the proper go-forward field, reusing the
+    // real zones table rather than duplicating the region concept.
+    `ALTER TABLE offices ADD COLUMN IF NOT EXISTS code VARCHAR(50)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_offices_code_unique ON offices(code) WHERE code IS NOT NULL`,
+    `ALTER TABLE offices ADD COLUMN IF NOT EXISTS address TEXT`,
+    `ALTER TABLE offices ADD COLUMN IF NOT EXISTS zone_id UUID REFERENCES zones(id) ON DELETE SET NULL`,
+    `ALTER TABLE offices ADD COLUMN IF NOT EXISTS phone VARCHAR(20)`,
+    `ALTER TABLE offices ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true`,
+    `ALTER TABLE offices ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id) ON DELETE SET NULL`,
+    `ALTER TABLE offices ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL`,
+    `ALTER TABLE offices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`,
+
+    // --- Phase 3A: permission foundation (role -> permission only) ---
+    // Nothing reads this table yet - no middleware, no route, no service
+    // enforces it. users.role stays the live field everything still checks;
+    // this is purely additive groundwork for a later phase. Deliberately
+    // NOT encoding record-level scope here (own/subtree/peer/etc.) - for
+    // leads/opportunities/activities/attendance/dashboard, which have no
+    // route-level role gate today, every role is granted the action
+    // permission below, exactly matching current effective behavior; the
+    // untouched subtree/lead_shares logic elsewhere is still what decides
+    // which actual records someone can reach.
+    `CREATE TABLE IF NOT EXISTS role_permissions (
+      role VARCHAR(100) NOT NULL REFERENCES roles(name) ON DELETE CASCADE,
+      permission VARCHAR(100) NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (role, permission)
+    )`,
+
+    // Seeded to reproduce the pre-Phase-3 authorization audit's documented
+    // matrix exactly - not an "improved" or "sensible default" set.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','users.view'), ('admin','users.create'), ('admin','users.update'),
+      ('admin','leads.view'), ('admin','leads.create'), ('admin','leads.update'), ('admin','leads.delete'), ('admin','leads.share'),
+      ('admin','opportunities.view'), ('admin','opportunities.create'), ('admin','opportunities.update'), ('admin','opportunities.delete'),
+      ('admin','activities.view'), ('admin','activities.create'), ('admin','activities.update'), ('admin','activities.delete'),
+      ('admin','attendance.view_own'), ('admin','attendance.view_team'),
+      ('admin','dashboard.view'),
+      ('admin','offices.view'), ('admin','offices.create'), ('admin','offices.update'),
+      ('admin','levels.view'), ('admin','levels.create'),
+      ('admin','sales_teams.view'), ('admin','sales_teams.create'),
+      ('admin','targets.view'), ('admin','targets.create'), ('admin','targets.update'), ('admin','targets.delete'),
+      ('admin','incentive_plans.view'), ('admin','incentive_plans.create'), ('admin','incentive_plans.update'), ('admin','incentive_plans.delete'),
+      ('admin','commission_rules.view'), ('admin','commission_rules.create'), ('admin','commission_rules.update'), ('admin','commission_rules.delete')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Manager: MANAGER_AND_ABOVE-gated actions (users.view, offices/levels/
+    // sales_teams write, targets/incentive_plans/commission_rules view), plus
+    // every leads/opportunities/activities/attendance/dashboard action since
+    // those routes have no gate today for any authenticated role.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','users.view'),
+      ('manager','leads.view'), ('manager','leads.create'), ('manager','leads.update'), ('manager','leads.delete'), ('manager','leads.share'),
+      ('manager','opportunities.view'), ('manager','opportunities.create'), ('manager','opportunities.update'), ('manager','opportunities.delete'),
+      ('manager','activities.view'), ('manager','activities.create'), ('manager','activities.update'), ('manager','activities.delete'),
+      ('manager','attendance.view_own'), ('manager','attendance.view_team'),
+      ('manager','dashboard.view'),
+      ('manager','offices.view'), ('manager','offices.create'), ('manager','offices.update'),
+      ('manager','levels.view'), ('manager','levels.create'),
+      ('manager','sales_teams.view'), ('manager','sales_teams.create'),
+      ('manager','targets.view'),
+      ('manager','incentive_plans.view'),
+      ('manager','commission_rules.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Agent: blocked today from users/targets/incentive_plans/commission_rules
+    // (all MANAGER_AND_ABOVE or ADMIN_ONLY) and from write actions on offices/
+    // levels/sales_teams (MANAGER_AND_ABOVE) - view-only on those three. Full
+    // leads/opportunities/activities/attendance/dashboard access, matching
+    // the same "no route gate today" reasoning as Manager above.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('agent','leads.view'), ('agent','leads.create'), ('agent','leads.update'), ('agent','leads.delete'), ('agent','leads.share'),
+      ('agent','opportunities.view'), ('agent','opportunities.create'), ('agent','opportunities.update'), ('agent','opportunities.delete'),
+      ('agent','activities.view'), ('agent','activities.create'), ('agent','activities.update'), ('agent','activities.delete'),
+      ('agent','attendance.view_own'), ('agent','attendance.view_team'),
+      ('agent','dashboard.view'),
+      ('agent','offices.view'),
+      ('agent','levels.view'),
+      ('agent','sales_teams.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
     // One row per salesperson who has connected their own Microsoft 365
     // account (Outlook + Teams) - each person authorizes individually via
     // delegated OAuth, so emails/meetings are sent as themselves, not a
@@ -254,6 +472,14 @@ export async function createTables(): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_areas_district_id ON areas(district_id)`,
     `CREATE INDEX IF NOT EXISTS idx_users_manager_id ON users(manager_id)`,
     `CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)`,
+    `CREATE INDEX IF NOT EXISTS idx_users_level_id ON users(level_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_users_office_id ON users(office_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_users_status ON users(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_targets_user_id ON targets(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_commission_rules_plan_id ON commission_rules(incentive_plan_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_user_incentive_plans_user_id ON user_incentive_plans(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_user_incentive_plans_plan_id ON user_incentive_plans(incentive_plan_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_offices_zone_id ON offices(zone_id)`,
     `CREATE INDEX IF NOT EXISTS idx_leads_owner_id ON leads(owner_id)`,
     `CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status)`,
     `CREATE INDEX IF NOT EXISTS idx_leads_zone_id ON leads(zone_id)`,
