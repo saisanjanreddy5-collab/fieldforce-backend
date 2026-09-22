@@ -17,6 +17,11 @@ export const createLevelSchema = z.object({
   seesLabelOverride: z.string().optional(),
   approvalLabelOverride: z.string().optional(),
   canEditLabel: z.string().optional(),
+  seeCreditFields: z.coerce.boolean().optional(),
+  seeMarginFields: z.coerce.boolean().optional(),
+  canExport: z.coerce.boolean().optional(),
+  canViewCallRecordings: z.coerce.boolean().optional(),
+  canSeeUnmaskedPii: z.coerce.boolean().optional(),
 });
 
 export const updateLevelSchema = z.object({
@@ -31,4 +36,9 @@ export const updateLevelSchema = z.object({
   seesLabelOverride: z.string().nullable().optional(),
   approvalLabelOverride: z.string().nullable().optional(),
   canEditLabel: z.string().nullable().optional(),
+  seeCreditFields: z.coerce.boolean().optional(),
+  seeMarginFields: z.coerce.boolean().optional(),
+  canExport: z.coerce.boolean().optional(),
+  canViewCallRecordings: z.coerce.boolean().optional(),
+  canSeeUnmaskedPii: z.coerce.boolean().optional(),
 });

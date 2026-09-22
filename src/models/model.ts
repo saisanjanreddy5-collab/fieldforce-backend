@@ -815,6 +815,69 @@ export async function createTables(): Promise<void> {
       ('manager','territory_transfers.view'), ('manager','territory_transfers.create'),
       ('manager','delegations.view'), ('manager','delegations.create'), ('manager','delegations.delete')
     ON CONFLICT (role, permission) DO NOTHING`,
+
+    // --- Sales Force Management rebuild: Permissions tab, "Field & feature
+    // rules" ---
+    // Configuration only, same honesty convention as approval_bands and
+    // record_scope: nothing in FieldForce reads these 5 columns to actually
+    // gate a credit/margin field, an export button, a call-recording player
+    // or a PII-masking rule, because none of those features exist anywhere
+    // in the product yet. They're stored per level so the Permissions
+    // screen's toggles have somewhere real to write to and read back from,
+    // clearly labeled as not-yet-enforced in the UI. "Bulk re-assign
+    // records" is deliberately NOT one of these columns - that one mirrors
+    // the real leads.update permission directly (see PermissionsCard.tsx)
+    // rather than risking two disconnected toggles claiming to control the
+    // same thing.
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS see_credit_fields BOOLEAN NOT NULL DEFAULT true`,
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS see_margin_fields BOOLEAN NOT NULL DEFAULT true`,
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS can_export BOOLEAN NOT NULL DEFAULT true`,
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS can_view_call_recordings BOOLEAN NOT NULL DEFAULT true`,
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS can_see_unmasked_pii BOOLEAN NOT NULL DEFAULT true`,
+
+    // --- Create user wizard: Targets & incentives tab parity pass ---
+    // Configuration only, same convention as everything else marked this
+    // way: FieldForce has no payout engine, so rate/cap/pays-from are
+    // stored and shown but nothing computes an actual incentive amount
+    // from them.
+    `ALTER TABLE user_incentive_plans ADD COLUMN IF NOT EXISTS rate VARCHAR(50)`,
+    `ALTER TABLE user_incentive_plans ADD COLUMN IF NOT EXISTS cap_per_cycle NUMERIC`,
+    `ALTER TABLE user_incentive_plans ADD COLUMN IF NOT EXISTS pays_from_attainment_percent NUMERIC`,
+
+    // A per-employee commission arrangement - distinct from commission_rules
+    // (Phase 3's shared catalog tied to an incentive_plan): this is what the
+    // Create/Edit user wizard's own "Commissions" section configures for
+    // one specific person. Configuration only, same as above - no payout
+    // engine reads this either.
+    `CREATE TABLE IF NOT EXISTS user_commissions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      basis VARCHAR(30) NOT NULL CHECK (basis IN ('collected_revenue','invoiced_revenue','gross_margin','units_sold')),
+      rate VARCHAR(50),
+      applies_to VARCHAR(100),
+      payout_cycle VARCHAR(20) NOT NULL CHECK (payout_cycle IN ('monthly','quarterly','half_yearly','annual')),
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_user_commissions_user_id ON user_commissions(user_id)`,
+
+    // New module, wired to requirePermission from day one per the
+    // post-Phase-3 rule - same gate shape as user_incentive_plans (its
+    // sibling in the same wizard tab): manager+ view their own subtree,
+    // only admin assigns.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','user_commissions.view'), ('admin','user_commissions.create'), ('admin','user_commissions.delete')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','user_commissions.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Purely descriptive - "12 franchises" alongside a currency target,
+    // never read by the achievement calculation (which stays exactly the
+    // won-opportunity-value SUM it already was). Free text because a unit
+    // target's unit varies by role (franchises, units, visits...).
+    `ALTER TABLE targets ADD COLUMN IF NOT EXISTS unit_target VARCHAR(100)`,
   ];
 
   try {

@@ -8,6 +8,9 @@ interface UserIncentivePlanRow {
   incentive_plan_id: string;
   effective_start_date: string;
   effective_end_date: string | null;
+  rate: string | null;
+  cap_per_cycle: string | null;
+  pays_from_attainment_percent: string | null;
   created_by: string | null;
   updated_by: string | null;
   created_at: string;
@@ -19,6 +22,9 @@ export interface CreateUserIncentivePlanInput {
   incentivePlanId: string;
   effectiveStartDate: string;
   effectiveEndDate?: string;
+  rate?: string;
+  capPerCycle?: number;
+  paysFromAttainmentPercent?: number;
 }
 
 function toPublicAssignment(row: UserIncentivePlanRow) {
@@ -28,6 +34,9 @@ function toPublicAssignment(row: UserIncentivePlanRow) {
     incentivePlanId: row.incentive_plan_id,
     effectiveStartDate: row.effective_start_date,
     effectiveEndDate: row.effective_end_date,
+    rate: row.rate,
+    capPerCycle: row.cap_per_cycle === null ? null : Number(row.cap_per_cycle),
+    paysFromAttainmentPercent: row.pays_from_attainment_percent === null ? null : Number(row.pays_from_attainment_percent),
     createdBy: row.created_by,
     updatedBy: row.updated_by,
     createdAt: row.created_at,
@@ -84,10 +93,19 @@ export async function createUserIncentivePlan(input: CreateUserIncentivePlanInpu
   }
 
   const result = await pool.query<UserIncentivePlanRow>(
-    `INSERT INTO user_incentive_plans (user_id, incentive_plan_id, effective_start_date, effective_end_date, created_by, updated_by)
-     VALUES ($1, $2, $3, $4, $5, $5)
+    `INSERT INTO user_incentive_plans (user_id, incentive_plan_id, effective_start_date, effective_end_date, rate, cap_per_cycle, pays_from_attainment_percent, created_by, updated_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
      RETURNING *`,
-    [input.userId, input.incentivePlanId, input.effectiveStartDate, input.effectiveEndDate ?? null, requestingUserId]
+    [
+      input.userId,
+      input.incentivePlanId,
+      input.effectiveStartDate,
+      input.effectiveEndDate ?? null,
+      input.rate ?? null,
+      input.capPerCycle ?? null,
+      input.paysFromAttainmentPercent ?? null,
+      requestingUserId,
+    ]
   );
 
   return toPublicAssignment(result.rows[0]);

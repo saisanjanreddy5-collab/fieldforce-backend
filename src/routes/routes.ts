@@ -24,6 +24,7 @@ import approvalBandRoutes from "./sub-routes/approval-band-routes";
 import classificationRoutes from "./sub-routes/classification-routes";
 import scheduledTransferRoutes from "./sub-routes/scheduled-transfer-routes";
 import delegationRoutes from "./sub-routes/delegation-routes";
+import userCommissionRoutes from "./sub-routes/user-commission-routes";
 
 const router = Router();
 
@@ -52,6 +53,7 @@ router.use("/approval-bands", approvalBandRoutes);
 router.use("/classification", classificationRoutes);
 router.use("/scheduled-transfers", scheduledTransferRoutes);
 router.use("/delegations", delegationRoutes);
+router.use("/user-commissions", userCommissionRoutes);
 
 router.get("/health", (_req, res) => {
   res.json({ success: true, message: "FieldForce API is running" });

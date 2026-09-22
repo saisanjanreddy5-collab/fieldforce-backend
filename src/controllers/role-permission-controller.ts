@@ -14,3 +14,9 @@ export const setGrant = asyncHandler(async (req: Request, res: Response) => {
   const matrix = await rolePermissionService.listRolePermissionMatrix();
   sendSuccess(res, matrix, "Role permissions updated");
 });
+
+export const resetToDefault = asyncHandler(async (req: Request, res: Response) => {
+  await rolePermissionService.resetRoleToDefault(req.body.role);
+  const matrix = await rolePermissionService.listRolePermissionMatrix();
+  sendSuccess(res, matrix, "Role reset to default");
+});

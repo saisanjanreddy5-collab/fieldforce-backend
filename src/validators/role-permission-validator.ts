@@ -6,3 +6,7 @@ export const setRolePermissionSchema = z.object({
   permission: z.string().min(1),
   granted: z.boolean(),
 });
+
+export const resetRoleToDefaultSchema = z.object({
+  role: z.enum([ROLES.ADMIN, ROLES.MANAGER, ROLES.AGENT]),
+});

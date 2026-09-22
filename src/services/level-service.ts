@@ -24,6 +24,11 @@ interface LevelRow {
   sees_label_override: string | null;
   approval_label_override: string | null;
   can_edit_label: string | null;
+  see_credit_fields: boolean;
+  see_margin_fields: boolean;
+  can_export: boolean;
+  can_view_call_recordings: boolean;
+  can_see_unmasked_pii: boolean;
   created_at: string;
   current_headcount: string;
 }
@@ -40,6 +45,11 @@ export interface CreateLevelInput {
   seesLabelOverride?: string;
   approvalLabelOverride?: string;
   canEditLabel?: string;
+  seeCreditFields?: boolean;
+  seeMarginFields?: boolean;
+  canExport?: boolean;
+  canViewCallRecordings?: boolean;
+  canSeeUnmaskedPii?: boolean;
 }
 
 export interface UpdateLevelInput {
@@ -54,6 +64,11 @@ export interface UpdateLevelInput {
   seesLabelOverride?: string | null;
   approvalLabelOverride?: string | null;
   canEditLabel?: string | null;
+  seeCreditFields?: boolean;
+  seeMarginFields?: boolean;
+  canExport?: boolean;
+  canViewCallRecordings?: boolean;
+  canSeeUnmaskedPii?: boolean;
 }
 
 function toPublicLevel(row: LevelRow) {
@@ -70,6 +85,11 @@ function toPublicLevel(row: LevelRow) {
     seesLabelOverride: row.sees_label_override,
     approvalLabelOverride: row.approval_label_override,
     canEditLabel: row.can_edit_label,
+    seeCreditFields: row.see_credit_fields,
+    seeMarginFields: row.see_margin_fields,
+    canExport: row.can_export,
+    canViewCallRecordings: row.can_view_call_recordings,
+    canSeeUnmaskedPii: row.can_see_unmasked_pii,
     currentHeadcount: Number(row.current_headcount ?? 0),
     createdAt: row.created_at,
   };
@@ -120,8 +140,12 @@ export async function createLevel(input: CreateLevelInput) {
   }
 
   const result = await pool.query<{ id: string }>(
-    `INSERT INTO levels (name, sort_order, description, headcount_limit, approval_ceiling, security_tier, is_cross_cutting, record_scope, sees_label_override, approval_label_override, can_edit_label)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    `INSERT INTO levels (
+       name, sort_order, description, headcount_limit, approval_ceiling, security_tier, is_cross_cutting,
+       record_scope, sees_label_override, approval_label_override, can_edit_label,
+       see_credit_fields, see_margin_fields, can_export, can_view_call_recordings, can_see_unmasked_pii
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
      RETURNING id`,
     [
       input.name,
@@ -135,6 +159,11 @@ export async function createLevel(input: CreateLevelInput) {
       input.seesLabelOverride ?? null,
       input.approvalLabelOverride ?? null,
       input.canEditLabel ?? null,
+      input.seeCreditFields ?? true,
+      input.seeMarginFields ?? true,
+      input.canExport ?? true,
+      input.canViewCallRecordings ?? true,
+      input.canSeeUnmaskedPii ?? true,
     ]
   );
   return getLevelById(result.rows[0].id);
@@ -166,6 +195,11 @@ export async function updateLevel(id: string, updates: UpdateLevelInput) {
     sees_label_override: normalize(updates.seesLabelOverride),
     approval_label_override: normalize(updates.approvalLabelOverride),
     can_edit_label: normalize(updates.canEditLabel),
+    see_credit_fields: updates.seeCreditFields,
+    see_margin_fields: updates.seeMarginFields,
+    can_export: updates.canExport,
+    can_view_call_recordings: updates.canViewCallRecordings,
+    can_see_unmasked_pii: updates.canSeeUnmaskedPii,
   };
 
   const setClauses: string[] = [];
