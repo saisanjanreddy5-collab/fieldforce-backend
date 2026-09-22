@@ -9,6 +9,7 @@ interface TargetRow {
   period_start: string;
   period_end: string;
   target_amount: string;
+  unit_target: string | null;
   created_by: string | null;
   updated_by: string | null;
   created_at: string;
@@ -21,12 +22,14 @@ export interface CreateTargetInput {
   periodType: "monthly" | "quarterly" | "annual";
   periodAnchor: string;
   targetAmount: number;
+  unitTarget?: string;
 }
 
 export interface UpdateTargetInput {
   periodType?: "monthly" | "quarterly" | "annual";
   periodAnchor?: string;
   targetAmount?: number;
+  unitTarget?: string | null;
 }
 
 // The business timezone for deciding which calendar period a Won
@@ -84,6 +87,7 @@ function toPublicTarget(row: TargetRow) {
     periodStart: row.period_start,
     periodEnd: row.period_end,
     targetAmount,
+    unitTarget: row.unit_target,
     achievedAmount,
     remainingAmount,
     achievementPercent,
@@ -201,10 +205,10 @@ export async function createTarget(input: CreateTargetInput, requestingUserId: s
   }
 
   const result = await pool.query<{ id: string }>(
-    `INSERT INTO targets (user_id, period_type, period_start, period_end, target_amount, created_by, updated_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $6)
+    `INSERT INTO targets (user_id, period_type, period_start, period_end, target_amount, unit_target, created_by, updated_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
      RETURNING id`,
-    [input.userId, input.periodType, periodStart, periodEnd, input.targetAmount, requestingUserId]
+    [input.userId, input.periodType, periodStart, periodEnd, input.targetAmount, input.unitTarget ?? null, requestingUserId]
   );
 
   return getTargetById(result.rows[0].id, requestingUserId, ROLES.ADMIN);
@@ -238,9 +242,10 @@ export async function updateTarget(id: string, updates: UpdateTargetInput, reque
     `UPDATE targets
      SET period_type = $1, period_start = $2, period_end = $3,
          target_amount = COALESCE($4, target_amount),
-         updated_by = $5, updated_at = now()
-     WHERE id = $6`,
-    [periodType, periodStart, periodEnd, updates.targetAmount ?? null, requestingUserId, id]
+         unit_target = COALESCE($5, unit_target),
+         updated_by = $6, updated_at = now()
+     WHERE id = $7`,
+    [periodType, periodStart, periodEnd, updates.targetAmount ?? null, updates.unitTarget ?? null, requestingUserId, id]
   );
 
   return getTargetById(id, requestingUserId, ROLES.ADMIN);

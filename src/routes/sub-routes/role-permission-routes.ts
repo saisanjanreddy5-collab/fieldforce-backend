@@ -3,7 +3,7 @@ import * as rolePermissionController from "../../controllers/role-permission-con
 import { ADMIN_ONLY, requireAuth, requireRole } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody } from "../../middleware/validate-middleware";
-import { setRolePermissionSchema } from "../../validators/role-permission-validator";
+import { resetRoleToDefaultSchema, setRolePermissionSchema } from "../../validators/role-permission-validator";
 
 const router = Router();
 
@@ -17,5 +17,11 @@ router.use(requireAuth);
 // admin lock every admin out with a single bad toggle.
 router.get("/", requirePermission("role_permissions.view"), rolePermissionController.list);
 router.patch("/", requireRole(...ADMIN_ONLY), validateBody(setRolePermissionSchema), rolePermissionController.setGrant);
+router.post(
+  "/reset",
+  requireRole(...ADMIN_ONLY),
+  validateBody(resetRoleToDefaultSchema),
+  rolePermissionController.resetToDefault
+);
 
 export default router;
