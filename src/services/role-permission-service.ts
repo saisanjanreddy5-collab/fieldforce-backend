@@ -32,6 +32,8 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "approval_bands.view", "approval_bands.create", "approval_bands.update", "approval_bands.delete",
     "territory_transfers.view", "territory_transfers.create",
     "delegations.view", "delegations.create", "delegations.delete",
+    "fofo_onboarding.view", "fofo_onboarding.manage", "fofo_onboarding.upload_document",
+    "reports.view", "reports.save_view",
   ],
   [ROLES.MANAGER]: [
     "users.view",
@@ -51,6 +53,8 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "approval_bands.view",
     "territory_transfers.view", "territory_transfers.create",
     "delegations.view", "delegations.create", "delegations.delete",
+    "fofo_onboarding.view", "fofo_onboarding.manage", "fofo_onboarding.upload_document",
+    "reports.view", "reports.save_view",
   ],
   [ROLES.AGENT]: [
     "leads.view", "leads.create", "leads.update", "leads.delete", "leads.share",
@@ -61,6 +65,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "offices.view",
     "levels.view",
     "sales_teams.view",
+    "fofo_onboarding.view", "fofo_onboarding.upload_document",
   ],
 };
 

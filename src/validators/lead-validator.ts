@@ -73,6 +73,19 @@ export const createLeadSchema = z.object({
   drugLicenceNumber: z.string().optional(),
   fssaiNumber: z.string().optional(),
 
+  // FOFO onboarding handoff
+  entityType: z.string().optional(),
+  aadhaarNumber: z.string().optional(),
+  nearestCocoStore: z.string().optional(),
+  signageStatus: z.string().optional(),
+  securityDeposit: z.coerce.number().optional(),
+  openingStock: z.coerce.number().optional(),
+  marginSlab: z.string().optional(),
+  creditLimitRequested: z.coerce.number().optional(),
+  creditCategory: z.string().optional(),
+  paymentTerms: z.string().optional(),
+  targetGoLive: z.string().optional(),
+
   // Consent tab - written to the separate consents table
   consent: consentInputSchema.optional(),
 });

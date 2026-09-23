@@ -878,6 +878,120 @@ export async function createTables(): Promise<void> {
     // won-opportunity-value SUM it already was). Free text because a unit
     // target's unit varies by role (franchises, units, visits...).
     `ALTER TABLE targets ADD COLUMN IF NOT EXISTS unit_target VARCHAR(100)`,
+
+    // --- FOFO onboarding handoff ---
+    // A FOFO-category lead becomes a franchise store application, walked
+    // through Applicant -> Store information -> Documents & KYC ->
+    // Commercials -> Approval & push. Reuses the store_*/carpet_area/
+    // frontage/ownership/gst_number/pan_number columns already on `leads`
+    // (added earlier for the New Lead form's Store tab) - only genuinely
+    // new fields are added below.
+    `CREATE SEQUENCE IF NOT EXISTS lead_number_seq`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS lead_number INTEGER`,
+    `ALTER TABLE leads ALTER COLUMN lead_number SET DEFAULT nextval('lead_number_seq')`,
+    // Backfills any lead created before this column existed - safe to run
+    // every startup since the WHERE clause skips rows that already have one.
+    `UPDATE leads SET lead_number = nextval('lead_number_seq') WHERE lead_number IS NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_lead_number ON leads(lead_number)`,
+
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS entity_type VARCHAR(50)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS aadhaar_number VARCHAR(20)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS nearest_coco_store VARCHAR(255)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS signage_status VARCHAR(50)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS security_deposit DECIMAL(12,2)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS opening_stock DECIMAL(12,2)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS margin_slab VARCHAR(50)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS credit_limit_requested DECIMAL(12,2)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS credit_category VARCHAR(50)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS payment_terms VARCHAR(100)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS target_go_live DATE`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS push_status VARCHAR(20) NOT NULL DEFAULT 'not_pushed' CHECK (push_status IN ('not_pushed','pushed'))`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS onboarding_app_id VARCHAR(50)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS pushed_at TIMESTAMPTZ`,
+
+    // Sequential named-approver chain for one lead's handoff - deliberately
+    // NOT built on approval_bands (that stays a flat, level-based config
+    // table with no real request/workflow behind it). Approvers here are
+    // derived from the real manager_id chain above the lead's owner at the
+    // moment onboarding starts (reporting manager, then their manager, then
+    // the topmost person in that line) - never a fabricated "Ops" role,
+    // since FieldForce has no such role. The third step's status starts
+    // 'not_applicable' unless the lead's real expected_value exceeds
+    // 1,500,000 (matching the reference's "value > ₹15L" condition, applied
+    // for real rather than shown as static text).
+    `CREATE TABLE IF NOT EXISTS lead_approval_steps (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      step_order INTEGER NOT NULL,
+      role_label VARCHAR(100) NOT NULL,
+      approver_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','not_applicable')),
+      condition_note VARCHAR(255),
+      decided_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      decided_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (lead_id, step_order)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_lead_approval_steps_lead_id ON lead_approval_steps(lead_id)`,
+
+    // Real per-document status + file, replacing DocumentsTab.tsx's
+    // component-state-only mock. One row per document type per lead,
+    // created on first view (same lazy-create spirit as
+    // scheduled-transfer-service's applyDueTransfers).
+    `CREATE TABLE IF NOT EXISTS lead_documents (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      doc_type VARCHAR(30) NOT NULL CHECK (doc_type IN ('pan_card','gst_certificate','shop_photos','rent_agreement','cancelled_cheque','consent_form')),
+      status VARCHAR(20) NOT NULL DEFAULT 'not_uploaded' CHECK (status IN ('not_uploaded','in_review','verified','missing')),
+      file_path VARCHAR(500),
+      original_filename VARCHAR(255),
+      uploaded_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      uploaded_at TIMESTAMPTZ,
+      notes VARCHAR(255),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (lead_id, doc_type)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_lead_documents_lead_id ON lead_documents(lead_id)`,
+
+    // New module, wired to requirePermission from day one per the
+    // post-Phase-3 rule. Agents get view+upload_document (they're the ones
+    // on the ground with the applicant's paperwork) but not manage
+    // (approve/reject/push stays a manager+ decision, same split as the
+    // rest of the app's approval-adjacent actions).
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','fofo_onboarding.view'), ('admin','fofo_onboarding.manage'), ('admin','fofo_onboarding.upload_document')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','fofo_onboarding.view'), ('manager','fofo_onboarding.manage'), ('manager','fofo_onboarding.upload_document')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('agent','fofo_onboarding.view'), ('agent','fofo_onboarding.upload_document')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
+    // --- Reports ---
+    // A named filter preset a user saves for themselves - "Save view" in the
+    // reference. Personal, not shared (no team-visibility model was asked
+    // for), so it's just scoped to user_id with no sharing table.
+    `CREATE TABLE IF NOT EXISTS saved_report_views (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      report_key VARCHAR(50) NOT NULL,
+      name VARCHAR(150) NOT NULL,
+      filters JSONB NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_saved_report_views_user_id ON saved_report_views(user_id)`,
+
+    // New module, wired to requirePermission from day one. Governance-style
+    // screen like Approvals/Approval bands - admin+manager only, same as
+    // those, not agent-visible.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','reports.view'), ('admin','reports.save_view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','reports.view'), ('manager','reports.save_view')
+    ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {
