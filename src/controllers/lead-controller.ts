@@ -13,6 +13,11 @@ export const listTerritories = asyncHandler(async (_req: Request, res: Response)
   sendSuccess(res, territories);
 });
 
+export const quickFilterCounts = asyncHandler(async (req: Request, res: Response) => {
+  const counts = await leadService.getQuickFilterCounts(req.user!.id);
+  sendSuccess(res, counts);
+});
+
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const query = req.validatedQuery as unknown as {
     status?: string;
@@ -22,11 +27,16 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     districtId?: string;
     areaId?: string;
     search?: string;
+    category?: string;
+    overdueOnly?: boolean;
+    highScoreOnly?: boolean;
+    consentPending?: boolean;
+    unassignedOnly?: boolean;
     page: number;
     limit: number;
   };
-  const leads = await leadService.listLeadsForUser(req.user!.id, query);
-  sendSuccess(res, leads);
+  const result = await leadService.listLeadsForUser(req.user!.id, query);
+  sendSuccess(res, result);
 });
 
 export const getById = asyncHandler(async (req: Request, res: Response) => {

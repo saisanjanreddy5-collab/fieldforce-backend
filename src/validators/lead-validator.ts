@@ -96,6 +96,15 @@ export const shareLeadSchema = z.object({
   userId: uuid,
 });
 
+// Query-string booleans arrive as the literal strings "true"/"false" (or
+// are absent) - z.coerce.boolean() would treat "false" as truthy since any
+// non-empty string coerces to true, so this maps the two real string
+// values explicitly instead.
+const queryBoolean = z
+  .enum(["true", "false"])
+  .optional()
+  .transform((v) => v === "true");
+
 export const listLeadsQuerySchema = z.object({
   status: z.string().optional(),
   ownerId: uuid.optional(),
@@ -104,6 +113,11 @@ export const listLeadsQuerySchema = z.object({
   districtId: uuid.optional(),
   areaId: uuid.optional(),
   search: z.string().optional(),
+  category: z.string().optional(),
+  overdueOnly: queryBoolean,
+  highScoreOnly: queryBoolean,
+  consentPending: queryBoolean,
+  unassignedOnly: queryBoolean,
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
 });
