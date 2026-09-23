@@ -19,6 +19,7 @@ router.use(requireAuth);
 router.get("/", requirePermission("leads.view"), validateQuery(listLeadsQuerySchema), leadController.list);
 router.post("/", requirePermission("leads.create"), validateBody(createLeadSchema), leadController.create);
 router.get("/territories", requirePermission("leads.view"), leadController.listTerritories);
+router.get("/quick-filter-counts", requirePermission("leads.view"), leadController.quickFilterCounts);
 router.get("/:id", requirePermission("leads.view"), leadController.getById);
 router.patch("/:id", requirePermission("leads.update"), validateBody(updateLeadSchema), leadController.update);
 router.delete("/:id", requirePermission("leads.delete"), leadController.remove);

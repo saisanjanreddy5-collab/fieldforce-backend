@@ -193,9 +193,19 @@ export interface ListLeadsFilters {
   districtId?: string;
   areaId?: string;
   search?: string;
+  category?: string;
+  overdueOnly?: boolean;
+  highScoreOnly?: boolean;
+  consentPending?: boolean;
+  unassignedOnly?: boolean;
   page: number;
   limit: number;
 }
+
+// Same "good score" threshold already established for the green tier in
+// utils/lead-format.ts's scoreColor on the frontend - reused here rather
+// than inventing a second, different number for the same concept.
+const HIGH_SCORE_THRESHOLD = 70;
 
 function toPublicLead(row: LeadRow) {
   return {
@@ -531,10 +541,40 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
     const idx = params.length;
     conditions.push(`(l.full_name ILIKE $${idx} OR l.company_name ILIKE $${idx} OR l.phone ILIKE $${idx})`);
   }
+  if (filters.category) {
+    params.push(filters.category);
+    conditions.push(`l.category = $${params.length}`);
+  }
+  if (filters.overdueOnly) {
+    conditions.push(
+      `EXISTS (SELECT 1 FROM activities a WHERE a.lead_id = l.id AND a.due_date < now() AND a.status <> 'completed')`
+    );
+  }
+  if (filters.highScoreOnly) {
+    params.push(HIGH_SCORE_THRESHOLD);
+    conditions.push(`l.lead_score >= $${params.length}`);
+  }
+  if (filters.consentPending) {
+    conditions.push(`NOT EXISTS (SELECT 1 FROM consents c WHERE c.lead_id = l.id AND c.captured = true)`);
+  }
+  if (filters.unassignedOnly) {
+    conditions.push(`l.owner_id IS NULL`);
+  }
+
+  const whereClause = conditions.join(" AND ");
+
+  // A lightweight companion COUNT using the exact same WHERE/params (minus
+  // limit/offset) - needed for a real "X of Y leads" and to know whether
+  // more pages exist, now that the frontend no longer loads everything at
+  // once.
+  const countResult = await pool.query<{ count: string }>(
+    `${SUBTREE_CTE} SELECT COUNT(*) FROM leads l WHERE ${whereClause}`,
+    params
+  );
 
   const limit = filters.limit;
   const offset = (filters.page - 1) * filters.limit;
-  params.push(limit, offset);
+  const listParams = [...params, limit, offset];
 
   const result = await pool.query<LeadRow>(
     `${SUBTREE_CTE}
@@ -548,13 +588,61 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
        ) AS consent_pending
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
-     WHERE ${conditions.join(" AND ")}
+     WHERE ${whereClause}
      ORDER BY l.created_at DESC
-     LIMIT $${params.length - 1} OFFSET $${params.length}`,
-    params
+     LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+    listParams
   );
 
-  return result.rows.map(toPublicLead);
+  return { leads: result.rows.map(toPublicLead), total: Number(countResult.rows[0].count) };
+}
+
+// Real per-bucket counts for the Leads quick-filter chips (My leads /
+// Unassigned / Overdue / FOFO / High score), computed in one query via
+// conditional aggregation over the exact same authorization scope
+// listLeadsForUser uses - not six separate round trips, and never a second,
+// looser visibility rule. "Unassigned" (owner_id IS NULL) will honestly
+// read 0 for everyone today: the subtree/shared visibility condition below
+// can never match a NULL owner_id, so such leads - if any exist - aren't
+// actually visible to anyone under the current authorization model. That's
+// a true reflection of the real rule, not a bug in this count.
+export async function getQuickFilterCounts(requestingUserId: string) {
+  const result = await pool.query<{
+    all: string;
+    my_leads: string;
+    unassigned: string;
+    overdue: string;
+    fofo: string;
+    high_score: string;
+  }>(
+    `${SUBTREE_CTE}
+     SELECT
+       COUNT(*) AS all,
+       COUNT(*) FILTER (WHERE l.owner_id = $1) AS my_leads,
+       COUNT(*) FILTER (WHERE l.owner_id IS NULL) AS unassigned,
+       COUNT(*) FILTER (
+         WHERE EXISTS (SELECT 1 FROM activities a WHERE a.lead_id = l.id AND a.due_date < now() AND a.status <> 'completed')
+       ) AS overdue,
+       COUNT(*) FILTER (WHERE l.category = 'FOFO') AS fofo,
+       COUNT(*) FILTER (WHERE l.lead_score >= $2) AS high_score
+     FROM leads l
+     WHERE l.is_deleted = false
+       AND (
+         l.owner_id IN (SELECT id FROM subtree)
+         OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
+       )`,
+    [requestingUserId, HIGH_SCORE_THRESHOLD]
+  );
+
+  const row = result.rows[0];
+  return {
+    all: Number(row.all),
+    myLeads: Number(row.my_leads),
+    unassigned: Number(row.unassigned),
+    overdue: Number(row.overdue),
+    fofo: Number(row.fofo),
+    highScore: Number(row.high_score),
+  };
 }
 
 export async function updateLead(leadId: string, updates: Partial<CreateLeadInput>, requestingUserId: string) {
