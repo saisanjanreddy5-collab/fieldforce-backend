@@ -18,6 +18,7 @@ const SUBTREE_CTE = `
 
 interface LeadRow {
   id: string;
+  lead_number: number | null;
   full_name: string;
   contact_name: string | null;
   profession: string | null;
@@ -72,6 +73,20 @@ interface LeadRow {
   pan_number: string | null;
   drug_licence_number: string | null;
   fssai_number: string | null;
+  entity_type: string | null;
+  aadhaar_number: string | null;
+  nearest_coco_store: string | null;
+  signage_status: string | null;
+  security_deposit: string | null;
+  opening_stock: string | null;
+  margin_slab: string | null;
+  credit_limit_requested: string | null;
+  credit_category: string | null;
+  payment_terms: string | null;
+  target_go_live: string | null;
+  push_status: string;
+  onboarding_app_id: string | null;
+  pushed_at: string | null;
   is_deleted: boolean;
   created_by: string | null;
   updated_by: string | null;
@@ -153,6 +168,19 @@ export interface CreateLeadInput {
   drugLicenceNumber?: string;
   fssaiNumber?: string;
 
+  // FOFO onboarding handoff
+  entityType?: string;
+  aadhaarNumber?: string;
+  nearestCocoStore?: string;
+  signageStatus?: string;
+  securityDeposit?: number;
+  openingStock?: number;
+  marginSlab?: string;
+  creditLimitRequested?: number;
+  creditCategory?: string;
+  paymentTerms?: string;
+  targetGoLive?: string;
+
   // Consent tab
   consent?: LeadConsentInput;
 }
@@ -172,6 +200,7 @@ export interface ListLeadsFilters {
 function toPublicLead(row: LeadRow) {
   return {
     id: row.id,
+    leadNumber: row.lead_number,
     fullName: row.full_name,
     contactName: row.contact_name,
     profession: row.profession,
@@ -226,6 +255,20 @@ function toPublicLead(row: LeadRow) {
     panNumber: row.pan_number,
     drugLicenceNumber: row.drug_licence_number,
     fssaiNumber: row.fssai_number,
+    entityType: row.entity_type,
+    aadhaarNumber: row.aadhaar_number,
+    nearestCocoStore: row.nearest_coco_store,
+    signageStatus: row.signage_status,
+    securityDeposit: row.security_deposit === null ? null : Number(row.security_deposit),
+    openingStock: row.opening_stock === null ? null : Number(row.opening_stock),
+    marginSlab: row.margin_slab,
+    creditLimitRequested: row.credit_limit_requested === null ? null : Number(row.credit_limit_requested),
+    creditCategory: row.credit_category,
+    paymentTerms: row.payment_terms,
+    targetGoLive: row.target_go_live,
+    pushStatus: row.push_status,
+    onboardingAppId: row.onboarding_app_id,
+    pushedAt: row.pushed_at,
     createdBy: row.created_by,
     updatedBy: row.updated_by,
     createdAt: row.created_at,
@@ -388,6 +431,17 @@ export async function createLead(input: CreateLeadInput, creatorId: string) {
     pan_number: input.panNumber,
     drug_licence_number: input.drugLicenceNumber,
     fssai_number: input.fssaiNumber,
+    entity_type: input.entityType,
+    aadhaar_number: input.aadhaarNumber,
+    nearest_coco_store: input.nearestCocoStore,
+    signage_status: input.signageStatus,
+    security_deposit: input.securityDeposit,
+    opening_stock: input.openingStock,
+    margin_slab: input.marginSlab,
+    credit_limit_requested: input.creditLimitRequested,
+    credit_category: input.creditCategory,
+    payment_terms: input.paymentTerms,
+    target_go_live: input.targetGoLive,
     created_by: creatorId,
     updated_by: creatorId,
   });
@@ -564,6 +618,17 @@ export async function updateLead(leadId: string, updates: Partial<CreateLeadInpu
     pan_number: updates.panNumber,
     drug_licence_number: updates.drugLicenceNumber,
     fssai_number: updates.fssaiNumber,
+    entity_type: updates.entityType,
+    aadhaar_number: updates.aadhaarNumber,
+    nearest_coco_store: updates.nearestCocoStore,
+    signage_status: updates.signageStatus,
+    security_deposit: updates.securityDeposit,
+    opening_stock: updates.openingStock,
+    margin_slab: updates.marginSlab,
+    credit_limit_requested: updates.creditLimitRequested,
+    credit_category: updates.creditCategory,
+    payment_terms: updates.paymentTerms,
+    target_go_live: updates.targetGoLive,
   };
 
   const setClauses: string[] = [];
