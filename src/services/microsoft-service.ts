@@ -71,6 +71,15 @@ export function buildAuthUrl(userId: string, returnTo?: string): string {
     response_mode: "query",
     scope: MS_SCOPES.join(" "),
     state,
+    // Without this, Microsoft silently reuses whatever Microsoft account
+    // session is already cached in the browser - so a second CRM user
+    // clicking Connect from the same browser as a first (who connected
+    // earlier) ends up connecting the FIRST person's mailbox without ever
+    // being asked, even though they're two different, correctly-isolated
+    // CRM accounts. This forces the account picker every time, so who's
+    // actually being connected is always an explicit choice, not whatever
+    // happens to be cached.
+    prompt: "select_account",
   });
 
   return `${msAuthorizeUrl()}?${params.toString()}`;
