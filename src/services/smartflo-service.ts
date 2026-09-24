@@ -44,7 +44,7 @@ export async function initiateCallForLead(leadId: string, requestingUserId: stri
 
   const agentNumber = await getAgentNumber(requestingUserId);
   if (!agentNumber) {
-    throw new ApiError(409, "Add your Smartflo agent number under Sales force management first");
+    throw new ApiError(409, "Set your calling number from your profile (top right) first");
   }
 
   const lead = await getLeadById(leadId, requestingUserId);

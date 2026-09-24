@@ -19,6 +19,24 @@ interface ConnectionRow {
 interface StateClaims {
   purpose: "ms-oauth-state";
   userId: string;
+  returnTo: string;
+}
+
+// Only ever a relative, in-app pathname - this round-trips through an
+// unauthenticated browser redirect (Microsoft's own redirect back to us),
+// and the original value came from a query param the client controls, so
+// it must be validated before ever landing in a Location header. Rejects
+// anything that could be interpreted as protocol-relative ("//evil.com")
+// or absolute ("https://evil.com"), not just things missing a leading "/".
+// Any query string or fragment on the original path is stripped rather
+// than preserved, since this value gets ?microsoft=connected appended to
+// it below - keeping it pathname-only avoids producing a malformed
+// "?foo=bar?microsoft=connected" URL.
+function sanitizeReturnTo(path: string | undefined): string {
+  if (!path || !path.startsWith("/") || path.startsWith("//") || path.includes("://")) {
+    return "/";
+  }
+  return path.split(/[?#]/)[0] || "/";
 }
 
 interface TokenResponse {
@@ -37,12 +55,14 @@ function assertConfigured(): void {
 // A short-lived, signed "state" carries which CRM user started the OAuth
 // flow through Microsoft's redirect and back to our callback - the browser
 // round-trip has no Authorization header for us to read the user from.
-export function buildAuthUrl(userId: string): string {
+export function buildAuthUrl(userId: string, returnTo?: string): string {
   assertConfigured();
 
-  const state = jwt.sign({ purpose: "ms-oauth-state", userId } as StateClaims, env.JWT_SECRET, {
-    expiresIn: "10m",
-  } as jwt.SignOptions);
+  const state = jwt.sign(
+    { purpose: "ms-oauth-state", userId, returnTo: sanitizeReturnTo(returnTo) } as StateClaims,
+    env.JWT_SECRET,
+    { expiresIn: "10m" } as jwt.SignOptions
+  );
 
   const params = new URLSearchParams({
     client_id: env.MS_CLIENT_ID!,
@@ -56,7 +76,7 @@ export function buildAuthUrl(userId: string): string {
   return `${msAuthorizeUrl()}?${params.toString()}`;
 }
 
-function decodeState(state: string): string {
+function decodeState(state: string): { userId: string; returnTo: string } {
   let claims: StateClaims;
   try {
     claims = jwt.verify(state, env.JWT_SECRET) as StateClaims;
@@ -66,7 +86,7 @@ function decodeState(state: string): string {
   if (claims.purpose !== "ms-oauth-state" || !claims.userId) {
     throw new ApiError(400, "Invalid Microsoft sign-in state");
   }
-  return claims.userId;
+  return { userId: claims.userId, returnTo: sanitizeReturnTo(claims.returnTo) };
 }
 
 async function exchangeCodeForTokens(code: string): Promise<TokenResponse> {
@@ -127,9 +147,9 @@ async function fetchMicrosoftEmail(accessToken: string): Promise<string> {
   return email;
 }
 
-export async function handleOAuthCallback(code: string, state: string): Promise<{ email: string }> {
+export async function handleOAuthCallback(code: string, state: string): Promise<{ email: string; returnTo: string }> {
   assertConfigured();
-  const userId = decodeState(state);
+  const { userId, returnTo } = decodeState(state);
   const tokens = await exchangeCodeForTokens(code);
 
   if (!tokens.refresh_token) {
@@ -151,7 +171,7 @@ export async function handleOAuthCallback(code: string, state: string): Promise<
     [userId, email, tokens.access_token, tokens.refresh_token, expiresAt.toISOString()]
   );
 
-  return { email };
+  return { email, returnTo };
 }
 
 export async function getConnectionStatus(userId: string): Promise<{ connected: boolean; email: string | null }> {
