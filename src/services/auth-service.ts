@@ -33,6 +33,12 @@ interface UserRow {
   customer_category_id: string | null;
   is_active: boolean;
   created_at: string;
+  // Only present on the joined query getUserById runs (for /auth/me) -
+  // every other caller here (register/login/refresh) selects plain
+  // `users` rows, so these come back undefined for them and toPublicUser
+  // reports null, which is accurate: those call sites never looked it up.
+  manager_name?: string | null;
+  sales_team_name?: string | null;
 }
 
 export interface RegisterInput {
@@ -89,6 +95,8 @@ function toPublicUser(row: UserRow) {
     divisionChannelId: row.division_channel_id,
     customerCategoryId: row.customer_category_id,
     isActive: row.is_active,
+    managerName: row.manager_name ?? null,
+    salesTeamName: row.sales_team_name ?? null,
   };
 }
 
@@ -223,7 +231,14 @@ export async function refreshAccessToken(refreshToken: string) {
 }
 
 export async function getUserById(id: string) {
-  const result = await pool.query<UserRow>("SELECT * FROM users WHERE id = $1", [id]);
+  const result = await pool.query<UserRow>(
+    `SELECT u.*, m.name AS manager_name, st.name AS sales_team_name
+     FROM users u
+     LEFT JOIN users m ON m.id = u.manager_id
+     LEFT JOIN sales_teams st ON st.id = u.sales_team_id
+     WHERE u.id = $1`,
+    [id]
+  );
   const user = result.rows[0];
   if (!user) {
     throw new ApiError(404, "User not found");

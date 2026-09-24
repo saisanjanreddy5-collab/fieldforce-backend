@@ -11,7 +11,8 @@ import * as microsoftService from "../services/microsoft-service";
 // that header. The frontend calls this via axios, then navigates the
 // browser to the returned URL itself.
 export const connect = asyncHandler(async (req: Request, res: Response) => {
-  const authUrl = microsoftService.buildAuthUrl(req.user!.id);
+  const returnTo = typeof req.query.returnTo === "string" ? req.query.returnTo : undefined;
+  const authUrl = microsoftService.buildAuthUrl(req.user!.id, returnTo);
   sendSuccess(res, { authUrl });
 });
 
@@ -24,11 +25,15 @@ export const callback = asyncHandler(async (req: Request, res: Response) => {
   }
 
   try {
-    await microsoftService.handleOAuthCallback(code, state);
-    res.redirect(`${env.FRONTEND_URL}/sales-force-management?microsoft=connected`);
+    const { returnTo } = await microsoftService.handleOAuthCallback(code, state);
+    // Lands back on whichever page Connect was opened from (carried
+    // through the signed OAuth state, validated server-side as a relative
+    // in-app path only) - not a hardcoded feature page, since Connect can
+    // be triggered from the Profile drawer on any page, by any role.
+    res.redirect(`${env.FRONTEND_URL}${returnTo}?microsoft=connected`);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Connection failed";
-    res.redirect(`${env.FRONTEND_URL}/sales-force-management?microsoft=error&reason=${encodeURIComponent(message)}`);
+    res.redirect(`${env.FRONTEND_URL}/?microsoft=error&reason=${encodeURIComponent(message)}`);
   }
 });
 
