@@ -383,7 +383,61 @@ export async function listDistinctTerritories(): Promise<string[]> {
   return result.rows.map((row) => row.territory);
 }
 
+// A lead is still "active" - and blocks a second lead for the same phone
+// number - unless it has reached one of the two terminal outcomes. A
+// Converted or Closed Lost lead is a finished relationship, so a fresh
+// inquiry from the same number later is legitimate, not a duplicate.
+const TERMINAL_LEAD_STATUSES = ["Converted", "Closed Lost"];
+
+// Compares only the last 10 digits after stripping everything but digits,
+// so "9876543210", "+91 98765 43210" and "091-9876543210" are all
+// recognized as the same number even though nothing in this app enforces
+// a single phone format at entry time.
+function normalizePhone(phone: string): string {
+  return phone.replace(/\D/g, "").slice(-10);
+}
+
+interface ActiveLeadMatch {
+  id: string;
+  fullName: string;
+  leadNumber: number | null;
+  ownerName: string | null;
+}
+
+async function findActiveLeadByPhone(phone: string, excludeLeadId?: string): Promise<ActiveLeadMatch | null> {
+  const normalized = normalizePhone(phone);
+  if (normalized.length < 10) return null;
+
+  const result = await pool.query<{ id: string; full_name: string; lead_number: number | null; owner_name: string | null }>(
+    `SELECT l.id, l.full_name, l.lead_number, u.name AS owner_name
+     FROM leads l
+     LEFT JOIN users u ON u.id = l.owner_id
+     WHERE l.is_deleted = false
+       AND l.status NOT IN (${TERMINAL_LEAD_STATUSES.map((_, i) => `$${i + 2}`).join(", ")})
+       AND RIGHT(regexp_replace(l.phone, '\\D', '', 'g'), 10) = $1
+       AND ($${TERMINAL_LEAD_STATUSES.length + 2}::uuid IS NULL OR l.id <> $${TERMINAL_LEAD_STATUSES.length + 2})
+     LIMIT 1`,
+    [normalized, ...TERMINAL_LEAD_STATUSES, excludeLeadId ?? null]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return { id: row.id, fullName: row.full_name, leadNumber: row.lead_number, ownerName: row.owner_name };
+}
+
+function duplicatePhoneMessage(match: ActiveLeadMatch): string {
+  const label = match.leadNumber ? `#${match.leadNumber} - ${match.fullName}` : match.fullName;
+  const owner = match.ownerName ?? "Unassigned";
+  return `This phone number already belongs to an active lead (${label}, owned by ${owner}) - it can't be captured as a separate lead while that one is still open.`;
+}
+
 export async function createLead(input: CreateLeadInput, creatorId: string) {
+  if (input.phone) {
+    const existing = await findActiveLeadByPhone(input.phone);
+    if (existing) {
+      throw new ApiError(409, duplicatePhoneMessage(existing));
+    }
+  }
+
   const ownerId = input.ownerId ?? (await resolveAutoAssignee(input, creatorId));
 
   const { columns, placeholders, values } = buildInsert({
@@ -649,6 +703,16 @@ export async function updateLead(leadId: string, updates: Partial<CreateLeadInpu
   const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
   if (!inScope) {
     throw new ApiError(403, "You do not have access to this lead");
+  }
+
+  // Only re-checked when the phone number is actually being changed - this
+  // closes the loophole of creating a lead with a blank/wrong number then
+  // editing it afterward to bypass the create-time check above.
+  if (updates.phone) {
+    const existing = await findActiveLeadByPhone(updates.phone, leadId);
+    if (existing) {
+      throw new ApiError(409, duplicatePhoneMessage(existing));
+    }
   }
 
   const fieldMap: Record<string, unknown> = {
