@@ -34,6 +34,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "delegations.view", "delegations.create", "delegations.delete",
     "fofo_onboarding.view", "fofo_onboarding.manage", "fofo_onboarding.upload_document",
     "reports.view", "reports.save_view",
+    "whatsapp.view", "whatsapp.send",
   ],
   [ROLES.MANAGER]: [
     "users.view",
@@ -55,6 +56,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "delegations.view", "delegations.create", "delegations.delete",
     "fofo_onboarding.view", "fofo_onboarding.manage", "fofo_onboarding.upload_document",
     "reports.view", "reports.save_view",
+    "whatsapp.view", "whatsapp.send",
   ],
   [ROLES.AGENT]: [
     "leads.view", "leads.create", "leads.update", "leads.delete", "leads.share",
@@ -66,6 +68,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "levels.view",
     "sales_teams.view",
     "fofo_onboarding.view", "fofo_onboarding.upload_document",
+    "whatsapp.view", "whatsapp.send",
   ],
 };
 

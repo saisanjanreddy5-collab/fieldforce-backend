@@ -992,6 +992,39 @@ export async function createTables(): Promise<void> {
     `INSERT INTO role_permissions (role, permission) VALUES
       ('manager','reports.view'), ('manager','reports.save_view')
     ON CONFLICT (role, permission) DO NOTHING`,
+
+    // --- WhatsApp messaging ---
+    // Every inbound/outbound WhatsApp message against a lead, shown as a
+    // chat thread on the lead's WhatsApp tab. direction distinguishes who
+    // sent it; wa_message_id is the id the provider assigns to an outbound
+    // send (returned in their API response) or an inbound message (present
+    // in their webhook payload) - used to de-duplicate webhook retries and
+    // to match delivery/read status updates back to the right row.
+    `CREATE TABLE IF NOT EXISTS whatsapp_messages (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      direction VARCHAR(10) NOT NULL CHECK (direction IN ('inbound','outbound')),
+      body TEXT NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'sent' CHECK (status IN ('sent','delivered','read','failed','received')),
+      wa_message_id VARCHAR(255) UNIQUE,
+      sent_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_lead_id ON whatsapp_messages(lead_id)`,
+
+    // New module, wired to requirePermission from day one. Agents get both
+    // view and send - they're the ones messaging their own leads; manager
+    // and admin inherit the same pair for now, no separate "manage" action
+    // exists yet.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','whatsapp.view'), ('admin','whatsapp.send')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','whatsapp.view'), ('manager','whatsapp.send')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('agent','whatsapp.view'), ('agent','whatsapp.send')
+    ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {
