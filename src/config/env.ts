@@ -35,6 +35,21 @@ const envSchema = z.object({
   // Smartflo callback apart from a random internet request. Optional so the
   // webhook still works before this is set up on both sides.
   SMARTFLO_WEBHOOK_SECRET: z.string().optional(),
+
+  // WhatsApp Business messaging via K3 Digital Media's Pinbot.ai platform -
+  // a single account-level key + WABA number/phone number id for the whole
+  // org, not per-user (same shape as the Smartflo vars above). Optional for
+  // the same reason as SMARTFLO_API_TOKEN.
+  WHATSAPP_API_KEY: z.string().optional(),
+  WHATSAPP_WANUMBER: z.string().optional(),
+  WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),
+
+  // Shared secret we expect back as a custom header on K3's webhook
+  // (registered via their /v2/setwebhooks endpoint) so the public
+  // /api/integrations/whatsapp/webhook route can tell a genuine callback
+  // apart from a random internet request - same pattern as
+  // SMARTFLO_WEBHOOK_SECRET.
+  WHATSAPP_WEBHOOK_SECRET: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

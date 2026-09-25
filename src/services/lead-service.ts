@@ -430,6 +430,27 @@ function duplicatePhoneMessage(match: ActiveLeadMatch): string {
   return `This phone number already belongs to an active lead (${label}, owned by ${owner}) - it can't be captured as a separate lead while that one is still open.`;
 }
 
+// Used to route an inbound WhatsApp reply to the right lead. Unlike
+// findActiveLeadByPhone above, this matches a lead regardless of status - a
+// Converted or Closed Lost lead's contact can still text back, and it
+// should still land somewhere. When more than one lead shares the number
+// (the duplicate-phone block only prevents new leads, not old terminal
+// ones), the most recently updated one wins.
+export async function findLeadIdByPhone(phone: string): Promise<string | null> {
+  const normalized = normalizePhone(phone);
+  if (normalized.length < 10) return null;
+
+  const result = await pool.query<{ id: string }>(
+    `SELECT id FROM leads
+     WHERE is_deleted = false
+       AND RIGHT(regexp_replace(phone, '\\D', '', 'g'), 10) = $1
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+    [normalized]
+  );
+  return result.rows[0]?.id ?? null;
+}
+
 export async function createLead(input: CreateLeadInput, creatorId: string) {
   if (input.phone) {
     const existing = await findActiveLeadByPhone(input.phone);

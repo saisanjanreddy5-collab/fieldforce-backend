@@ -4,6 +4,7 @@ import * as opportunityController from "../../controllers/opportunity-controller
 import * as activityController from "../../controllers/activity-controller";
 import * as microsoftController from "../../controllers/microsoft-controller";
 import * as smartfloController from "../../controllers/smartflo-controller";
+import * as whatsappController from "../../controllers/whatsapp-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
@@ -11,6 +12,7 @@ import { createLeadSchema, listLeadsQuerySchema, shareLeadSchema, updateLeadSche
 import { convertLeadSchema } from "../../validators/opportunity-validator";
 import { createActivitySchema } from "../../validators/activity-validator";
 import { createTeamsMeetingSchema, sendLeadEmailSchema } from "../../validators/microsoft-validator";
+import { sendWhatsappMessageSchema } from "../../validators/whatsapp-validator";
 
 const router = Router();
 
@@ -49,5 +51,13 @@ router.post(
 );
 
 router.post("/:id/call", smartfloController.callLead);
+
+router.get("/:id/whatsapp-messages", requirePermission("whatsapp.view"), whatsappController.listForLead);
+router.post(
+  "/:id/whatsapp-messages",
+  requirePermission("whatsapp.send"),
+  validateBody(sendWhatsappMessageSchema),
+  whatsappController.sendForLead
+);
 
 export default router;
