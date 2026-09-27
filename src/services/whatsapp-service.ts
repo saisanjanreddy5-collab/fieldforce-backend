@@ -37,10 +37,14 @@ function assertConfigured(): void {
   }
 }
 
+// K3's documentation labels this header "api key" (with a space) in every
+// example - but an HTTP header name can never actually contain a space
+// (RFC 7230 field-name is a token, which excludes it), so that's just how
+// they described it for readability in the PDF, not the literal wire name.
 function requestHeaders(): Record<string, string> {
   return {
     "Content-Type": "application/json",
-    "api key": env.WHATSAPP_API_KEY!,
+    apikey: env.WHATSAPP_API_KEY!,
     wanumber: env.WHATSAPP_WANUMBER!,
   };
 }
@@ -53,7 +57,13 @@ export async function sendTextMessage(leadId: string, body: string, requestingUs
     throw new ApiError(422, "This lead has no phone number on file");
   }
 
-  const to = lead.phone.replace(/\D/g, "");
+  // Leads are entered as plain 10-digit Indian mobile numbers with no
+  // country code (same assumption normalizePhone in lead-service.ts makes),
+  // but WhatsApp's API needs the full international MSISDN - a bare
+  // 10-digit number silently fails to actually deliver even though the API
+  // accepts the request and returns a message id.
+  const digits = lead.phone.replace(/\D/g, "");
+  const to = digits.length === 10 ? `91${digits}` : digits;
   const response = await fetch(`${WHATSAPP_BASE_URL}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
     method: "POST",
     headers: requestHeaders(),
