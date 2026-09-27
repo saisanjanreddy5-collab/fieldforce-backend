@@ -64,6 +64,7 @@ interface OpportunityListRow extends OpportunityRow {
   lead_sales_team_id: string | null;
   owner_id: string | null;
   owner_name: string | null;
+  activity_count: string;
 }
 
 function toPublicOpportunity(row: OpportunityRow) {
@@ -100,6 +101,7 @@ function toPublicOpportunityListItem(row: OpportunityListRow) {
     leadSalesTeamId: row.lead_sales_team_id,
     ownerId: row.owner_id,
     ownerName: row.owner_name,
+    activityCount: Number(row.activity_count),
   };
 }
 
@@ -239,7 +241,8 @@ export async function listOpportunitiesForUser(requestingUserId: string, filters
      SELECT o.*, l.full_name AS lead_full_name, l.category AS lead_category,
        l.store_city AS lead_store_city, l.store_state AS lead_store_state,
        l.zone_id AS lead_zone_id, l.territory AS lead_territory, l.sales_team_id AS lead_sales_team_id,
-       l.owner_id AS owner_id, u.name AS owner_name
+       l.owner_id AS owner_id, u.name AS owner_name,
+       (SELECT COUNT(*) FROM activities a WHERE a.opportunity_id = o.id) AS activity_count
      FROM opportunities o
      JOIN leads l ON l.id = o.lead_id
      LEFT JOIN users u ON u.id = l.owner_id

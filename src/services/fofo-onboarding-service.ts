@@ -201,7 +201,8 @@ export async function pushToOnboardingApp(leadId: string, requestingUserId: stri
 const LIST_COLUMNS = `
   l.id, l.lead_number AS "leadNumber", l.full_name AS "fullName", l.store_name AS "storeName",
   l.store_city AS "storeCity", l.store_state AS "storeState", l.status,
-  l.push_status AS "pushStatus", l.expected_value AS "expectedValue", u.name AS "ownerName"
+  l.push_status AS "pushStatus", l.expected_value AS "expectedValue", u.name AS "ownerName",
+  l.created_at AS "createdAt"
 `;
 
 // Deliberately no admin bypass here, even though other list endpoints in
