@@ -61,3 +61,14 @@ export const listComments = asyncHandler(async (req: Request, res: Response) => 
   const comments = await activityService.listComments(String(req.params.id), req.user!.id);
   sendSuccess(res, comments);
 });
+
+export const getCalendarTeam = asyncHandler(async (req: Request, res: Response) => {
+  const team = await activityService.getCalendarTeam(req.user!.id, req.user!.role);
+  sendSuccess(res, team);
+});
+
+export const getCalendarView = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.validatedQuery as unknown as { userId?: string; from: string; to: string };
+  const view = await activityService.getCalendarView(req.user!.id, req.user!.role, query.userId, query.from, query.to);
+  sendSuccess(res, view);
+});

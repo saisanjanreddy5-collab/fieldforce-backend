@@ -28,6 +28,8 @@ import delegationRoutes from "./sub-routes/delegation-routes";
 import userCommissionRoutes from "./sub-routes/user-commission-routes";
 import fofoOnboardingRoutes from "./sub-routes/fofo-onboarding-routes";
 import reportRoutes from "./sub-routes/report-routes";
+import leaveRoutes from "./sub-routes/leave-routes";
+import expenseRoutes from "./sub-routes/expense-routes";
 
 const router = Router();
 
@@ -60,6 +62,8 @@ router.use("/delegations", delegationRoutes);
 router.use("/user-commissions", userCommissionRoutes);
 router.use("/fofo-onboarding", fofoOnboardingRoutes);
 router.use("/reports", reportRoutes);
+router.use("/leave", leaveRoutes);
+router.use("/expenses", expenseRoutes);
 
 router.get("/health", (_req, res) => {
   res.json({ success: true, message: "FieldForce API is running" });

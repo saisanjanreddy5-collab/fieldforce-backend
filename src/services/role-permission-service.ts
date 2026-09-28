@@ -35,6 +35,11 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "fofo_onboarding.view", "fofo_onboarding.manage", "fofo_onboarding.upload_document",
     "reports.view", "reports.save_view",
     "whatsapp.view", "whatsapp.send",
+    "leave_types.view", "leave_types.manage",
+    "leave_requests.view", "leave_requests.create", "leave_requests.update", "leave_requests.approve",
+    "comp_off_credits.view", "comp_off_credits.grant",
+    "expense_types.view", "expense_types.manage",
+    "expense_claims.view", "expense_claims.create", "expense_claims.update", "expense_claims.approve", "expense_claims.mark_paid",
   ],
   [ROLES.MANAGER]: [
     "users.view",
@@ -57,6 +62,11 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "fofo_onboarding.view", "fofo_onboarding.manage", "fofo_onboarding.upload_document",
     "reports.view", "reports.save_view",
     "whatsapp.view", "whatsapp.send",
+    "leave_types.view",
+    "leave_requests.view", "leave_requests.create", "leave_requests.update", "leave_requests.approve",
+    "comp_off_credits.view", "comp_off_credits.grant",
+    "expense_types.view",
+    "expense_claims.view", "expense_claims.create", "expense_claims.update", "expense_claims.approve",
   ],
   [ROLES.AGENT]: [
     "leads.view", "leads.create", "leads.update", "leads.delete", "leads.share",
@@ -69,6 +79,11 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "sales_teams.view",
     "fofo_onboarding.view", "fofo_onboarding.upload_document",
     "whatsapp.view", "whatsapp.send",
+    "leave_types.view",
+    "leave_requests.view", "leave_requests.create", "leave_requests.update",
+    "comp_off_credits.view",
+    "expense_types.view",
+    "expense_claims.view", "expense_claims.create", "expense_claims.update",
   ],
 };
 
