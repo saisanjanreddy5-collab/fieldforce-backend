@@ -3,11 +3,25 @@ import * as activityController from "../../controllers/activity-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
-import { addCommentSchema, listActivitiesQuerySchema, updateActivitySchema } from "../../validators/activity-validator";
+import {
+  addCommentSchema,
+  calendarViewQuerySchema,
+  listActivitiesQuerySchema,
+  updateActivitySchema,
+} from "../../validators/activity-validator";
 
 const router = Router();
 
 router.use(requireAuth);
+
+// Ahead of "/:id" so "calendar" is never swallowed as an activity id.
+router.get("/calendar/team", requirePermission("activities.view"), activityController.getCalendarTeam);
+router.get(
+  "/calendar",
+  requirePermission("activities.view"),
+  validateQuery(calendarViewQuerySchema),
+  activityController.getCalendarView
+);
 
 router.get("/", requirePermission("activities.view"), validateQuery(listActivitiesQuerySchema), activityController.list);
 router.get("/:id", requirePermission("activities.view"), activityController.getById);

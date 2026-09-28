@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const ACTIVITY_TYPES = ["call", "email", "teams_meeting", "site_visit"] as const;
+export const ACTIVITY_TYPES = ["call", "email", "teams_meeting", "site_visit", "whatsapp", "internal"] as const;
 
 export const createActivitySchema = z.object({
   type: z.enum(ACTIVITY_TYPES),
@@ -37,4 +37,10 @@ export const listActivitiesQuerySchema = z.object({
   assignedTo: z.string().uuid().optional(),
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
+});
+
+export const calendarViewQuerySchema = z.object({
+  userId: z.string().uuid().optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "from must be YYYY-MM-DD"),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "to must be YYYY-MM-DD"),
 });

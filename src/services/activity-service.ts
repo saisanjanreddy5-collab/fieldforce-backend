@@ -368,3 +368,192 @@ export async function listComments(activityId: string, requestingUserId: string)
 
   return result.rows.map(toPublicComment);
 }
+
+// --- Activity calendar (Team nav) ---
+// A calendar-shaped read layer over the same `activities` table above - not
+// a parallel data model. For a manager or agent, "Calendar of" only ever
+// lists their own direct reports (mirrors Leave/Expenses' direct-manager-
+// only scoping, not the full recursive subtree leads/opportunities use).
+// Admin is different on purpose: admin is a global role, not a node in the
+// reporting chain, so admin accounts routinely have zero direct reports of
+// their own (confirmed against this app's real seed data) even though
+// admin already has full read access everywhere else in FieldForce - so an
+// admin's "Calendar of" lists every other active user instead of their
+// (always-empty) direct reports.
+export async function getCalendarTeam(userId: string, role: string) {
+  if (role === "admin") {
+    const result = await pool.query<{ id: string; name: string }>(
+      "SELECT id, name FROM users WHERE id != $1 AND is_active = true ORDER BY name ASC",
+      [userId]
+    );
+    return result.rows;
+  }
+  const result = await pool.query<{ id: string; name: string }>(
+    "SELECT id, name FROM users WHERE manager_id = $1 AND is_active = true ORDER BY name ASC",
+    [userId]
+  );
+  return result.rows;
+}
+
+async function assertCalendarAccess(requestingUserId: string, viewingUserId: string, requestingRole: string): Promise<void> {
+  if (requestingUserId === viewingUserId || requestingRole === "admin") return;
+  const result = await pool.query("SELECT 1 FROM users WHERE id = $1 AND manager_id = $2", [
+    viewingUserId,
+    requestingUserId,
+  ]);
+  if ((result.rowCount ?? 0) === 0) {
+    throw new ApiError(403, "You can only view your own calendar or a direct report's");
+  }
+}
+
+interface CalendarProfileRow {
+  id: string;
+  name: string;
+  zone_name: string | null;
+  office_name: string | null;
+}
+
+async function getCalendarProfile(userId: string): Promise<CalendarProfileRow> {
+  const result = await pool.query<CalendarProfileRow>(
+    `SELECT u.id, u.name, z.name AS zone_name, o.name AS office_name
+     FROM users u
+     LEFT JOIN zones z ON z.id = u.zone_id
+     LEFT JOIN offices o ON o.id = u.office_id
+     WHERE u.id = $1`,
+    [userId]
+  );
+  if (result.rows.length === 0) {
+    throw new ApiError(404, "User not found");
+  }
+  return result.rows[0];
+}
+
+interface CalendarStatsRow {
+  scheduled_this_week: string;
+  today_total: string;
+  today_done: string;
+  overdue_count: string;
+  field_days_this_week: string;
+}
+
+// Anchored to the real current day/week in IST regardless of which
+// day/week/month the calendar is currently displaying - the reference's
+// stat cards never change when you switch Day/Week/Month tabs.
+async function getCalendarStats(userId: string) {
+  const result = await pool.query<CalendarStatsRow>(
+    `WITH bounds AS (
+       SELECT
+         (date_trunc('week', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata') AS week_start,
+         (date_trunc('week', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata') + interval '7 days' AS week_end,
+         (date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata') AS day_start,
+         (date_trunc('day', now() AT TIME ZONE 'Asia/Kolkata') AT TIME ZONE 'Asia/Kolkata') + interval '1 day' AS day_end
+     )
+     SELECT
+       count(*) FILTER (WHERE a.due_date >= b.week_start AND a.due_date < b.week_end AND a.status <> 'cancelled') AS scheduled_this_week,
+       count(*) FILTER (WHERE a.due_date >= b.day_start AND a.due_date < b.day_end) AS today_total,
+       count(*) FILTER (WHERE a.due_date >= b.day_start AND a.due_date < b.day_end AND a.status = 'completed') AS today_done,
+       count(*) FILTER (WHERE a.due_date < now() AND a.status NOT IN ('completed','cancelled')) AS overdue_count,
+       count(DISTINCT date_trunc('day', a.due_date AT TIME ZONE 'Asia/Kolkata'))
+         FILTER (WHERE a.type = 'site_visit' AND a.due_date >= b.week_start AND a.due_date < b.week_end) AS field_days_this_week
+     FROM bounds b
+     LEFT JOIN activities a ON a.assigned_to = $1
+     GROUP BY b.week_start, b.week_end, b.day_start, b.day_end`,
+    [userId]
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    return { scheduledThisWeek: 0, todayTotal: 0, todayDone: 0, overdueCount: 0, fieldDaysThisWeek: 0 };
+  }
+  return {
+    scheduledThisWeek: Number(row.scheduled_this_week),
+    todayTotal: Number(row.today_total),
+    todayDone: Number(row.today_done),
+    overdueCount: Number(row.overdue_count),
+    fieldDaysThisWeek: Number(row.field_days_this_week),
+  };
+}
+
+export type CalendarDayTag = "field" | "office" | "off";
+
+// A day is tagged from what actually happened first (any activity that day
+// beats a leave record for it), and only falls back to "off" from approved
+// leave when there is no activity evidence either way - see the reasoning
+// in the PR description, not repeated here.
+async function getCalendarDayTags(userId: string, from: string, to: string): Promise<Record<string, CalendarDayTag>> {
+  const activityDays = await pool.query<{ day: string; has_site_visit: boolean }>(
+    `SELECT date_trunc('day', due_date AT TIME ZONE 'Asia/Kolkata')::date AS day, bool_or(type = 'site_visit') AS has_site_visit
+     FROM activities
+     WHERE assigned_to = $1 AND due_date >= $2::date AND due_date < ($3::date + interval '1 day')
+     GROUP BY 1`,
+    [userId, from, to]
+  );
+
+  const leaveRanges = await pool.query<{ start_date: string; end_date: string }>(
+    `SELECT start_date, end_date FROM leave_requests
+     WHERE user_id = $1 AND status = 'approved' AND start_date <= $3::date AND end_date >= $2::date`,
+    [userId, from, to]
+  );
+
+  const toUTCDate = (dateStr: string) => {
+    const [y, m, d] = dateStr.slice(0, 10).split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d));
+  };
+  const toDateKey = (date: Date) => date.toISOString().slice(0, 10);
+
+  const tags: Record<string, CalendarDayTag> = {};
+  for (const range of leaveRanges.rows) {
+    const cursor = toUTCDate(range.start_date);
+    const end = toUTCDate(range.end_date);
+    while (cursor.getTime() <= end.getTime()) {
+      tags[toDateKey(cursor)] = "off";
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+  }
+  for (const row of activityDays.rows) {
+    tags[toDateKey(toUTCDate(row.day))] = row.has_site_visit ? "field" : "office";
+  }
+  return tags;
+}
+
+export interface CalendarView {
+  user: { id: string; name: string; zoneName: string | null; officeName: string | null };
+  msSyncedAt: string | null;
+  activities: ReturnType<typeof toPublicActivity>[];
+  stats: Awaited<ReturnType<typeof getCalendarStats>>;
+  dayTags: Record<string, CalendarDayTag>;
+}
+
+export async function getCalendarView(
+  requestingUserId: string,
+  requestingRole: string,
+  viewingUserIdParam: string | undefined,
+  from: string,
+  to: string
+): Promise<CalendarView> {
+  const viewingUserId = viewingUserIdParam ?? requestingUserId;
+  await assertCalendarAccess(requestingUserId, viewingUserId, requestingRole);
+
+  const [profile, msConnection, activitiesResult, stats, dayTags] = await Promise.all([
+    getCalendarProfile(viewingUserId),
+    pool.query<{ updated_at: string }>("SELECT updated_at FROM microsoft_connections WHERE user_id = $1", [
+      viewingUserId,
+    ]),
+    pool.query<ActivityRow>(
+      `SELECT * FROM activities
+       WHERE assigned_to = $1 AND due_date >= $2::date AND due_date < ($3::date + interval '1 day')
+       ORDER BY due_date ASC`,
+      [viewingUserId, from, to]
+    ),
+    getCalendarStats(viewingUserId),
+    getCalendarDayTags(viewingUserId, from, to),
+  ]);
+
+  return {
+    user: { id: profile.id, name: profile.name, zoneName: profile.zone_name, officeName: profile.office_name },
+    msSyncedAt: msConnection.rows[0]?.updated_at ?? null,
+    activities: activitiesResult.rows.map(toPublicActivity),
+    stats,
+    dayTags,
+  };
+}

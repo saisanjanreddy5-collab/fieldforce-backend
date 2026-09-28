@@ -159,6 +159,15 @@ export async function createTables(): Promise<void> {
       CHECK (lead_id IS NOT NULL OR opportunity_id IS NOT NULL)
     )`,
 
+    // Activity calendar (Team nav) adds two more activity types on top of the
+    // original four - the inline CREATE TABLE's CHECK is a no-op once the
+    // table already exists, so the constraint has to be dropped and
+    // recreated explicitly, same retrofit shape as every other
+    // already-existing-table change in this file.
+    `ALTER TABLE activities DROP CONSTRAINT IF EXISTS activities_type_check`,
+    `ALTER TABLE activities ADD CONSTRAINT activities_type_check CHECK (type IN ('call','email','teams_meeting','site_visit','whatsapp','internal'))`,
+    `CREATE INDEX IF NOT EXISTS idx_activities_assigned_to_due_date ON activities(assigned_to, due_date)`,
+
     `CREATE TABLE IF NOT EXISTS activity_comments (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       activity_id UUID NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
@@ -1024,6 +1033,205 @@ export async function createTables(): Promise<void> {
     ON CONFLICT (role, permission) DO NOTHING`,
     `INSERT INTO role_permissions (role, permission) VALUES
       ('agent','whatsapp.view'), ('agent','whatsapp.send')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
+    // --- Leave management ---
+    // Four real, balance-tracked types (casual/sick/earned/comp_off) plus
+    // two special request kinds handled only on leave_requests.kind
+    // (half_day, wfh) that never draw from any entitlement - see
+    // leave-service.ts's KIND_CONSUMES_ENTITLEMENT. Configurable, not
+    // hardcoded - an admin can adjust the day counts/policy text later
+    // without a code change, same spirit as levels.approval_ceiling.
+    `CREATE TABLE IF NOT EXISTS leave_types (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      key VARCHAR(20) NOT NULL UNIQUE CHECK (key IN ('casual','sick','earned','comp_off')),
+      label VARCHAR(50) NOT NULL,
+      color VARCHAR(20) NOT NULL,
+      annual_days NUMERIC(4,1),
+      accrual_per_month NUMERIC(3,1),
+      carry_forward_cap NUMERIC(4,1),
+      max_consecutive_days INT,
+      notice_days INT,
+      medical_note_after_days INT,
+      expires_after_days INT,
+      requires_second_approver BOOLEAN NOT NULL DEFAULT false,
+      policy_note VARCHAR(200) NOT NULL,
+      sort_order INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `INSERT INTO leave_types (key, label, color, annual_days, accrual_per_month, carry_forward_cap, max_consecutive_days, notice_days, medical_note_after_days, expires_after_days, requires_second_approver, policy_note, sort_order) VALUES
+      ('casual', 'Casual leave', '#1354e0', 12, NULL, NULL, 3, 2, NULL, NULL, false, 'Max 3 at a stretch, 2 days notice', 1),
+      ('sick', 'Sick leave', '#12a150', 8, NULL, NULL, NULL, NULL, 2, NULL, false, 'Medical note beyond 2 days', 2),
+      ('earned', 'Earned leave', '#6d4ecf', 18, 1.5, 30, NULL, NULL, NULL, NULL, true, 'Accrues 1.5 per month, carry forward 30', 3),
+      ('comp_off', 'Comp off', '#dc8a00', NULL, NULL, NULL, NULL, NULL, NULL, 60, false, 'From weekend field work, expires in 60 days', 4)
+    ON CONFLICT (key) DO NOTHING`,
+
+    // kind covers the 4 real types plus half_day/wfh, which carry no
+    // leave_type row of their own. approver_id/second_approver_id are
+    // snapshotted from the requester's manager_id/skip-level manager_id at
+    // creation time (not re-resolved later) so a manager change mid-request
+    // doesn't retroactively change who was responsible for the decision -
+    // same snapshot convention scheduled_transfers already uses. Only
+    // earned-leave requests populate second_approver_id; every other kind
+    // resolves on the first decision alone.
+    `CREATE TABLE IF NOT EXISTS leave_requests (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind VARCHAR(20) NOT NULL CHECK (kind IN ('casual','sick','earned','comp_off','half_day','wfh')),
+      start_date DATE NOT NULL,
+      end_date DATE NOT NULL,
+      days_count NUMERIC(4,1) NOT NULL,
+      reason VARCHAR(500) NOT NULL,
+      cover_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','cancelled')),
+      approver_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      approver_decision VARCHAR(20) CHECK (approver_decision IN ('approved','rejected')),
+      approver_decided_at TIMESTAMPTZ,
+      second_approver_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      second_approver_decision VARCHAR(20) CHECK (second_approver_decision IN ('approved','rejected')),
+      second_approver_decided_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_leave_requests_user_id ON leave_requests(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_leave_requests_approver_id ON leave_requests(approver_id)`,
+
+    // A comp-off day is earned, not allotted - there's no fixed annual
+    // number the way casual/sick/earned have one, so balance is computed
+    // as unexpired credits minus approved comp_off requests rather than
+    // read off leave_types.annual_days (which is NULL for this type).
+    `CREATE TABLE IF NOT EXISTS comp_off_credits (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      earned_date DATE NOT NULL,
+      days NUMERIC(3,1) NOT NULL DEFAULT 1,
+      granted_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      reason VARCHAR(255),
+      expires_at DATE NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_comp_off_credits_user_id ON comp_off_credits(user_id)`,
+
+    // New module, wired to requirePermission from day one per the
+    // post-Phase-3 rule. Everyone can view policy and their own
+    // requests/apply; only a manager+ can approve a report's request or
+    // grant them a comp-off day; only admin can edit the leave_types policy
+    // itself.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','leave_types.view'), ('admin','leave_types.manage'),
+      ('admin','leave_requests.view'), ('admin','leave_requests.create'), ('admin','leave_requests.update'), ('admin','leave_requests.approve'),
+      ('admin','comp_off_credits.view'), ('admin','comp_off_credits.grant')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','leave_types.view'),
+      ('manager','leave_requests.view'), ('manager','leave_requests.create'), ('manager','leave_requests.update'), ('manager','leave_requests.approve'),
+      ('manager','comp_off_credits.view'), ('manager','comp_off_credits.grant')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('agent','leave_types.view'),
+      ('agent','leave_requests.view'), ('agent','leave_requests.create'), ('agent','leave_requests.update'),
+      ('agent','comp_off_credits.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
+    // --- Expense claims ---
+    // Same configurable-catalog shape as leave_types - an admin can adjust
+    // limits/policy text later without a code change. metro_limit_amount is
+    // Lodging-only (a metro-city override on top of its base limit_amount);
+    // every other type leaves it null.
+    `CREATE TABLE IF NOT EXISTS expense_types (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      key VARCHAR(30) NOT NULL UNIQUE CHECK (key IN ('travel','fuel','lodging','meals','client_entertainment','telecom','marketing_collateral')),
+      label VARCHAR(50) NOT NULL,
+      color VARCHAR(20) NOT NULL,
+      limit_amount NUMERIC(10,2) NOT NULL,
+      limit_unit VARCHAR(20) NOT NULL CHECK (limit_unit IN ('trip','km','night','day','meeting','month')),
+      metro_limit_amount NUMERIC(10,2),
+      receipt_required BOOLEAN NOT NULL DEFAULT true,
+      requires_linked_opportunity BOOLEAN NOT NULL DEFAULT false,
+      policy_note VARCHAR(200) NOT NULL,
+      sort_order INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `INSERT INTO expense_types (key, label, color, limit_amount, limit_unit, metro_limit_amount, receipt_required, requires_linked_opportunity, policy_note, sort_order) VALUES
+      ('travel', 'Travel', '#1354e0', 8000, 'trip', NULL, true, false, 'Air or rail, sleeper class and above', 1),
+      ('fuel', 'Fuel', '#e0393e', 12, 'km', NULL, true, false, 'Own vehicle, GPS distance verified', 2),
+      ('lodging', 'Lodging', '#6d4ecf', 3500, 'night', 5000, true, false, 'Metro cities up to ₹5,000', 3),
+      ('meals', 'Meals', '#12a150', 600, 'day', NULL, false, false, 'Field days only', 4),
+      ('client_entertainment', 'Client entertainment', '#0284c7', 2500, 'meeting', NULL, true, true, 'Needs the linked opportunity', 5),
+      ('telecom', 'Telecom', '#6b7280', 500, 'month', NULL, true, false, 'Reimbursed with the bill', 6),
+      ('marketing_collateral', 'Marketing collateral', '#dc8a00', 5000, 'month', NULL, true, false, 'Standees, brochures, QR print', 7)
+    ON CONFLICT (key) DO NOTHING`,
+
+    // is_policy_breach/policy_limit_at_submission are computed once at
+    // filing time and stored, not recomputed live - a claim's breach status
+    // reflects the policy that was actually in force when it was filed, so
+    // an admin editing expense_types.limit_amount later doesn't silently
+    // rewrite history. approver_id/second_approver_id follow the exact same
+    // snapshot-at-creation and two-tier-decision shape leave_requests uses;
+    // second_approver_id here is resolved from approval_bands
+    // (request_type='expense_claim') when a configured band for this
+    // amount calls for someone more senior than the direct manager -
+    // approval_bands existed since Phase 8 but nothing ever actually read
+    // it for a live decision until this table (see approval-band-service.ts).
+    // A friendly, sequential "EXP-2618" style code - same sequence-backed
+    // pattern leads.lead_number already uses, not a random/UUID-derived one.
+    `CREATE SEQUENCE IF NOT EXISTS expense_claim_number_seq`,
+    `CREATE TABLE IF NOT EXISTS expense_claims (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expense_type_key VARCHAR(30) NOT NULL REFERENCES expense_types(key),
+      title VARCHAR(200) NOT NULL,
+      expense_date DATE NOT NULL,
+      amount NUMERIC(10,2) NOT NULL,
+      quantity NUMERIC(10,2),
+      linked_lead_id UUID REFERENCES leads(id) ON DELETE SET NULL,
+      linked_opportunity_id UUID REFERENCES opportunities(id) ON DELETE SET NULL,
+      receipt_file_path VARCHAR(500),
+      receipt_original_filename VARCHAR(255),
+      is_policy_breach BOOLEAN NOT NULL DEFAULT false,
+      policy_limit_at_submission NUMERIC(10,2),
+      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','paid')),
+      approver_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      approver_decision VARCHAR(20) CHECK (approver_decision IN ('approved','rejected')),
+      approver_decided_at TIMESTAMPTZ,
+      second_approver_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      second_approver_decision VARCHAR(20) CHECK (second_approver_decision IN ('approved','rejected')),
+      second_approver_decided_at TIMESTAMPTZ,
+      decision_note VARCHAR(500),
+      paid_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      paid_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    // Retrofit-safe the same way leads.lead_number is: CREATE TABLE IF NOT
+    // EXISTS is a no-op once the table already exists from an earlier run,
+    // so a column added to that definition later never actually appears
+    // without an explicit ALTER TABLE alongside it.
+    `ALTER TABLE expense_claims ADD COLUMN IF NOT EXISTS claim_number INTEGER`,
+    `ALTER TABLE expense_claims ALTER COLUMN claim_number SET DEFAULT nextval('expense_claim_number_seq')`,
+    `UPDATE expense_claims SET claim_number = nextval('expense_claim_number_seq') WHERE claim_number IS NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_expense_claims_claim_number ON expense_claims(claim_number)`,
+    `CREATE INDEX IF NOT EXISTS idx_expense_claims_user_id ON expense_claims(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_expense_claims_approver_id ON expense_claims(approver_id)`,
+
+    // New module, wired to requirePermission from day one. mark_paid is its
+    // own permission (not folded into approve) since finance-style payout
+    // is a distinct action from a manager's approval decision - admin only
+    // for now, the same way no separate "finance" role exists anywhere else
+    // in FieldForce's 3-tier model.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','expense_types.view'), ('admin','expense_types.manage'),
+      ('admin','expense_claims.view'), ('admin','expense_claims.create'), ('admin','expense_claims.update'), ('admin','expense_claims.approve'), ('admin','expense_claims.mark_paid')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','expense_types.view'),
+      ('manager','expense_claims.view'), ('manager','expense_claims.create'), ('manager','expense_claims.update'), ('manager','expense_claims.approve')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('agent','expense_types.view'),
+      ('agent','expense_claims.view'), ('agent','expense_claims.create'), ('agent','expense_claims.update')
     ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
