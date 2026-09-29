@@ -20,3 +20,15 @@ export const grantCompOffSchema = z.object({
   earnedDate: isoDate,
   reason: z.string().max(255).optional(),
 });
+
+export const updateLeaveTypeSchema = z.object({
+  annualDays: z.coerce.number().min(0).nullable().optional(),
+  accrualPerMonth: z.coerce.number().min(0).nullable().optional(),
+  carryForwardCap: z.coerce.number().min(0).nullable().optional(),
+  maxConsecutiveDays: z.coerce.number().int().min(0).nullable().optional(),
+  noticeDays: z.coerce.number().int().min(0).nullable().optional(),
+  medicalNoteAfterDays: z.coerce.number().int().min(0).nullable().optional(),
+  expiresAfterDays: z.coerce.number().int().min(0).nullable().optional(),
+  requiresSecondApprover: z.boolean().optional(),
+  policyNote: z.string().min(1).max(200).optional(),
+});

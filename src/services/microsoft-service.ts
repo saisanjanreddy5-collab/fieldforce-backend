@@ -193,6 +193,34 @@ export async function disconnect(userId: string): Promise<void> {
   await pool.query("DELETE FROM microsoft_connections WHERE user_id = $1", [userId]);
 }
 
+interface UserConnectionRow {
+  id: string;
+  name: string;
+  designation: string | null;
+  ms_account_email: string | null;
+}
+
+// Settings > Users & access (admin only). Each user still connects their
+// own Microsoft 365 account from their own profile - an admin can revoke
+// someone else's connection here, but can't complete a login on their
+// behalf, so this is a status list, not a per-user Connect action.
+export async function listUserConnections() {
+  const result = await pool.query<UserConnectionRow>(
+    `SELECT u.id, u.name, u.designation, mc.ms_account_email
+     FROM users u
+     LEFT JOIN microsoft_connections mc ON mc.user_id = u.id
+     WHERE u.is_active = true
+     ORDER BY u.name ASC`
+  );
+  return result.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    designation: row.designation,
+    connected: row.ms_account_email !== null,
+    email: row.ms_account_email,
+  }));
+}
+
 // Refreshes eagerly once the stored token is within 2 minutes of expiry,
 // rather than waiting for a live Graph call to fail with a 401 first.
 async function getValidAccessToken(userId: string): Promise<string> {

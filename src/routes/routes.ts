@@ -4,6 +4,7 @@ import userRoutes from "./sub-routes/user-routes";
 import microsoftRoutes from "./sub-routes/microsoft-routes";
 import smartfloRoutes from "./sub-routes/smartflo-routes";
 import whatsappRoutes from "./sub-routes/whatsapp-routes";
+import integrationsRoutes from "./sub-routes/integrations-routes";
 import leadRoutes from "./sub-routes/lead-routes";
 import opportunityRoutes from "./sub-routes/opportunity-routes";
 import activityRoutes from "./sub-routes/activity-routes";
@@ -30,6 +31,11 @@ import fofoOnboardingRoutes from "./sub-routes/fofo-onboarding-routes";
 import reportRoutes from "./sub-routes/report-routes";
 import leaveRoutes from "./sub-routes/leave-routes";
 import expenseRoutes from "./sub-routes/expense-routes";
+import messageTemplateRoutes from "./sub-routes/message-template-routes";
+import pipelineStageRoutes from "./sub-routes/pipeline-stage-routes";
+import leadCategoryRoutes from "./sub-routes/lead-category-routes";
+import assignmentRuleRoutes from "./sub-routes/assignment-rule-routes";
+import appSettingsRoutes from "./sub-routes/app-settings-routes";
 
 const router = Router();
 
@@ -38,6 +44,7 @@ router.use("/users", userRoutes);
 router.use("/integrations/microsoft", microsoftRoutes);
 router.use("/integrations/smartflo", smartfloRoutes);
 router.use("/integrations/whatsapp", whatsappRoutes);
+router.use("/integrations", integrationsRoutes);
 router.use("/leads", leadRoutes);
 router.use("/opportunities", opportunityRoutes);
 router.use("/activities", activityRoutes);
@@ -64,6 +71,11 @@ router.use("/fofo-onboarding", fofoOnboardingRoutes);
 router.use("/reports", reportRoutes);
 router.use("/leave", leaveRoutes);
 router.use("/expenses", expenseRoutes);
+router.use("/message-templates", messageTemplateRoutes);
+router.use("/pipeline-stages", pipelineStageRoutes);
+router.use("/lead-categories", leadCategoryRoutes);
+router.use("/assignment-rules", assignmentRuleRoutes);
+router.use("/app-settings", appSettingsRoutes);
 
 router.get("/health", (_req, res) => {
   res.json({ success: true, message: "FieldForce API is running" });

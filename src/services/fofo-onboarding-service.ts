@@ -3,6 +3,7 @@ import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import * as leadService from "./lead-service";
 import * as leadDocumentService from "./lead-document-service";
+import { getNumericSetting } from "./app-settings-service";
 
 const SUBTREE_CTE = `
   WITH RECURSIVE subtree AS (
@@ -12,10 +13,16 @@ const SUBTREE_CTE = `
   )
 `;
 
-// A deal size above which the reference's "Regional Head (value > ₹15L)"
-// condition actually applies - real, not cosmetic: below this, the third
-// approval step is auto-marked not_applicable instead of waiting forever.
-const HIGH_VALUE_THRESHOLD = 1_500_000;
+// A deal size above which the "Regional Head" condition actually applies -
+// real, not cosmetic: below this, the third approval step is auto-marked
+// not_applicable instead of waiting forever. Was a hardcoded constant;
+// Settings > Approvals now edits this same app_settings row for real, so a
+// policy change here takes effect on the next lead without a redeploy.
+const DEFAULT_HIGH_VALUE_THRESHOLD = 1_500_000;
+
+async function getHighValueThreshold(): Promise<number> {
+  return getNumericSetting("high_value_deal_threshold", DEFAULT_HIGH_VALUE_THRESHOLD);
+}
 
 interface ApprovalStepRow {
   id: string;
@@ -50,7 +57,7 @@ function toPublicStep(row: ApprovalStepRow, approverName: string | null, isCurre
 // lead's owner - never a fabricated "Ops" role, since FieldForce has no
 // such role. Step 1 = owner's direct manager, step 2 = their manager
 // (skip-level), step 3 = the topmost person in that same line, required
-// only when the lead's real expected_value clears HIGH_VALUE_THRESHOLD.
+// only when the lead's real expected_value clears the configured threshold.
 async function deriveApprovalChain(leadId: string, ownerId: string, expectedValue: number | null): Promise<void> {
   const existing = await pool.query("SELECT 1 FROM lead_approval_steps WHERE lead_id = $1 LIMIT 1", [leadId]);
   if ((existing.rowCount ?? 0) > 0) return;
@@ -75,13 +82,14 @@ async function deriveApprovalChain(leadId: string, ownerId: string, expectedValu
     steps.push({ order: 2, role: "Senior approval", approverId: chain[1], status: "pending", note: null });
   }
   if (chain.length >= 3 && chain[chain.length - 1] !== chain[1]) {
-    const isHighValue = expectedValue !== null && expectedValue > HIGH_VALUE_THRESHOLD;
+    const threshold = await getHighValueThreshold();
+    const isHighValue = expectedValue !== null && expectedValue > threshold;
     steps.push({
       order: 3,
       role: "Regional head approval",
       approverId: chain[chain.length - 1],
       status: isHighValue ? "pending" : "not_applicable",
-      note: `Required only when expected value exceeds ₹${(HIGH_VALUE_THRESHOLD / 100000).toFixed(0)}L`,
+      note: `Required only when expected value exceeds ₹${(threshold / 100000).toFixed(0)}L`,
     });
   }
 
@@ -205,13 +213,17 @@ const LIST_COLUMNS = `
   l.created_at AS "createdAt"
 `;
 
-// Deliberately no admin bypass here, even though other list endpoints in
-// this app special-case admin - leads visibility (getHandoff and
-// pushToOnboardingApp both go through lead-service's isLeadVisibleToUser/
-// isLeadInOwnerScope) has no admin bypass anywhere in FieldForce; admin
-// sees everyone only because the real org chart happens to roll up to the
-// one real admin account. Bypassing it here would show admin leads in the
-// list that getHandoff then refuses to open.
+// Deliberately no admin bypass here. lead-service.ts's isLeadVisibleToUser/
+// isLeadInOwnerScope (which getHandoff and pushToOnboardingApp both go
+// through) do now carry one narrow, deliberate admin exception - unassigned
+// leads (owner_id IS NULL), which are otherwise unreachable for anyone.
+// That doesn't apply here: a FOFO handoff only exists for leads with a real
+// owner (deriveApprovalChain needs an owner to walk the manager chain
+// from), so it isn't relevant to this list. Beyond that one case, admin
+// still sees everyone else's leads only because the real org chart happens
+// to roll up to the one real admin account - this file adds no broader
+// bypass, since that would show admin leads in the list that getHandoff
+// then refuses to open.
 export async function listFofoOnboardings(requestingUserId: string) {
   const result = await pool.query<{ expectedValue: string | null } & Record<string, unknown>>(
     `${SUBTREE_CTE}

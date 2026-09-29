@@ -7,6 +7,11 @@ export const listTypes = asyncHandler(async (_req: Request, res: Response) => {
   sendSuccess(res, await leaveService.listLeaveTypes());
 });
 
+export const updateType = asyncHandler(async (req: Request, res: Response) => {
+  const key = req.params.key as leaveService.LeaveTypeKey;
+  sendSuccess(res, await leaveService.updateLeaveType(key, req.body), "Leave type updated");
+});
+
 export const getMyBalances = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, await leaveService.getBalances(req.user!.id));
 });

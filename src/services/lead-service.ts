@@ -289,6 +289,18 @@ function toPublicLead(row: LeadRow) {
   };
 }
 
+// Admin-only exception, added deliberately (not the blanket "admin sees
+// everything" bypass this file's other comments warn against): an
+// unassigned lead (owner_id IS NULL) can never match Rule A/B for anyone,
+// by definition, so without this it would be permanently unmanageable by
+// anyone at all. Scoped narrowly to that one condition, checked inline via
+// the requesting user's real role - no new parameter, so every existing
+// caller of these functions picks it up automatically and stays consistent
+// (list and detail can never disagree, since both read this same clause).
+const UNASSIGNED_ADMIN_CLAUSE = `
+  OR (l.owner_id IS NULL AND EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin'))
+`;
+
 export async function isLeadVisibleToUser(leadId: string, userId: string): Promise<boolean> {
   const result = await pool.query(
     `${SUBTREE_CTE}
@@ -298,6 +310,7 @@ export async function isLeadVisibleToUser(leadId: string, userId: string): Promi
        AND (
          l.owner_id IN (SELECT id FROM subtree)
          OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
+         ${UNASSIGNED_ADMIN_CLAUSE}
        )`,
     [userId, leadId]
   );
@@ -316,7 +329,10 @@ export async function isLeadInOwnerScope(leadId: string, userId: string): Promis
      SELECT 1 FROM leads l
      WHERE l.id = $2
        AND l.is_deleted = false
-       AND l.owner_id IN (SELECT id FROM subtree)`,
+       AND (
+         l.owner_id IN (SELECT id FROM subtree)
+         ${UNASSIGNED_ADMIN_CLAUSE}
+       )`,
     [userId, leadId]
   );
   return (result.rowCount ?? 0) > 0;
@@ -360,7 +376,7 @@ async function resolveAutoAssignee(input: CreateLeadInput, creatorId: string): P
   if (input.stateId) {
     const ruleMatch = await pool.query<{ assigned_user_id: string }>(
       `SELECT assigned_user_id FROM assignment_rules
-       WHERE state_id = $1 AND (category = $2 OR category IS NULL)
+       WHERE state_id = $1 AND is_active = true AND (category = $2 OR category IS NULL)
        ORDER BY category IS NULL ASC
        LIMIT 1`,
       [input.stateId, input.category ?? null]
@@ -585,6 +601,7 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
   conditions.push(`(
     l.owner_id IN (SELECT id FROM subtree)
     OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
+    ${UNASSIGNED_ADMIN_CLAUSE}
   )`);
 
   if (filters.status) {
@@ -676,11 +693,11 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
 // Unassigned / Overdue / FOFO / High score), computed in one query via
 // conditional aggregation over the exact same authorization scope
 // listLeadsForUser uses - not six separate round trips, and never a second,
-// looser visibility rule. "Unassigned" (owner_id IS NULL) will honestly
-// read 0 for everyone today: the subtree/shared visibility condition below
-// can never match a NULL owner_id, so such leads - if any exist - aren't
-// actually visible to anyone under the current authorization model. That's
-// a true reflection of the real rule, not a bug in this count.
+// looser visibility rule. "Unassigned" (owner_id IS NULL) reads 0 for
+// everyone except admin: for anyone else the subtree/shared condition can
+// never match a NULL owner_id, by definition - admin is the one deliberate,
+// narrow exception (UNASSIGNED_ADMIN_CLAUSE above), so unassigned leads are
+// still manageable by someone instead of permanently invisible to all.
 export async function getQuickFilterCounts(requestingUserId: string) {
   const result = await pool.query<{
     all: string;
@@ -705,6 +722,7 @@ export async function getQuickFilterCounts(requestingUserId: string) {
        AND (
          l.owner_id IN (SELECT id FROM subtree)
          OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
+         ${UNASSIGNED_ADMIN_CLAUSE}
        )`,
     [requestingUserId, HIGH_SCORE_THRESHOLD]
   );

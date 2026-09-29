@@ -112,6 +112,61 @@ export async function listLeaveTypes() {
   return result.rows.map(toPublicLeaveType);
 }
 
+export interface UpdateLeaveTypeInput {
+  annualDays?: number | null;
+  accrualPerMonth?: number | null;
+  carryForwardCap?: number | null;
+  maxConsecutiveDays?: number | null;
+  noticeDays?: number | null;
+  medicalNoteAfterDays?: number | null;
+  expiresAfterDays?: number | null;
+  requiresSecondApprover?: boolean;
+  policyNote?: string;
+}
+
+// Settings > Leave types - admin-only edit of the same leave_types row every
+// balance/notice-days/approval-routing calculation already reads from, so a
+// policy change here takes effect immediately for every future request
+// without needing a code change or redeploy.
+export async function updateLeaveType(key: LeaveTypeKey, updates: UpdateLeaveTypeInput) {
+  const fieldMap: Record<string, unknown> = {
+    annual_days: updates.annualDays,
+    accrual_per_month: updates.accrualPerMonth,
+    carry_forward_cap: updates.carryForwardCap,
+    max_consecutive_days: updates.maxConsecutiveDays,
+    notice_days: updates.noticeDays,
+    medical_note_after_days: updates.medicalNoteAfterDays,
+    expires_after_days: updates.expiresAfterDays,
+    requires_second_approver: updates.requiresSecondApprover,
+    policy_note: updates.policyNote,
+  };
+
+  const setClauses: string[] = [];
+  const params: unknown[] = [];
+  for (const [column, value] of Object.entries(fieldMap)) {
+    if (value !== undefined) {
+      params.push(value);
+      setClauses.push(`${column} = $${params.length}`);
+    }
+  }
+
+  if (setClauses.length === 0) {
+    return toPublicLeaveType(await getLeaveTypeByKey(key));
+  }
+
+  setClauses.push("updated_at = now()");
+  params.push(key);
+
+  const result = await pool.query<LeaveTypeRow>(
+    `UPDATE leave_types SET ${setClauses.join(", ")} WHERE key = $${params.length} RETURNING *`,
+    params
+  );
+  if (result.rows.length === 0) {
+    throw new ApiError(404, `Leave type '${key}' is not configured`);
+  }
+  return toPublicLeaveType(result.rows[0]);
+}
+
 async function getLeaveTypeByKey(key: LeaveTypeKey): Promise<LeaveTypeRow> {
   const result = await pool.query<LeaveTypeRow>("SELECT * FROM leave_types WHERE key = $1", [key]);
   if (result.rows.length === 0) {
