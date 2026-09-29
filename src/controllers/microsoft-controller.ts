@@ -47,6 +47,15 @@ export const disconnect = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, null, "Microsoft 365 account disconnected");
 });
 
+export const listUsersStatus = asyncHandler(async (_req: Request, res: Response) => {
+  sendSuccess(res, await microsoftService.listUserConnections());
+});
+
+export const disconnectUser = asyncHandler(async (req: Request, res: Response) => {
+  await microsoftService.disconnect(String(req.params.userId));
+  sendSuccess(res, null, "Microsoft 365 account disconnected");
+});
+
 export const sendEmailForLead = asyncHandler(async (req: Request, res: Response) => {
   const { subject, body } = req.body;
   await microsoftService.sendMailForLead(String(req.params.id), subject, body, req.user!.id);

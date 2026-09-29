@@ -40,6 +40,11 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "comp_off_credits.view", "comp_off_credits.grant",
     "expense_types.view", "expense_types.manage",
     "expense_claims.view", "expense_claims.create", "expense_claims.update", "expense_claims.approve", "expense_claims.mark_paid",
+    "message_templates.view", "message_templates.manage",
+    "pipeline_stages.view", "pipeline_stages.manage",
+    "lead_categories.view", "lead_categories.manage",
+    "assignment_rules.view", "assignment_rules.manage",
+    "app_settings.view", "app_settings.manage",
   ],
   [ROLES.MANAGER]: [
     "users.view",
@@ -67,6 +72,11 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "comp_off_credits.view", "comp_off_credits.grant",
     "expense_types.view",
     "expense_claims.view", "expense_claims.create", "expense_claims.update", "expense_claims.approve",
+    "message_templates.view",
+    "pipeline_stages.view",
+    "lead_categories.view",
+    "assignment_rules.view",
+    "app_settings.view",
   ],
   [ROLES.AGENT]: [
     "leads.view", "leads.create", "leads.update", "leads.delete", "leads.share",
@@ -84,6 +94,9 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "comp_off_credits.view",
     "expense_types.view",
     "expense_claims.view", "expense_claims.create", "expense_claims.update",
+    "message_templates.view",
+    "pipeline_stages.view",
+    "lead_categories.view",
   ],
 };
 

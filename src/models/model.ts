@@ -1233,6 +1233,187 @@ export async function createTables(): Promise<void> {
       ('agent','expense_types.view'),
       ('agent','expense_claims.view'), ('agent','expense_claims.create'), ('agent','expense_claims.update')
     ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Settings > Templates - a real, admin-editable library backing the
+    // Activity calendar's email compose drawer, which previously had these
+    // same 4 templates hardcoded in frontend code. "Blank email" isn't a
+    // stored row - it's just "no template selected" in that drawer.
+    `CREATE TABLE IF NOT EXISTS message_templates (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      key VARCHAR(50) NOT NULL UNIQUE,
+      name VARCHAR(150) NOT NULL,
+      channel VARCHAR(20) NOT NULL CHECK (channel IN ('email','whatsapp')),
+      trigger_note VARCHAR(200),
+      subject VARCHAR(255),
+      body TEXT NOT NULL,
+      status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active','draft')),
+      sort_order INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `INSERT INTO message_templates (key, name, channel, trigger_note, subject, body, status, sort_order) VALUES
+      ('fofo_intro', 'FOFO intro pack', 'email', 'Sent on lead qualification',
+       'FOFO franchise — details and next steps',
+       'Dear {{firstName}},
+
+Thank you for your interest in a franchise with us. I''ve attached our FOFO franchise pack, which covers the investment range, margin slabs and the support we provide on interiors and signage.
+
+{{storeLine}}
+
+Let me know a good time for a call or site visit this week.
+
+Regards,', 'active', 1),
+      ('site_visit_confirmation', 'Site visit confirmation', 'email', 'Sent manually before a scheduled visit',
+       'Site visit confirmed — {{storeAddress}}',
+       'Dear {{firstName}},
+
+Confirming our site visit at {{storeAddress}} on {{visitTime}}. Please keep the rent agreement and shop measurements handy.
+
+Let me know if anything changes on your end.
+
+Regards,', 'active', 2),
+      ('commercial_proposal', 'Commercial proposal', 'email', 'Manual send by salesperson',
+       'Commercial proposal — {{storeName}}',
+       'Dear {{firstName}},
+
+As discussed, here is our commercial proposal{{proposalDetails}}.
+
+The proposal is valid for 30 days. Happy to walk through it on a call this week.
+
+Regards,', 'active', 3),
+      ('consent_dpdp', 'Consent request (DPDP)', 'email', 'Sent when consent is missing',
+       'Your consent for communication',
+       'Dear {{firstName}},
+
+To keep you updated on your enquiry, we need your consent to contact you by phone, WhatsApp and email. You can withdraw it at any time by replying to this email.
+
+Please reply "confirm" to this email to record your consent.
+
+Regards,', 'active', 4)
+    ON CONFLICT (key) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','message_templates.view'), ('admin','message_templates.manage')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','message_templates.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('agent','message_templates.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Settings > Stages. leads.status and opportunities.stage were both
+    // always plain free-text columns (no CHECK constraint ever existed
+    // restricting them) - only the frontend's hardcoded LEAD_STATUS_VALUES
+    // array enforced a fixed list, in the lead form and the status filter.
+    // This table replaces that array as the real source of truth; the two
+    // frontend spots that read it now fetch from here instead. Seeded with
+    // the pipeline's real current 9 stages (not the reference mockup's
+    // different 6-stage list, which drops several of these and adds a
+    // stage - "Onboarding handoff" - with no automation behind it here).
+    `CREATE TABLE IF NOT EXISTS pipeline_stages (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      key VARCHAR(50) NOT NULL UNIQUE,
+      label VARCHAR(100) NOT NULL,
+      description VARCHAR(255),
+      probability INT NOT NULL DEFAULT 0 CHECK (probability BETWEEN 0 AND 100),
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      sort_order INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `INSERT INTO pipeline_stages (key, label, description, probability, sort_order) VALUES
+      ('New', 'New', 'Just captured, not yet worked', 5, 1),
+      ('Open', 'Open', 'Being actively followed up', 15, 2),
+      ('Qualified', 'Qualified', 'Investment capacity and category verified', 30, 3),
+      ('Site visit', 'Site visit', 'Store or premises inspection scheduled or done', 45, 4),
+      ('Proposal', 'Proposal', 'Commercial terms shared', 60, 5),
+      ('Negotiation', 'Negotiation', 'Terms being worked out', 75, 6),
+      ('Agreement', 'Agreement', 'Legal and deposit in progress', 90, 7),
+      ('Converted', 'Converted', 'Won - became a customer', 100, 8),
+      ('Closed Lost', 'Closed Lost', 'Did not convert', 0, 9)
+    ON CONFLICT (key) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','pipeline_stages.view'), ('admin','pipeline_stages.manage')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','pipeline_stages.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('agent','pipeline_stages.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Settings > Categories - same shape and same real reason as Stages:
+    // leads.category was always plain free text, never a CHECK constraint,
+    // only enforced by the frontend's hardcoded LEAD_CATEGORY_VALUES array.
+    // Seeded with the real current 8 categories, not the reference mockup's
+    // different 6 (which merges Ethical+PCD into one and drops Lifestyle).
+    `CREATE TABLE IF NOT EXISTS lead_categories (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      key VARCHAR(50) NOT NULL UNIQUE,
+      label VARCHAR(100) NOT NULL,
+      description VARCHAR(255),
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      sort_order INT NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `INSERT INTO lead_categories (key, label, description, sort_order) VALUES
+      ('COCO', 'COCO', 'Company owned, company operated', 1),
+      ('FOFO', 'FOFO', 'Franchise owned, franchise operated', 2),
+      ('Stockist', 'Stockist', 'Regional distribution partner', 3),
+      ('B2B', 'B2B', 'Corporate and chain accounts', 4),
+      ('Lifestyle', 'Lifestyle', 'Lifestyle retail accounts', 5),
+      ('Institutes', 'Institutes', 'Hospitals, colleges, government', 6),
+      ('PCD', 'PCD', 'Propaganda cum distribution channel', 7),
+      ('Ethical', 'Ethical', 'Branded pharma trade channel', 8)
+    ON CONFLICT (key) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','lead_categories.view'), ('admin','lead_categories.manage')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','lead_categories.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('agent','lead_categories.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Settings > Assignment rules - real admin CRUD on top of the
+    // assignment_rules table lead-service.ts's resolveAutoAssignee has
+    // already been reading for auto-assignment since before this Settings
+    // page existed. No new matching logic here, only a way to see/edit
+    // those same rules instead of only being able to set them by hand in
+    // the database.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','assignment_rules.view'), ('admin','assignment_rules.manage')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','assignment_rules.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    // Retrofit, same reason every other ALTER-after-the-fact in this file
+    // exists: assignment_rules already existed from an earlier phase, so
+    // this column has to be added explicitly rather than folded into its
+    // original CREATE TABLE. Lets a rule be paused without deleting it -
+    // resolveAutoAssignee (lead-service.ts) now skips inactive rules too.
+    `ALTER TABLE assignment_rules ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true`,
+
+    // Settings > Approvals. A small generic key/value store, not a
+    // dedicated table for this one threshold - the same shape can hold
+    // whatever the next scalar setting turns out to be, instead of a new
+    // single-purpose table every time. Seeded with the real value
+    // fofo-onboarding-service.ts's HIGH_VALUE_THRESHOLD was hardcoded to;
+    // that file now reads this row instead of the constant.
+    `CREATE TABLE IF NOT EXISTS app_settings (
+      key VARCHAR(100) PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `INSERT INTO app_settings (key, value) VALUES ('high_value_deal_threshold', '1500000') ON CONFLICT (key) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','app_settings.view'), ('admin','app_settings.manage')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','app_settings.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {

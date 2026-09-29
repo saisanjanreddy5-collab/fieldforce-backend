@@ -3,7 +3,12 @@ import * as leaveController from "../../controllers/leave-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody } from "../../middleware/validate-middleware";
-import { createLeaveRequestSchema, decideLeaveRequestSchema, grantCompOffSchema } from "../../validators/leave-validator";
+import {
+  createLeaveRequestSchema,
+  decideLeaveRequestSchema,
+  grantCompOffSchema,
+  updateLeaveTypeSchema,
+} from "../../validators/leave-validator";
 
 const router = Router();
 
@@ -15,6 +20,12 @@ router.use(requireAuth);
 // "who can see/grant for their reports" screens manager+ only, since
 // FieldForce has no separate "has direct reports" check of its own.
 router.get("/types", requirePermission("leave_types.view"), leaveController.listTypes);
+router.patch(
+  "/types/:key",
+  requirePermission("leave_types.manage"),
+  validateBody(updateLeaveTypeSchema),
+  leaveController.updateType
+);
 router.get("/balances", requirePermission("leave_requests.view"), leaveController.getMyBalances);
 router.get("/context", requirePermission("leave_requests.view"), leaveController.getContext);
 router.get("/mine", requirePermission("leave_requests.view"), leaveController.listMine);
