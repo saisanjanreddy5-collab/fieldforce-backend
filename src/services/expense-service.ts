@@ -4,6 +4,7 @@ import crypto from "crypto";
 import multer from "multer";
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
+import { recordAuditEvent } from "./audit-log-service";
 
 export const EXPENSE_TYPE_KEYS = [
   "travel",
@@ -263,6 +264,20 @@ export async function listPendingApprovals(userId: string) {
   return result.rows.map(toPublicExpenseClaim);
 }
 
+// For the Approvals inbox's "approved this week" stat - see leave-service's
+// listDecidedThisWeek, same shape.
+export async function listDecidedThisWeek(userId: string) {
+  const result = await pool.query<{ created_at: string; decided_at: string }>(
+    `SELECT created_at, approver_decided_at AS decided_at FROM expense_claims
+       WHERE approver_id = $1 AND approver_decided_at IS NOT NULL AND approver_decided_at > now() - interval '7 days'
+     UNION ALL
+     SELECT created_at, second_approver_decided_at AS decided_at FROM expense_claims
+       WHERE second_approver_id = $1 AND second_approver_decided_at IS NOT NULL AND second_approver_decided_at > now() - interval '7 days'`,
+    [userId]
+  );
+  return result.rows;
+}
+
 async function getClaimById(id: string): Promise<ExpenseClaimRow> {
   const result = await pool.query<ExpenseClaimRow>(`${CLAIM_SELECT} WHERE ec.id = $1`, [id]);
   if (result.rows.length === 0) {
@@ -318,7 +333,13 @@ export async function createExpenseClaim(userId: string, input: CreateExpenseCla
   return toPublicExpenseClaim(await getClaimById(result.rows[0].id));
 }
 
-export async function decideExpenseClaim(claimId: string, deciderId: string, decision: "approved" | "rejected", note?: string) {
+export async function decideExpenseClaim(
+  claimId: string,
+  deciderId: string,
+  decision: "approved" | "rejected",
+  note?: string,
+  ipAddress?: string | null
+) {
   const claim = await getClaimById(claimId);
   if (claim.status !== "pending") {
     throw new ApiError(409, "This claim has already been decided");
@@ -344,6 +365,21 @@ export async function decideExpenseClaim(claimId: string, deciderId: string, dec
       [decision, decision, note ?? null, claimId]
     );
   }
+
+  const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [deciderId]);
+  const label = `${claim.title} - ${claim.claim_number ? `EXP-${claim.claim_number}` : claimId}`;
+  await recordAuditEvent({
+    entityType: "expense_claim",
+    entityId: claimId,
+    entityLabel: label,
+    action: "approval_decided",
+    summary: `Approval ${decision} - ${label}`,
+    oldValue: "Pending",
+    newValue: decision === "approved" ? "Approved" : "Rejected",
+    actorId: deciderId,
+    actorName: actorResult.rows[0]?.name ?? null,
+    ipAddress,
+  });
 
   return toPublicExpenseClaim(await getClaimById(claimId));
 }

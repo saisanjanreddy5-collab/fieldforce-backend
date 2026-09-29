@@ -4,7 +4,7 @@ import { sendSuccess } from "../utils/response";
 import * as leadService from "../services/lead-service";
 
 export const create = asyncHandler(async (req: Request, res: Response) => {
-  const lead = await leadService.createLead(req.body, req.user!.id);
+  const lead = await leadService.createLead(req.body, req.user!.id, req.ip);
   sendSuccess(res, lead, "Lead created", 201);
 });
 
@@ -45,12 +45,12 @@ export const getById = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const update = asyncHandler(async (req: Request, res: Response) => {
-  const lead = await leadService.updateLead(String(req.params.id), req.body, req.user!.id);
+  const lead = await leadService.updateLead(String(req.params.id), req.body, req.user!.id, req.ip);
   sendSuccess(res, lead, "Lead updated");
 });
 
 export const remove = asyncHandler(async (req: Request, res: Response) => {
-  await leadService.deleteLead(String(req.params.id), req.user!.id);
+  await leadService.deleteLead(String(req.params.id), req.user!.id, req.ip);
   sendSuccess(res, null, "Lead deleted");
 });
 

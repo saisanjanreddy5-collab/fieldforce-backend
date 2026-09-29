@@ -1,5 +1,6 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
+import { recordAuditEvent } from "./audit-log-service";
 
 interface AssignmentRuleRow {
   id: string;
@@ -64,7 +65,15 @@ export interface UpdateAssignmentRuleInput {
   isActive?: boolean;
 }
 
-export async function updateAssignmentRule(id: string, updates: UpdateAssignmentRuleInput) {
+export async function updateAssignmentRule(
+  id: string,
+  updates: UpdateAssignmentRuleInput,
+  requestingUserId?: string,
+  ipAddress?: string | null
+) {
+  const beforeResult = await pool.query<AssignmentRuleRow>(`${RULE_SELECT} WHERE ar.id = $1`, [id]);
+  const before = beforeResult.rows[0];
+
   const fieldMap: Record<string, unknown> = {
     category: updates.category,
     assigned_user_id: updates.assignedUserId,
@@ -92,5 +101,40 @@ export async function updateAssignmentRule(id: string, updates: UpdateAssignment
   if (result.rows.length === 0) {
     throw new ApiError(404, "Assignment rule not found");
   }
-  return toPublicRule(result.rows[0]);
+  const after = result.rows[0];
+
+  if (before && requestingUserId) {
+    const ruleLabel = `${before.state_name ?? "All states"}${before.category ? ` - ${before.category}` : ""}`;
+    if (before.assigned_user_id !== after.assigned_user_id) {
+      const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
+      await recordAuditEvent({
+        entityType: "assignment_rule",
+        entityId: id,
+        entityLabel: ruleLabel,
+        action: "assignment_rule_edited",
+        summary: `Assignment rule edited - ${ruleLabel}`,
+        oldValue: before.assigned_user_name,
+        newValue: after.assigned_user_name,
+        actorId: requestingUserId,
+        actorName: actorResult.rows[0]?.name ?? null,
+        ipAddress,
+      });
+    } else if (before.is_active !== after.is_active) {
+      const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
+      await recordAuditEvent({
+        entityType: "assignment_rule",
+        entityId: id,
+        entityLabel: ruleLabel,
+        action: "assignment_rule_edited",
+        summary: `Assignment rule edited - ${ruleLabel}`,
+        oldValue: before.is_active ? "Active" : "Inactive",
+        newValue: after.is_active ? "Active" : "Inactive",
+        actorId: requestingUserId,
+        actorName: actorResult.rows[0]?.name ?? null,
+        ipAddress,
+      });
+    }
+  }
+
+  return toPublicRule(after);
 }

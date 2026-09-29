@@ -13,6 +13,6 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const update = asyncHandler(async (req: Request, res: Response) => {
-  const rule = await assignmentRuleService.updateAssignmentRule(String(req.params.id), req.body);
+  const rule = await assignmentRuleService.updateAssignmentRule(String(req.params.id), req.body, req.user!.id, req.ip);
   sendSuccess(res, rule, "Assignment rule updated");
 });

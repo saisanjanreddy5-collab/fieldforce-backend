@@ -1,5 +1,6 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
+import { recordAuditEvent } from "./audit-log-service";
 
 // Rule A (hierarchy-based visibility): a lead is visible to its owner and to
 // everyone directly above the owner in the reporting chain. Walking UP from a
@@ -467,7 +468,7 @@ export async function findLeadIdByPhone(phone: string): Promise<string | null> {
   return result.rows[0]?.id ?? null;
 }
 
-export async function createLead(input: CreateLeadInput, creatorId: string) {
+export async function createLead(input: CreateLeadInput, creatorId: string, ipAddress?: string | null) {
   if (input.phone) {
     const existing = await findActiveLeadByPhone(input.phone);
     if (existing) {
@@ -570,6 +571,22 @@ export async function createLead(input: CreateLeadInput, creatorId: string) {
         captured ? "captured" : "pending",
       ]
     );
+
+    if (captured) {
+      const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [creatorId]);
+      await recordAuditEvent({
+        entityType: "consent",
+        entityId: lead.id,
+        entityLabel: lead.full_name,
+        action: "consent_granted",
+        summary: `Consent granted - ${lead.full_name}`,
+        oldValue: null,
+        newValue: input.consent.purposes ?? "Unspecified purpose",
+        actorId: creatorId,
+        actorName: actorResult.rows[0]?.name ?? null,
+        ipAddress,
+      });
+    }
   }
 
   return toPublicLead(lead);
@@ -738,10 +755,30 @@ export async function getQuickFilterCounts(requestingUserId: string) {
   };
 }
 
-export async function updateLead(leadId: string, updates: Partial<CreateLeadInput>, requestingUserId: string) {
+export async function updateLead(
+  leadId: string,
+  updates: Partial<CreateLeadInput>,
+  requestingUserId: string,
+  ipAddress?: string | null
+) {
   const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
   if (!inScope) {
     throw new ApiError(403, "You do not have access to this lead");
+  }
+
+  // Tracked separately from the generic fieldMap below since these three are
+  // the ones the real Audit trail cares about - captured before the UPDATE
+  // runs because the generic dynamic-SET approach here never reads the old
+  // row otherwise (unlike updateUser's manager_id change, which already does
+  // this same before/after read for manager_change_log).
+  const tracksChange = updates.category !== undefined || updates.ownerId !== undefined || updates.status !== undefined;
+  let before: { category: string | null; status: string; owner_id: string | null; full_name: string } | null = null;
+  if (tracksChange) {
+    const beforeResult = await pool.query<{ category: string | null; status: string; owner_id: string | null; full_name: string }>(
+      "SELECT category, status, owner_id, full_name FROM leads WHERE id = $1",
+      [leadId]
+    );
+    before = beforeResult.rows[0] ?? null;
   }
 
   // Only re-checked when the phone number is actually being changed - this
@@ -847,20 +884,92 @@ export async function updateLead(leadId: string, updates: Partial<CreateLeadInpu
     `UPDATE leads SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING *`,
     params
   );
+  const after = result.rows[0];
 
-  return toPublicLead(result.rows[0]);
+  if (before) {
+    const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
+    const actorName = actorResult.rows[0]?.name ?? null;
+
+    if (updates.category !== undefined && updates.category !== before.category) {
+      await recordAuditEvent({
+        entityType: "lead",
+        entityId: leadId,
+        entityLabel: after.full_name,
+        action: "category_changed",
+        summary: `Category changed - ${after.full_name}`,
+        oldValue: before.category,
+        newValue: after.category,
+        actorId: requestingUserId,
+        actorName,
+        ipAddress,
+      });
+    }
+    if (updates.status !== undefined && updates.status !== before.status) {
+      await recordAuditEvent({
+        entityType: "lead",
+        entityId: leadId,
+        entityLabel: after.full_name,
+        action: "status_changed",
+        summary: `Lead stage changed - ${after.full_name}`,
+        oldValue: before.status,
+        newValue: after.status,
+        actorId: requestingUserId,
+        actorName,
+        ipAddress,
+      });
+    }
+    if (updates.ownerId !== undefined && updates.ownerId !== before.owner_id) {
+      const ownerIds = [before.owner_id, updates.ownerId].filter((id): id is string => id !== null);
+      const namesResult = ownerIds.length
+        ? await pool.query<{ id: string; name: string }>("SELECT id, name FROM users WHERE id = ANY($1)", [ownerIds])
+        : { rows: [] as { id: string; name: string }[] };
+      const nameById = new Map(namesResult.rows.map((r) => [r.id, r.name]));
+      await recordAuditEvent({
+        entityType: "lead",
+        entityId: leadId,
+        entityLabel: after.full_name,
+        action: "owner_reassigned",
+        summary: `Salesperson reassigned - ${after.full_name}`,
+        oldValue: before.owner_id ? nameById.get(before.owner_id) ?? "Unassigned" : "Unassigned",
+        newValue: updates.ownerId ? nameById.get(updates.ownerId) ?? "Unassigned" : "Unassigned",
+        actorId: requestingUserId,
+        actorName,
+        ipAddress,
+      });
+    }
+  }
+
+  return toPublicLead(after);
 }
 
-export async function deleteLead(leadId: string, requestingUserId: string): Promise<void> {
+export async function deleteLead(leadId: string, requestingUserId: string, ipAddress?: string | null): Promise<void> {
   const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
   if (!inScope) {
     throw new ApiError(403, "You do not have access to this lead");
   }
 
+  const leadResult = await pool.query<{ full_name: string }>("SELECT full_name FROM leads WHERE id = $1", [leadId]);
+  const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
+
   await pool.query(
     "UPDATE leads SET is_deleted = true, updated_by = $1, updated_at = now() WHERE id = $2",
     [requestingUserId, leadId]
   );
+
+  if (leadResult.rows[0]) {
+    await recordAuditEvent({
+      entityType: "lead",
+      entityId: leadId,
+      entityLabel: leadResult.rows[0].full_name,
+      action: "deleted",
+      summary: `Lead deleted - ${leadResult.rows[0].full_name}`,
+      oldValue: "Active",
+      newValue: "Deleted",
+      actorId: requestingUserId,
+      actorName: actorResult.rows[0]?.name ?? null,
+      ipAddress,
+    });
+  }
 }
 
 export async function shareLead(leadId: string, targetUserId: string, sharedByUserId: string): Promise<void> {

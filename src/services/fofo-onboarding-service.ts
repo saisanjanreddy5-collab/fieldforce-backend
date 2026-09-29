@@ -4,6 +4,7 @@ import { ApiError } from "../utils/ApiError";
 import * as leadService from "./lead-service";
 import * as leadDocumentService from "./lead-document-service";
 import { getNumericSetting } from "./app-settings-service";
+import { recordAuditEvent } from "./audit-log-service";
 
 const SUBTREE_CTE = `
   WITH RECURSIVE subtree AS (
@@ -131,7 +132,13 @@ export async function listApprovalSteps(leadId: string, ownerId: string, expecte
   });
 }
 
-export async function decideStep(stepId: string, decision: "approved" | "rejected", requestingUserId: string, requestingRole: string) {
+export async function decideStep(
+  stepId: string,
+  decision: "approved" | "rejected",
+  requestingUserId: string,
+  requestingRole: string,
+  ipAddress?: string | null
+) {
   const stepResult = await pool.query<ApprovalStepRow>("SELECT * FROM lead_approval_steps WHERE id = $1", [stepId]);
   if (stepResult.rows.length === 0) {
     throw new ApiError(404, "Approval step not found");
@@ -168,6 +175,25 @@ export async function decideStep(stepId: string, decision: "approved" | "rejecte
     "UPDATE lead_approval_steps SET status = $1, decided_by = $2, decided_at = now() WHERE id = $3",
     [decision, requestingUserId, stepId]
   );
+
+  const [leadResult, actorResult] = await Promise.all([
+    pool.query<{ full_name: string; store_name: string | null }>("SELECT full_name, store_name FROM leads WHERE id = $1", [step.lead_id]),
+    pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]),
+  ]);
+  const leadLabel = leadResult.rows[0]?.store_name ?? leadResult.rows[0]?.full_name ?? "Unknown lead";
+  await recordAuditEvent({
+    entityType: "fofo_approval_step",
+    entityId: stepId,
+    entityLabel: leadLabel,
+    action: "approval_decided",
+    summary: `Approval ${decision} - ${leadLabel}`,
+    oldValue: "Pending",
+    newValue: decision === "approved" ? "Approved" : "Rejected",
+    actorId: requestingUserId,
+    actorName: actorResult.rows[0]?.name ?? null,
+    ipAddress,
+  });
+
   return step.lead_id;
 }
 
@@ -236,4 +262,66 @@ export async function listFofoOnboardings(requestingUserId: string) {
   // pg returns DECIMAL columns as strings - convert here, same as
   // lead-service's toPublicLead does for every other money column.
   return result.rows.map((row) => ({ ...row, expectedValue: row.expectedValue === null ? null : Number(row.expectedValue) }));
+}
+
+interface PendingStepRow {
+  step_id: string;
+  lead_id: string;
+  lead_number: number | null;
+  full_name: string;
+  store_name: string | null;
+  store_city: string | null;
+  owner_name: string | null;
+  expected_value: string | null;
+  step_order: number;
+  role_label: string;
+  condition_note: string | null;
+  created_at: string;
+}
+
+// For the Approvals inbox - "pending on me right now" across every FOFO
+// handoff, not scoped to one lead. A step only counts when it's genuinely
+// this approver's current turn: the same two conditions listApprovalSteps's
+// isCurrentTurn and decideStep both already enforce (nothing earlier in the
+// same lead's chain still pending, nothing in that chain already rejected).
+export async function listPendingApprovalStepsForUser(userId: string) {
+  const result = await pool.query<PendingStepRow>(
+    `SELECT s.id AS step_id, s.lead_id, l.lead_number, l.full_name, l.store_name, l.store_city,
+       u.name AS owner_name, l.expected_value, s.step_order, s.role_label, s.condition_note, s.created_at
+     FROM lead_approval_steps s
+     JOIN leads l ON l.id = s.lead_id
+     LEFT JOIN users u ON u.id = l.owner_id
+     WHERE s.approver_user_id = $1 AND s.status = 'pending'
+       AND NOT EXISTS (SELECT 1 FROM lead_approval_steps s2 WHERE s2.lead_id = s.lead_id AND s2.status = 'rejected')
+       AND NOT EXISTS (SELECT 1 FROM lead_approval_steps s2 WHERE s2.lead_id = s.lead_id AND s2.step_order < s.step_order AND s2.status = 'pending')
+     ORDER BY s.created_at ASC`,
+    [userId]
+  );
+  return result.rows.map((row) => ({
+    stepId: row.step_id,
+    leadId: row.lead_id,
+    leadNumber: row.lead_number,
+    fullName: row.full_name,
+    storeName: row.store_name,
+    storeCity: row.store_city,
+    ownerName: row.owner_name,
+    expectedValue: row.expected_value === null ? null : Number(row.expected_value),
+    stepOrder: row.step_order,
+    roleLabel: row.role_label,
+    conditionNote: row.condition_note,
+    createdAt: row.created_at,
+  }));
+}
+
+// For the Approvals inbox's "approved this week" stat - see leave-service's
+// listDecidedThisWeek, same shape (this one has no second-tier distinction,
+// just decided_by directly).
+export async function listDecidedStepsThisWeek(userId: string) {
+  const result = await pool.query<{ created_at: string; decided_at: string }>(
+    `SELECT created_at, decided_at FROM lead_approval_steps
+     WHERE decided_by = $1 AND decided_at IS NOT NULL AND decided_at > now() - interval '7 days'
+       AND status IN ('approved', 'rejected')`,
+    [userId]
+  );
+  return result.rows;
 }
