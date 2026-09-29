@@ -38,7 +38,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const decide = asyncHandler(async (req: Request, res: Response) => {
-  const request = await leaveService.decideLeaveRequest(String(req.params.id), req.user!.id, req.body.decision);
+  const request = await leaveService.decideLeaveRequest(String(req.params.id), req.user!.id, req.body.decision, req.ip);
   sendSuccess(res, request, `Request ${req.body.decision}`);
 });
 

@@ -1414,6 +1414,85 @@ Regards,', 'active', 4)
     `INSERT INTO role_permissions (role, permission) VALUES
       ('manager','app_settings.view')
     ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Settings > QR lead capture. `campaigns` already existed (leads.campaign_id
+    // has referenced it since the original schema) but had no service, controller
+    // or route anywhere - nothing ever wrote a row to it. This is the first real
+    // feature to use it, so it's extended in place with ALTER rather than
+    // creating a second, competing "campaign" concept.
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS code VARCHAR(60)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_campaigns_code ON campaigns(code) WHERE code IS NOT NULL`,
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS placement VARCHAR(255)`,
+    // Fixed per-campaign, not visitor-chosen - a walk-in scanning a decal at
+    // a specific store/booth shouldn't have to pick from FieldForce's
+    // internal category taxonomy (COCO/FOFO/Stockist/...); the admin sets
+    // what this code is for once, at creation.
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS default_category VARCHAR(100)`,
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS default_owner_id UUID REFERENCES users(id) ON DELETE SET NULL`,
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS utm_tags VARCHAR(255)`,
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`,
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS require_consent BOOLEAN NOT NULL DEFAULT true`,
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS capture_scan_location BOOLEAN NOT NULL DEFAULT true`,
+    // Which of the non-baseline capture-form fields are shown to the visitor.
+    // Full name / mobile / city-pincode / business category / DPDP consent are
+    // always shown and required - not part of this config.
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS field_config JSONB NOT NULL DEFAULT '{}'::jsonb`,
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'active'`,
+    `ALTER TABLE campaigns DROP CONSTRAINT IF EXISTS campaigns_status_check`,
+    `ALTER TABLE campaigns ADD CONSTRAINT campaigns_status_check CHECK (status IN ('active','paused'))`,
+    // Real, incremented on every public scan (GET /public/qr/:code) before the
+    // visitor even sees the form - lets "scans" and "leads captured" diverge
+    // instead of always being equal, same as the reference's stat cards.
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS scan_count INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS created_by UUID REFERENCES users(id) ON DELETE SET NULL`,
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','qr_campaigns.view'), ('admin','qr_campaigns.manage')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','qr_campaigns.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Audit & consent. manager_change_log already proved the "immutable log
+    // of one specific field" pattern (real, but narrow - only ever
+    // user.manager_id, and it turned out to have no frontend consumer at
+    // all). This is the first genuinely generic version: one row per real
+    // change to a real field on a real entity, across leads, approvals and
+    // assignment rules. actor_name and entity_label are snapshotted at write
+    // time - deliberately, since a later rename/deactivation of that user or
+    // lead shouldn't rewrite what an old audit row appears to say.
+    `CREATE TABLE IF NOT EXISTS audit_log (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      entity_type VARCHAR(50) NOT NULL,
+      entity_id UUID NOT NULL,
+      entity_label VARCHAR(255),
+      action VARCHAR(50) NOT NULL,
+      summary VARCHAR(500) NOT NULL,
+      old_value VARCHAR(255),
+      new_value VARCHAR(255),
+      actor_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      actor_name VARCHAR(255),
+      ip_address VARCHAR(64),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id)`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','audit_log.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','audit_log.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Team > Dashboard. Gated the same as Leave/Expense's team views -
+    // admin+manager only, never agent, since it shows a manager's team's
+    // leave and activity data.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','team_dashboard.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','team_dashboard.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {

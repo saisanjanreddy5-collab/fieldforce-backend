@@ -45,6 +45,9 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "lead_categories.view", "lead_categories.manage",
     "assignment_rules.view", "assignment_rules.manage",
     "app_settings.view", "app_settings.manage",
+    "qr_campaigns.view", "qr_campaigns.manage",
+    "audit_log.view",
+    "team_dashboard.view",
   ],
   [ROLES.MANAGER]: [
     "users.view",
@@ -77,6 +80,9 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "lead_categories.view",
     "assignment_rules.view",
     "app_settings.view",
+    "qr_campaigns.view",
+    "audit_log.view",
+    "team_dashboard.view",
   ],
   [ROLES.AGENT]: [
     "leads.view", "leads.create", "leads.update", "leads.delete", "leads.share",

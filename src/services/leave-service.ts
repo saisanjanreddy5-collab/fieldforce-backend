@@ -1,5 +1,6 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
+import { recordAuditEvent } from "./audit-log-service";
 
 export const LEAVE_TYPE_KEYS = ["casual", "sick", "earned", "comp_off"] as const;
 export type LeaveTypeKey = (typeof LEAVE_TYPE_KEYS)[number];
@@ -286,6 +287,21 @@ export async function listPendingApprovals(userId: string) {
   return result.rows.map(toPublicLeaveRequest);
 }
 
+// For the Approvals inbox's "approved this week" stat - every decision this
+// user personally made (as either tier) in the last 7 days, real timestamps
+// only, no synthetic data.
+export async function listDecidedThisWeek(userId: string) {
+  const result = await pool.query<{ created_at: string; decided_at: string }>(
+    `SELECT created_at, approver_decided_at AS decided_at FROM leave_requests
+       WHERE approver_id = $1 AND approver_decided_at IS NOT NULL AND approver_decided_at > now() - interval '7 days'
+     UNION ALL
+     SELECT created_at, second_approver_decided_at AS decided_at FROM leave_requests
+       WHERE second_approver_id = $1 AND second_approver_decided_at IS NOT NULL AND second_approver_decided_at > now() - interval '7 days'`,
+    [userId]
+  );
+  return result.rows;
+}
+
 async function getRequestById(id: string): Promise<LeaveRequestRow> {
   const result = await pool.query<LeaveRequestRow>(`${REQUEST_SELECT} WHERE lr.id = $1`, [id]);
   if (result.rows.length === 0) {
@@ -376,7 +392,7 @@ export async function createLeaveRequest(userId: string, input: CreateLeaveReque
   return toPublicLeaveRequest(await getRequestById(result.rows[0].id));
 }
 
-export async function decideLeaveRequest(requestId: string, deciderId: string, decision: "approved" | "rejected") {
+export async function decideLeaveRequest(requestId: string, deciderId: string, decision: "approved" | "rejected", ipAddress?: string | null) {
   const request = await getRequestById(requestId);
   if (request.status !== "pending") {
     throw new ApiError(409, "This request has already been decided");
@@ -401,6 +417,21 @@ export async function decideLeaveRequest(requestId: string, deciderId: string, d
       [decision, decision, requestId]
     );
   }
+
+  const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [deciderId]);
+  const label = `${request.user_name ?? "Unknown"} - ${request.kind.replace("_", " ")} leave`;
+  await recordAuditEvent({
+    entityType: "leave_request",
+    entityId: requestId,
+    entityLabel: label,
+    action: "approval_decided",
+    summary: `Approval ${decision} - ${label}`,
+    oldValue: "Pending",
+    newValue: decision === "approved" ? "Approved" : "Rejected",
+    actorId: deciderId,
+    actorName: actorResult.rows[0]?.name ?? null,
+    ipAddress,
+  });
 
   return toPublicLeaveRequest(await getRequestById(requestId));
 }

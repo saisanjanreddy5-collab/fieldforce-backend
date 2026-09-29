@@ -55,7 +55,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const decide = asyncHandler(async (req: Request, res: Response) => {
-  const claim = await expenseService.decideExpenseClaim(String(req.params.id), req.user!.id, req.body.decision, req.body.note);
+  const claim = await expenseService.decideExpenseClaim(String(req.params.id), req.user!.id, req.body.decision, req.body.note, req.ip);
   sendSuccess(res, claim, `Claim ${req.body.decision}`);
 });
 

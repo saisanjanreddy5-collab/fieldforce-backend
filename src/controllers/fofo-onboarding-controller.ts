@@ -17,7 +17,7 @@ export const getHandoff = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const decideStep = asyncHandler(async (req: Request, res: Response) => {
-  const leadId = await fofoOnboardingService.decideStep(String(req.params.stepId), req.body.decision, req.user!.id, req.user!.role);
+  const leadId = await fofoOnboardingService.decideStep(String(req.params.stepId), req.body.decision, req.user!.id, req.user!.role, req.ip);
   const handoff = await fofoOnboardingService.getHandoff(leadId, req.user!.id);
   sendSuccess(res, handoff, "Approval recorded");
 });
