@@ -1493,6 +1493,31 @@ Regards,', 'active', 4)
     `INSERT INTO role_permissions (role, permission) VALUES
       ('manager','team_dashboard.view')
     ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Website lead capture - a second real source type on the same
+    // `campaigns` table QR lead capture already extended, discriminated by
+    // source_type. A QR code is meant to be public (embedded in a printed
+    // image), so it uses a short, friendly `code`; a website source's
+    // credential instead has to stay secret (it's a bearer token an
+    // external site's server/browser code holds), so it gets its own
+    // longer `api_key` column rather than reusing `code` for both.
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS source_type VARCHAR(20) NOT NULL DEFAULT 'qr'`,
+    `ALTER TABLE campaigns DROP CONSTRAINT IF EXISTS campaigns_source_type_check`,
+    `ALTER TABLE campaigns ADD CONSTRAINT campaigns_source_type_check CHECK (source_type IN ('qr','website'))`,
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS api_key VARCHAR(64)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_campaigns_api_key ON campaigns(api_key) WHERE api_key IS NOT NULL`,
+    // Informational/defense-in-depth only - the real access control is
+    // possession of api_key, same trust model QR's public code already
+    // uses. Browsers enforce CORS from this value; a direct server-to-server
+    // POST could still spoof an Origin header, so this is not relied on as
+    // the sole guard.
+    `ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS allowed_origin VARCHAR(255)`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','website_lead_sources.view'), ('admin','website_lead_sources.manage')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','website_lead_sources.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {

@@ -95,6 +95,7 @@ interface LeadRow {
   updated_at: string;
   owner_name: string | null;
   has_overdue_activity?: boolean;
+  next_activity_due_at?: string | null;
   consent_pending?: boolean;
 }
 
@@ -286,6 +287,7 @@ function toPublicLead(row: LeadRow) {
     updatedAt: row.updated_at,
     ownerName: row.owner_name,
     hasOverdueActivity: row.has_overdue_activity ?? undefined,
+    nextActivityDueAt: row.next_activity_due_at ?? null,
     consentPending: row.consent_pending ?? undefined,
   };
 }
@@ -692,6 +694,10 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
          SELECT 1 FROM activities a
          WHERE a.lead_id = l.id AND a.due_date < now() AND a.status <> 'completed'
        ) AS has_overdue_activity,
+       (
+         SELECT MIN(a.due_date) FROM activities a
+         WHERE a.lead_id = l.id AND a.due_date IS NOT NULL AND a.status <> 'completed'
+       ) AS next_activity_due_at,
        NOT EXISTS (
          SELECT 1 FROM consents c WHERE c.lead_id = l.id AND c.captured = true
        ) AS consent_pending
