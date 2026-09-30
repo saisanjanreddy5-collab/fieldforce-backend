@@ -41,6 +41,8 @@ import publicQrRoutes from "./sub-routes/public-qr-routes";
 import approvalsInboxRoutes from "./sub-routes/approvals-inbox-routes";
 import auditConsentRoutes from "./sub-routes/audit-consent-routes";
 import teamDashboardRoutes from "./sub-routes/team-dashboard-routes";
+import websiteLeadSourceRoutes from "./sub-routes/website-lead-source-routes";
+import publicWebsiteLeadRoutes from "./sub-routes/public-website-lead-routes";
 
 const router = Router();
 
@@ -86,6 +88,8 @@ router.use("/public/qr", publicQrRoutes);
 router.use("/approvals", approvalsInboxRoutes);
 router.use("/audit-consent", auditConsentRoutes);
 router.use("/team-dashboard", teamDashboardRoutes);
+router.use("/website-lead-sources", websiteLeadSourceRoutes);
+router.use("/public/website-leads", publicWebsiteLeadRoutes);
 
 router.get("/health", (_req, res) => {
   res.json({ success: true, message: "FieldForce API is running" });
