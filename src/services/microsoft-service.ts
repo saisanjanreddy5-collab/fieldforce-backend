@@ -1,10 +1,48 @@
 import jwt from "jsonwebtoken";
+import multer from "multer";
 import { pool } from "../config/db";
 import { env } from "../config/env";
 import { ApiError } from "../utils/ApiError";
 import { GRAPH_BASE_URL, MS_SCOPES, isMicrosoftConfigured, msAuthorizeUrl, msTokenUrl } from "../config/microsoft";
 import { createActivityForLead } from "./activity-service";
 import { getLeadById } from "./lead-service";
+
+// Graph's sendMail action accepts attachments inline, base64-encoded, in
+// the same JSON payload as the message - no separate upload/storage service
+// needed. Kept in memory (never written to disk) since the file only needs
+// to survive the one request before being forwarded to Graph and discarded.
+// 3MB is Graph's practical ceiling for this simple inline form; anything
+// larger requires a chunked upload-session API this integration doesn't
+// implement, so it's rejected here with a clear message instead of failing
+// obscurely against Graph.
+const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+]);
+
+export const emailAttachmentUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 3 * 1024 * 1024, files: 5 },
+  fileFilter: (_req, file, cb) => {
+    if (!ALLOWED_ATTACHMENT_MIME_TYPES.has(file.mimetype)) {
+      cb(new ApiError(422, "That file type isn't supported for email attachments"));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+export interface EmailAttachmentInput {
+  filename: string;
+  contentType: string;
+  content: Buffer;
+}
 
 interface ConnectionRow {
   user_id: string;
@@ -252,7 +290,8 @@ export async function sendMailForLead(
   leadId: string,
   subject: string,
   body: string,
-  requestingUserId: string
+  requestingUserId: string,
+  attachments: EmailAttachmentInput[] = []
 ): Promise<void> {
   const lead = await getLeadById(leadId, requestingUserId);
   if (!lead.email) {
@@ -269,6 +308,14 @@ export async function sendMailForLead(
         subject,
         body: { contentType: "Text", content: body },
         toRecipients: [{ emailAddress: { address: lead.email } }],
+        ...(attachments.length > 0 && {
+          attachments: attachments.map((a) => ({
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            name: a.filename,
+            contentType: a.contentType,
+            contentBytes: a.content.toString("base64"),
+          })),
+        }),
       },
       saveToSentItems: true,
     }),

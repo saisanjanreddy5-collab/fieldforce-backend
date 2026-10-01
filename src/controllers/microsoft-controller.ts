@@ -58,7 +58,13 @@ export const disconnectUser = asyncHandler(async (req: Request, res: Response) =
 
 export const sendEmailForLead = asyncHandler(async (req: Request, res: Response) => {
   const { subject, body } = req.body;
-  await microsoftService.sendMailForLead(String(req.params.id), subject, body, req.user!.id);
+  const files = (req.files as Express.Multer.File[] | undefined) ?? [];
+  const attachments = files.map((file) => ({
+    filename: file.originalname,
+    contentType: file.mimetype,
+    content: file.buffer,
+  }));
+  await microsoftService.sendMailForLead(String(req.params.id), subject, body, req.user!.id, attachments);
   sendSuccess(res, null, "Email sent");
 });
 
