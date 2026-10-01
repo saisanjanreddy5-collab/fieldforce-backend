@@ -3,6 +3,7 @@ import * as leadController from "../../controllers/lead-controller";
 import * as opportunityController from "../../controllers/opportunity-controller";
 import * as activityController from "../../controllers/activity-controller";
 import * as microsoftController from "../../controllers/microsoft-controller";
+import { emailAttachmentUpload } from "../../services/microsoft-service";
 import * as smartfloController from "../../controllers/smartflo-controller";
 import * as whatsappController from "../../controllers/whatsapp-controller";
 import * as quoteController from "../../controllers/quote-controller";
@@ -46,7 +47,12 @@ router.get("/:id/consent", requirePermission("leads.view"), leadController.getCo
 
 router.get("/:id/quotes", requirePermission("quotes.view"), quoteController.listForLead);
 
-router.post("/:id/microsoft/email", validateBody(sendLeadEmailSchema), microsoftController.sendEmailForLead);
+router.post(
+  "/:id/microsoft/email",
+  emailAttachmentUpload.array("attachments", 5),
+  validateBody(sendLeadEmailSchema),
+  microsoftController.sendEmailForLead
+);
 router.post(
   "/:id/microsoft/teams-meeting",
   validateBody(createTeamsMeetingSchema),
