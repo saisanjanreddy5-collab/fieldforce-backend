@@ -1518,6 +1518,50 @@ Regards,', 'active', 4)
     `INSERT INTO role_permissions (role, permission) VALUES
       ('manager','website_lead_sources.view')
     ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Quotes module. A quote is never edited in place - every save inserts
+    // a new quote_versions row (line_items as a JSONB snapshot, same
+    // established pattern as audit_log's old_value/new_value) so "what did
+    // we actually quote this customer on date X" is always answerable,
+    // never silently overwritten. quotes.current_version is a plain pointer
+    // kept in sync by quote-service, not a generated column, since each
+    // version's totals are computed and validated server-side at write time
+    // rather than re-derived by a trigger.
+    `CREATE SEQUENCE IF NOT EXISTS quote_number_seq START 1`,
+    `CREATE TABLE IF NOT EXISTS quotes (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      quote_number INTEGER NOT NULL DEFAULT nextval('quote_number_seq'),
+      lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      opportunity_id UUID NOT NULL REFERENCES opportunities(id) ON DELETE CASCADE,
+      status VARCHAR(20) NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','sent','accepted','rejected')),
+      current_version INTEGER NOT NULL DEFAULT 1,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_quotes_quote_number ON quotes(quote_number)`,
+    `CREATE INDEX IF NOT EXISTS idx_quotes_lead_id ON quotes(lead_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_quotes_opportunity_id ON quotes(opportunity_id)`,
+    `CREATE TABLE IF NOT EXISTS quote_versions (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      quote_id UUID NOT NULL REFERENCES quotes(id) ON DELETE CASCADE,
+      version_number INTEGER NOT NULL,
+      line_items JSONB NOT NULL,
+      subtotal DECIMAL(14,2) NOT NULL,
+      tax_total DECIMAL(14,2) NOT NULL,
+      grand_total DECIMAL(14,2) NOT NULL,
+      notes TEXT,
+      change_summary TEXT,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (quote_id, version_number)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_quote_versions_quote_id ON quote_versions(quote_id)`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','quotes.view'), ('admin','quotes.create'), ('admin','quotes.update'),
+      ('manager','quotes.view'), ('manager','quotes.create'), ('manager','quotes.update'),
+      ('agent','quotes.view'), ('agent','quotes.create'), ('agent','quotes.update')
+    ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {

@@ -5,6 +5,7 @@ import * as activityController from "../../controllers/activity-controller";
 import * as microsoftController from "../../controllers/microsoft-controller";
 import * as smartfloController from "../../controllers/smartflo-controller";
 import * as whatsappController from "../../controllers/whatsapp-controller";
+import * as quoteController from "../../controllers/quote-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
@@ -42,6 +43,8 @@ router.post(
 );
 
 router.get("/:id/consent", requirePermission("leads.view"), leadController.getConsent);
+
+router.get("/:id/quotes", requirePermission("quotes.view"), quoteController.listForLead);
 
 router.post("/:id/microsoft/email", validateBody(sendLeadEmailSchema), microsoftController.sendEmailForLead);
 router.post(

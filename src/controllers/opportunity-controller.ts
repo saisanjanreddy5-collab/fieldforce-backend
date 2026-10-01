@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { asyncHandler } from "../utils/asyncHandler";
 import { sendSuccess } from "../utils/response";
 import * as opportunityService from "../services/opportunity-service";
+import * as teamRollupService from "../services/team-rollup-service";
 
 export const convert = asyncHandler(async (req: Request, res: Response) => {
   const opportunity = await opportunityService.convertLeadToOpportunity(
@@ -47,4 +48,9 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   await opportunityService.deleteOpportunity(String(req.params.id), req.user!.id);
   sendSuccess(res, null, "Opportunity deleted");
+});
+
+export const teamRollup = asyncHandler(async (req: Request, res: Response) => {
+  const groups = await teamRollupService.getTeamRollup(req.user!.id, req.user!.role);
+  sendSuccess(res, groups);
 });
