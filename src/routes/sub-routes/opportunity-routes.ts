@@ -1,6 +1,7 @@
 import { Router } from "express";
 import * as opportunityController from "../../controllers/opportunity-controller";
 import * as activityController from "../../controllers/activity-controller";
+import * as quoteController from "../../controllers/quote-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
@@ -12,6 +13,7 @@ const router = Router();
 router.use(requireAuth);
 
 router.get("/", requirePermission("opportunities.view"), validateQuery(listOpportunitiesQuerySchema), opportunityController.list);
+router.get("/team-rollup", requirePermission("opportunities.view"), opportunityController.teamRollup);
 router.get("/:id", requirePermission("opportunities.view"), opportunityController.getById);
 router.patch("/:id", requirePermission("opportunities.update"), validateBody(updateOpportunitySchema), opportunityController.update);
 router.delete("/:id", requirePermission("opportunities.delete"), opportunityController.remove);
@@ -23,5 +25,7 @@ router.post(
   validateBody(createActivitySchema),
   activityController.createForOpportunity
 );
+
+router.get("/:id/quotes", requirePermission("quotes.view"), quoteController.listForOpportunity);
 
 export default router;

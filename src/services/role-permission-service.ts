@@ -49,6 +49,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "audit_log.view",
     "team_dashboard.view",
     "website_lead_sources.view", "website_lead_sources.manage",
+    "quotes.view", "quotes.create", "quotes.update",
   ],
   [ROLES.MANAGER]: [
     "users.view",
@@ -85,6 +86,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "audit_log.view",
     "team_dashboard.view",
     "website_lead_sources.view",
+    "quotes.view", "quotes.create", "quotes.update",
   ],
   [ROLES.AGENT]: [
     "leads.view", "leads.create", "leads.update", "leads.delete", "leads.share",
@@ -105,6 +107,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "message_templates.view",
     "pipeline_stages.view",
     "lead_categories.view",
+    "quotes.view", "quotes.create", "quotes.update",
   ],
 };
 
