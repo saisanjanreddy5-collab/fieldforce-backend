@@ -32,8 +32,9 @@ const envSchema = z.object({
   // Shared secret Smartflo sends back as a custom header on its webhook
   // (configured in their dashboard under API Connect > Webhook) so the
   // public /api/integrations/smartflo/webhook route can tell a genuine
-  // Smartflo callback apart from a random internet request. Optional so the
-  // webhook still works before this is set up on both sides.
+  // Smartflo callback apart from a random internet request. Optional only so
+  // the app can boot before this is configured - the webhook itself fails
+  // closed (rejects everything) while it's unset, it does not run unguarded.
   SMARTFLO_WEBHOOK_SECRET: z.string().optional(),
 
   // WhatsApp Business messaging via K3 Digital Media's Pinbot.ai platform -
@@ -47,8 +48,8 @@ const envSchema = z.object({
   // Shared secret we expect back as a custom header on K3's webhook
   // (registered via their /v2/setwebhooks endpoint) so the public
   // /api/integrations/whatsapp/webhook route can tell a genuine callback
-  // apart from a random internet request - same pattern as
-  // SMARTFLO_WEBHOOK_SECRET.
+  // apart from a random internet request - same pattern, and same
+  // fail-closed-when-unset behavior, as SMARTFLO_WEBHOOK_SECRET.
   WHATSAPP_WEBHOOK_SECRET: z.string().optional(),
 });
 

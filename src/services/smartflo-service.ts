@@ -82,8 +82,13 @@ export async function initiateCallForLead(leadId: string, requestingUserId: stri
   return { refId: body.ref_id ?? "" };
 }
 
+// Fails closed, not open, when the secret isn't configured - this route has
+// no requireAuth (Smartflo's servers call it directly, see smartflo-routes.ts),
+// so the shared secret is the only thing standing between it and a fully
+// anonymous POST that could inject fabricated call events. An unset secret
+// means the integration isn't set up yet, not that it should be unguarded.
 export function isWebhookSecretValid(providedSecret: string | undefined): boolean {
-  if (!env.SMARTFLO_WEBHOOK_SECRET) return true;
+  if (!env.SMARTFLO_WEBHOOK_SECRET) return false;
   return providedSecret === env.SMARTFLO_WEBHOOK_SECRET;
 }
 

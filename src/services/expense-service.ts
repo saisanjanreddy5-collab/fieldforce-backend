@@ -353,17 +353,27 @@ export async function decideExpenseClaim(
     throw new ApiError(403, "You're not the approver for this claim");
   }
 
+  // The guard on each UPDATE's WHERE clause (not just the pre-read above)
+  // is what actually prevents a double-submit or two concurrent decisions
+  // from both applying - the pre-read alone leaves a window where two
+  // requests can both see the claim as still decidable.
+  let decided;
   if (isFirstApprover) {
     const finalStatus = decision === "rejected" ? "rejected" : claim.second_approver_id ? "pending" : "approved";
-    await pool.query(
-      `UPDATE expense_claims SET approver_decision = $1, approver_decided_at = now(), status = $2, decision_note = COALESCE($3, decision_note), updated_at = now() WHERE id = $4`,
+    decided = await pool.query(
+      `UPDATE expense_claims SET approver_decision = $1, approver_decided_at = now(), status = $2, decision_note = COALESCE($3, decision_note), updated_at = now()
+       WHERE id = $4 AND approver_decision IS NULL`,
       [decision, finalStatus, note ?? null, claimId]
     );
   } else {
-    await pool.query(
-      `UPDATE expense_claims SET second_approver_decision = $1, second_approver_decided_at = now(), status = $2, decision_note = COALESCE($3, decision_note), updated_at = now() WHERE id = $4`,
+    decided = await pool.query(
+      `UPDATE expense_claims SET second_approver_decision = $1, second_approver_decided_at = now(), status = $2, decision_note = COALESCE($3, decision_note), updated_at = now()
+       WHERE id = $4 AND second_approver_decision IS NULL`,
       [decision, decision, note ?? null, claimId]
     );
+  }
+  if (decided.rowCount === 0) {
+    throw new ApiError(409, "This claim has already been decided");
   }
 
   const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [deciderId]);
@@ -389,10 +399,13 @@ export async function markClaimPaid(claimId: string, payerId: string) {
   if (claim.status !== "approved") {
     throw new ApiError(409, "Only an approved, unpaid claim can be marked paid");
   }
-  await pool.query(`UPDATE expense_claims SET status = 'paid', paid_by = $1, paid_at = now(), updated_at = now() WHERE id = $2`, [
-    payerId,
-    claimId,
-  ]);
+  const paid = await pool.query(
+    `UPDATE expense_claims SET status = 'paid', paid_by = $1, paid_at = now(), updated_at = now() WHERE id = $2 AND status = 'approved'`,
+    [payerId, claimId]
+  );
+  if (paid.rowCount === 0) {
+    throw new ApiError(409, "Only an approved, unpaid claim can be marked paid");
+  }
   return toPublicExpenseClaim(await getClaimById(claimId));
 }
 

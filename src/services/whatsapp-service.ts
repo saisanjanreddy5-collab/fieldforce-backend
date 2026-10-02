@@ -2,6 +2,7 @@ import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { WHATSAPP_BASE_URL, isWhatsappConfigured } from "../config/whatsapp";
 import { env } from "../config/env";
+import { createActivityForLead } from "./activity-service";
 import { getLeadById, findLeadIdByPhone } from "./lead-service";
 
 interface SendMessageApiResponse {
@@ -90,6 +91,12 @@ export async function sendTextMessage(leadId: string, body: string, requestingUs
     [leadId, body, waMessageId, requestingUserId]
   );
 
+  // Same "log a real activity" convention as email (microsoft-service.ts)
+  // and calls (smartflo-service.ts) - without this, a WhatsApp send was
+  // invisible on the lead's Activity timeline and uncounted in any
+  // activity-based stat, even though the message itself was really sent.
+  await createActivityForLead(leadId, { type: "whatsapp", subject: "WhatsApp message", status: "completed", details: { body } }, requestingUserId);
+
   return toPublicMessage(result.rows[0]);
 }
 
@@ -105,8 +112,14 @@ export async function listMessagesForLead(leadId: string, requestingUserId: stri
   return result.rows.map(toPublicMessage);
 }
 
+// Fails closed, not open, when the secret isn't configured - this route has
+// no requireAuth (K3/Pinbot's servers call it directly, see
+// whatsapp-routes.ts), so the shared secret is the only thing standing
+// between it and a fully anonymous POST that could inject fabricated
+// messages tied to arbitrary leads. An unset secret means the integration
+// isn't set up yet, not that it should be unguarded.
 export function isWebhookSecretValid(providedSecret: string | undefined): boolean {
-  if (!env.WHATSAPP_WEBHOOK_SECRET) return true;
+  if (!env.WHATSAPP_WEBHOOK_SECRET) return false;
   return providedSecret === env.WHATSAPP_WEBHOOK_SECRET;
 }
 

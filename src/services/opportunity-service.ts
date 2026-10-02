@@ -150,32 +150,51 @@ export async function convertLeadToOpportunity(leadId: string, input: Opportunit
     throw new ApiError(403, "You do not have access to this lead");
   }
 
-  // A brand-new opportunity can start life already in 'won' (e.g. "+Add"
-  // clicked directly in the Won column) - that's a transition into won too,
-  // same as an update, so it gets the same won_at stamp.
-  const result = await pool.query<OpportunityRow>(
-    `INSERT INTO opportunities (lead_id, name, value, stage, close_date, probability, contact_name, notes, created_by, updated_by, won_at)
-     VALUES ($1, $2, $3, COALESCE($4, 'new'), $5, $6, $7, $8, $9, $9, CASE WHEN $4 = 'won' THEN now() ELSE NULL END)
-     RETURNING *`,
-    [
-      leadId,
-      input.name ?? null,
-      input.value ?? null,
-      input.stage ?? null,
-      input.closeDate ?? null,
-      input.probability ?? null,
-      input.contactName ?? null,
-      input.notes ?? null,
-      requestingUserId,
-    ]
-  );
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
 
-  await pool.query(
-    "UPDATE leads SET status = 'converted', updated_by = $1, updated_at = now() WHERE id = $2",
-    [requestingUserId, leadId]
-  );
+    // Guarded by "AND status <> 'converted'" rather than a plain UPDATE -
+    // this both locks the lead row for the duration of the transaction (so
+    // a concurrent conversion attempt blocks here instead of racing) and
+    // rejects a double-submit/retry that would otherwise create a second
+    // orphan opportunity for an already-converted lead.
+    const leadUpdate = await client.query(
+      "UPDATE leads SET status = 'converted', updated_by = $1, updated_at = now() WHERE id = $2 AND status <> 'converted' RETURNING id",
+      [requestingUserId, leadId]
+    );
+    if (leadUpdate.rowCount === 0) {
+      throw new ApiError(409, "This lead has already been converted");
+    }
 
-  return toPublicOpportunity(result.rows[0]);
+    // A brand-new opportunity can start life already in 'won' (e.g. "+Add"
+    // clicked directly in the Won column) - that's a transition into won too,
+    // same as an update, so it gets the same won_at stamp.
+    const result = await client.query<OpportunityRow>(
+      `INSERT INTO opportunities (lead_id, name, value, stage, close_date, probability, contact_name, notes, created_by, updated_by, won_at)
+       VALUES ($1, $2, $3, COALESCE($4, 'new'), $5, $6, $7, $8, $9, $9, CASE WHEN $4 = 'won' THEN now() ELSE NULL END)
+       RETURNING *`,
+      [
+        leadId,
+        input.name ?? null,
+        input.value ?? null,
+        input.stage ?? null,
+        input.closeDate ?? null,
+        input.probability ?? null,
+        input.contactName ?? null,
+        input.notes ?? null,
+        requestingUserId,
+      ]
+    );
+
+    await client.query("COMMIT");
+    return toPublicOpportunity(result.rows[0]);
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function listOpportunitiesForLead(leadId: string, requestingUserId: string) {
