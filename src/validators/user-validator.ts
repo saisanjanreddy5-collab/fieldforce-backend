@@ -10,6 +10,7 @@ export const updateOwnProfileSchema = z.object({
 });
 
 export const updateUserSchema = z.object({
+  name: z.string().min(1, "Name is required").optional(),
   designation: z.string().optional(),
   managerId: z.string().uuid().or(z.literal("")).optional(),
   dottedLineManagerId: z.string().uuid().or(z.literal("")).optional(),

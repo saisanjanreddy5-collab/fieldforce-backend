@@ -4,6 +4,7 @@ import { getLevelSecurityTier } from "./level-service";
 import { Role, ROLES } from "../utils/roles";
 
 export interface UpdateUserInput {
+  name?: string;
   designation?: string;
   managerId?: string;
   dottedLineManagerId?: string;
@@ -139,6 +140,7 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
 
   const normalize = (value: string | undefined) => (value === "" ? null : value);
   const fieldMap: Record<string, unknown> = {
+    name: updates.name,
     designation: normalize(updates.designation),
     manager_id: normalize(updates.managerId),
     dotted_line_manager_id: normalize(updates.dottedLineManagerId),

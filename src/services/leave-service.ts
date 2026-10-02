@@ -405,17 +405,28 @@ export async function decideLeaveRequest(requestId: string, deciderId: string, d
     throw new ApiError(403, "You're not the approver for this request");
   }
 
+  // The WHERE guard (not just the pre-read above) is what actually closes
+  // the race against a concurrent cancelLeaveRequest or a double-submitted
+  // decision - whichever write reaches Postgres first locks the row, and
+  // the loser's guarded UPDATE affects zero rows instead of silently
+  // overwriting the winner's outcome.
+  let decided;
   if (isFirstApprover) {
     const finalStatus = decision === "rejected" ? "rejected" : request.second_approver_id ? "pending" : "approved";
-    await pool.query(
-      `UPDATE leave_requests SET approver_decision = $1, approver_decided_at = now(), status = $2, updated_at = now() WHERE id = $3`,
+    decided = await pool.query(
+      `UPDATE leave_requests SET approver_decision = $1, approver_decided_at = now(), status = $2, updated_at = now()
+       WHERE id = $3 AND approver_decision IS NULL`,
       [decision, finalStatus, requestId]
     );
   } else {
-    await pool.query(
-      `UPDATE leave_requests SET second_approver_decision = $1, second_approver_decided_at = now(), status = $2, updated_at = now() WHERE id = $3`,
+    decided = await pool.query(
+      `UPDATE leave_requests SET second_approver_decision = $1, second_approver_decided_at = now(), status = $2, updated_at = now()
+       WHERE id = $3 AND second_approver_decision IS NULL`,
       [decision, decision, requestId]
     );
+  }
+  if (decided.rowCount === 0) {
+    throw new ApiError(409, "This request has already been decided");
   }
 
   const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [deciderId]);
@@ -444,7 +455,13 @@ export async function cancelLeaveRequest(requestId: string, userId: string) {
   if (request.status !== "pending") {
     throw new ApiError(409, "Only a pending request can be cancelled");
   }
-  await pool.query(`UPDATE leave_requests SET status = 'cancelled', updated_at = now() WHERE id = $1`, [requestId]);
+  const cancelled = await pool.query(
+    `UPDATE leave_requests SET status = 'cancelled', updated_at = now() WHERE id = $1 AND status = 'pending'`,
+    [requestId]
+  );
+  if (cancelled.rowCount === 0) {
+    throw new ApiError(409, "Only a pending request can be cancelled");
+  }
   return toPublicLeaveRequest(await getRequestById(requestId));
 }
 

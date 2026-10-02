@@ -171,10 +171,16 @@ export async function decideStep(
     throw new ApiError(422, "Earlier approval steps must be resolved first");
   }
 
-  await pool.query(
-    "UPDATE lead_approval_steps SET status = $1, decided_by = $2, decided_at = now() WHERE id = $3",
+  // Guarded by "AND status = 'pending'" (not just the pre-read above) so a
+  // concurrent/duplicate decision on the same step can't silently overwrite
+  // this one - the loser's UPDATE affects zero rows and surfaces a conflict.
+  const decided = await pool.query(
+    "UPDATE lead_approval_steps SET status = $1, decided_by = $2, decided_at = now() WHERE id = $3 AND status = 'pending'",
     [decision, requestingUserId, stepId]
   );
+  if (decided.rowCount === 0) {
+    throw new ApiError(422, "This step has already been decided");
+  }
 
   const [leadResult, actorResult] = await Promise.all([
     pool.query<{ full_name: string; store_name: string | null }>("SELECT full_name, store_name FROM leads WHERE id = $1", [step.lead_id]),
