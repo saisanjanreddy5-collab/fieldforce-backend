@@ -10,7 +10,7 @@ import * as quoteController from "../../controllers/quote-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
-import { createLeadSchema, listLeadsQuerySchema, shareLeadSchema, updateLeadSchema } from "../../validators/lead-validator";
+import { bulkImportLeadsSchema, createLeadSchema, listLeadsQuerySchema, shareLeadSchema, updateLeadSchema } from "../../validators/lead-validator";
 import { convertLeadSchema } from "../../validators/opportunity-validator";
 import { createActivitySchema } from "../../validators/activity-validator";
 import { createTeamsMeetingSchema, sendLeadEmailSchema } from "../../validators/microsoft-validator";
@@ -22,6 +22,7 @@ router.use(requireAuth);
 
 router.get("/", requirePermission("leads.view"), validateQuery(listLeadsQuerySchema), leadController.list);
 router.post("/", requirePermission("leads.create"), validateBody(createLeadSchema), leadController.create);
+router.post("/bulk-import", requirePermission("leads.create"), validateBody(bulkImportLeadsSchema), leadController.bulkImport);
 router.get("/territories", requirePermission("leads.view"), leadController.listTerritories);
 router.get("/quick-filter-counts", requirePermission("leads.view"), leadController.quickFilterCounts);
 router.get("/:id", requirePermission("leads.view"), leadController.getById);
@@ -49,17 +50,19 @@ router.get("/:id/quotes", requirePermission("quotes.view"), quoteController.list
 
 router.post(
   "/:id/microsoft/email",
+  requirePermission("activities.create"),
   emailAttachmentUpload.array("attachments", 5),
   validateBody(sendLeadEmailSchema),
   microsoftController.sendEmailForLead
 );
 router.post(
   "/:id/microsoft/teams-meeting",
+  requirePermission("activities.create"),
   validateBody(createTeamsMeetingSchema),
   microsoftController.createMeetingForLead
 );
 
-router.post("/:id/call", smartfloController.callLead);
+router.post("/:id/call", requirePermission("activities.create"), smartfloController.callLead);
 
 router.get("/:id/whatsapp-messages", requirePermission("whatsapp.view"), whatsappController.listForLead);
 router.post(

@@ -1,6 +1,7 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { recordAuditEvent } from "./audit-log-service";
+import { bulkImportRowSchema } from "../validators/lead-validator";
 
 // Rule A (hierarchy-based visibility): a lead is visible to its owner and to
 // everyone directly above the owner in the reporting chain. Walking UP from a
@@ -592,6 +593,74 @@ export async function createLead(input: CreateLeadInput, creatorId: string, ipAd
   }
 
   return toPublicLead(lead);
+}
+
+export interface BulkImportResult {
+  created: number;
+  skipped: { row: number; reason: string }[];
+  errors: { row: number; message: string }[];
+}
+
+const MAX_BULK_IMPORT_ROWS = 5000;
+
+// Reuses createLead for every row rather than re-implementing
+// auto-assignment, the insert, or the duplicate-phone check - one call per
+// row keeps each row's own write atomic (createLead's single INSERT) while
+// letting one bad row get reported and skipped without aborting the rest
+// of the batch. The only addition here is a within-this-file duplicate
+// guard (same normalizePhone used everywhere else), since two rows in the
+// same spreadsheet can share a phone number in a way createLead's
+// one-row-at-a-time duplicate check can't see on its own.
+export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId: string): Promise<BulkImportResult> {
+  if (rows.length > MAX_BULK_IMPORT_ROWS) {
+    throw new ApiError(422, `This file has ${rows.length} rows - the max is ${MAX_BULK_IMPORT_ROWS} per import`);
+  }
+
+  const result: BulkImportResult = { created: 0, skipped: [], errors: [] };
+  const seenPhones = new Set<string>();
+
+  for (let i = 0; i < rows.length; i++) {
+    const rowNumber = i + 2; // +1 for 1-indexing, +1 for the header row the frontend stripped off
+
+    // Checked separately, ahead of the schema - a missing fullName is by
+    // far the most common bad row (an empty cell under the mapped column),
+    // and zod's default "expected string, received undefined" for a wholly
+    // absent key reads like an internal error, not an actionable message.
+    const fullName = rows[i].fullName;
+    if (typeof fullName !== "string" || !fullName.trim()) {
+      result.errors.push({ row: rowNumber, message: "Full name is required" });
+      continue;
+    }
+
+    const parsed = bulkImportRowSchema.safeParse(rows[i]);
+    if (!parsed.success) {
+      result.errors.push({ row: rowNumber, message: parsed.error.issues[0]?.message ?? "Invalid row" });
+      continue;
+    }
+    const row = parsed.data;
+
+    try {
+      if (row.phone) {
+        const normalized = normalizePhone(row.phone);
+        if (normalized.length === 10 && seenPhones.has(normalized)) {
+          result.skipped.push({ row: rowNumber, reason: "Duplicate phone number within this file" });
+          continue;
+        }
+        if (normalized.length === 10) seenPhones.add(normalized);
+      }
+
+      await createLead(row, creatorId);
+      result.created++;
+    } catch (err) {
+      if (err instanceof ApiError && err.statusCode === 409) {
+        result.skipped.push({ row: rowNumber, reason: err.message });
+      } else {
+        result.errors.push({ row: rowNumber, message: err instanceof ApiError ? err.message : "Failed to import this row" });
+      }
+    }
+  }
+
+  return result;
 }
 
 export async function getLeadById(leadId: string, requestingUserId: string) {

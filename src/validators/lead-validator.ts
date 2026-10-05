@@ -92,6 +92,40 @@ export const createLeadSchema = z.object({
 
 export const updateLeadSchema = createLeadSchema.partial();
 
+// Deliberately separate from createLeadSchema, not a subset of it - that
+// one uses z.string().email() etc. for a human typing one lead directly,
+// where rejecting a bad value immediately is the right UX. Bulk-imported
+// spreadsheet data is messier and the whole point of importing 500 rows is
+// that one bad email shouldn't block the other 499 - so this is lenient on
+// purpose, and only ever safeParse'd per-row inside bulkImportLeads, never
+// parsed as a whole array through validateBody (which fails the entire
+// request on the first invalid element, defeating per-row reporting).
+export const bulkImportRowSchema = z.object({
+  fullName: z.string().min(1, "Full name is required"),
+  contactName: z.string().optional(),
+  phone: z.string().optional(),
+  altPhone: z.string().optional(),
+  email: z.string().optional(),
+  companyName: z.string().optional(),
+  category: z.string().optional(),
+  territory: z.string().optional(),
+  source: z.string().optional(),
+  expectedValue: z.coerce.number().optional(),
+  website: z.string().optional(),
+  internalNotes: z.string().optional(),
+});
+
+// The only schema actually passed to validateBody for this route - just
+// structural (an array of plain row-objects, capped), so one malformed row
+// can't 400 the whole request before bulkImportLeads gets a chance to
+// report it individually.
+export const bulkImportLeadsSchema = z.object({
+  rows: z
+    .array(z.record(z.string(), z.unknown()))
+    .min(1, "No rows to import")
+    .max(5000, "Too many rows - max 5,000 per import"),
+});
+
 export const shareLeadSchema = z.object({
   userId: uuid,
 });

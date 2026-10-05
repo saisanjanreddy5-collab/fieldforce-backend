@@ -1,4 +1,5 @@
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { pool } from "../config/db";
 import { env } from "../config/env";
@@ -116,10 +117,23 @@ function signAccessToken(user: UserRow): string {
   } as jwt.SignOptions);
 }
 
-function signRefreshToken(user: UserRow): string {
-  return jwt.sign({ id: user.id }, env.JWT_REFRESH_SECRET, {
+// The token's `jti` doubles as its row id in refresh_tokens - the one
+// piece of server-side state a stateless JWT needs to become revocable.
+// Generated here (not left to Postgres's default) so it's known before the
+// token is signed, and the real DB row and the JWT's embedded claim always
+// agree without a second round-trip to patch one from the other.
+async function signRefreshToken(user: UserRow): Promise<string> {
+  const tokenId = crypto.randomUUID();
+  const token = jwt.sign({ id: user.id, jti: tokenId }, env.JWT_REFRESH_SECRET, {
     expiresIn: env.JWT_REFRESH_EXPIRES_IN,
   } as jwt.SignOptions);
+  const { exp } = jwt.decode(token) as { exp: number };
+  await pool.query("INSERT INTO refresh_tokens (id, user_id, expires_at) VALUES ($1, $2, $3)", [
+    tokenId,
+    user.id,
+    new Date(exp * 1000).toISOString(),
+  ]);
+  return token;
 }
 
 export async function registerUser(input: RegisterInput) {
@@ -208,16 +222,31 @@ export async function loginUser(email: string, password: string) {
   return {
     user: await toPublicUserWithPermissions(user),
     accessToken: signAccessToken(user),
-    refreshToken: signRefreshToken(user),
+    refreshToken: await signRefreshToken(user),
   };
 }
 
 export async function refreshAccessToken(refreshToken: string) {
-  let payload: { id: string };
+  let payload: { id: string; jti?: string };
   try {
-    payload = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET) as { id: string };
+    payload = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET) as { id: string; jti?: string };
   } catch {
     throw new ApiError(401, "Invalid or expired refresh token");
+  }
+
+  // Older, already-issued tokens signed before this field existed have no
+  // jti - left to fall back to the pre-existing signature+expiry+is_active
+  // checks alone so they keep working until they naturally expire, rather
+  // than mass-logging-out everyone the moment this deploys. Every token
+  // signed from here on has one, and is checked against revocation.
+  if (payload.jti) {
+    const tokenRow = await pool.query<{ revoked_at: string | null }>(
+      "SELECT revoked_at FROM refresh_tokens WHERE id = $1",
+      [payload.jti]
+    );
+    if (tokenRow.rows.length === 0 || tokenRow.rows[0].revoked_at !== null) {
+      throw new ApiError(401, "Invalid or expired refresh token");
+    }
   }
 
   const result = await pool.query<UserRow>("SELECT * FROM users WHERE id = $1", [payload.id]);
@@ -228,6 +257,21 @@ export async function refreshAccessToken(refreshToken: string) {
   }
 
   return { accessToken: signAccessToken(user) };
+}
+
+// Forgiving by design - an already-expired/invalid/pre-migration token has
+// nothing to revoke, and the client's goal (end up logged out) is already
+// achieved by discarding its local tokens regardless of what this does.
+export async function logoutUser(refreshToken: string): Promise<void> {
+  let payload: { jti?: string };
+  try {
+    payload = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET) as { jti?: string };
+  } catch {
+    return;
+  }
+  if (payload.jti) {
+    await pool.query("UPDATE refresh_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL", [payload.jti]);
+  }
 }
 
 export async function getUserById(id: string) {
