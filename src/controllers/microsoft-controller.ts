@@ -32,7 +32,14 @@ export const callback = asyncHandler(async (req: Request, res: Response) => {
     // be triggered from the Profile drawer on any page, by any role.
     res.redirect(`${env.FRONTEND_URL}${returnTo}?microsoft=connected`);
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Connection failed";
+    // Same safe/unsafe distinction the global error handler makes
+    // (error-middleware.ts): an ApiError's message is hand-written and
+    // meant to be shown, anything else might carry raw internals (a DB
+    // error, etc.) that shouldn't end up sitting in a redirect URL.
+    if (!(err instanceof ApiError)) {
+      console.error("Microsoft OAuth callback failed:", err);
+    }
+    const message = err instanceof ApiError ? err.message : "Connection failed";
     res.redirect(`${env.FRONTEND_URL}/?microsoft=error&reason=${encodeURIComponent(message)}`);
   }
 });

@@ -153,7 +153,14 @@ async function exchangeCodeForTokens(code: string): Promise<TokenResponse> {
   });
 
   if (!response.ok) {
-    throw new ApiError(502, `Microsoft rejected the sign-in: ${await response.text()}`);
+    // The raw response body is Microsoft's own error detail - logged for
+    // debugging, never put into the ApiError message itself. That message
+    // is treated as safe-to-show everywhere it surfaces (normal JSON error
+    // responses, and - more exposed - the OAuth callback's redirect URL in
+    // microsoft-controller.ts), so it must stay a clean, hand-written string
+    // like every other ApiError in this codebase, not third-party text.
+    console.error("Microsoft token exchange failed:", await response.text());
+    throw new ApiError(502, "Microsoft rejected the sign-in");
   }
   return (await response.json()) as TokenResponse;
 }
@@ -174,7 +181,8 @@ async function refreshTokens(refreshToken: string): Promise<TokenResponse> {
   });
 
   if (!response.ok) {
-    throw new ApiError(502, `Microsoft's token refresh failed: ${await response.text()}`);
+    console.error("Microsoft token refresh failed:", await response.text());
+    throw new ApiError(502, "Microsoft's token refresh failed");
   }
   return (await response.json()) as TokenResponse;
 }

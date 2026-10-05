@@ -8,6 +8,12 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, lead, "Lead created", 201);
 });
 
+export const bulkImport = asyncHandler(async (req: Request, res: Response) => {
+  const { rows } = req.body as { rows: Record<string, unknown>[] };
+  const result = await leadService.bulkImportLeads(rows, req.user!.id);
+  sendSuccess(res, result, "Import complete");
+});
+
 export const listTerritories = asyncHandler(async (_req: Request, res: Response) => {
   const territories = await leadService.listDistinctTerritories();
   sendSuccess(res, territories);

@@ -59,24 +59,41 @@ async function applyDueTransfers(): Promise<void> {
   );
 
   for (const row of due.rows) {
-    if (row.transfer_type === "bulk_reassign" && row.from_user_id && row.to_user_id) {
-      await pool.query("UPDATE leads SET owner_id = $1, updated_at = now() WHERE owner_id = $2 AND is_deleted = false", [
-        row.to_user_id,
-        row.from_user_id,
-      ]);
-    } else if (row.transfer_type === "territory" && row.from_user_id && row.new_territory) {
-      await pool.query("UPDATE users SET territory = $1 WHERE id = $2", [row.new_territory, row.from_user_id]);
-      if (row.old_territory) {
-        await pool.query(
-          "UPDATE leads SET territory = $1, updated_at = now() WHERE owner_id = $2 AND territory = $3 AND is_deleted = false",
-          [row.new_territory, row.from_user_id, row.old_territory]
-        );
+    // Each row's writes are all-or-nothing - previously a territory
+    // transfer's two statements ran as separate unwrapped queries, so a
+    // failure on the second left the user's own territory already changed
+    // but their leads' territory not, with the row stuck at 'scheduled'
+    // forever (looking pending while actually half-applied). A try/catch
+    // per row (not one around the whole loop) also means one bad row can't
+    // block every other due transfer in the same batch from applying.
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      if (row.transfer_type === "bulk_reassign" && row.from_user_id && row.to_user_id) {
+        await client.query("UPDATE leads SET owner_id = $1, updated_at = now() WHERE owner_id = $2 AND is_deleted = false", [
+          row.to_user_id,
+          row.from_user_id,
+        ]);
+      } else if (row.transfer_type === "territory" && row.from_user_id && row.new_territory) {
+        await client.query("UPDATE users SET territory = $1 WHERE id = $2", [row.new_territory, row.from_user_id]);
+        if (row.old_territory) {
+          await client.query(
+            "UPDATE leads SET territory = $1, updated_at = now() WHERE owner_id = $2 AND territory = $3 AND is_deleted = false",
+            [row.new_territory, row.from_user_id, row.old_territory]
+          );
+        }
       }
+      // 'exit' has no target to move records to yet - the note says records
+      // are queued for a manual bulk re-assign, so applying it only means
+      // marking the date as arrived, not moving anything automatically.
+      await client.query("UPDATE scheduled_transfers SET status = 'completed', applied_at = now() WHERE id = $1", [row.id]);
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      console.error(`applyDueTransfers: failed to apply scheduled_transfer ${row.id}`, err);
+    } finally {
+      client.release();
     }
-    // 'exit' has no target to move records to yet - the note says records
-    // are queued for a manual bulk re-assign, so applying it only means
-    // marking the date as arrived, not moving anything automatically.
-    await pool.query("UPDATE scheduled_transfers SET status = 'completed', applied_at = now() WHERE id = $1", [row.id]);
   }
 }
 

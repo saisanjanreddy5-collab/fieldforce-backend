@@ -475,7 +475,22 @@ export async function createTables(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
 
+    // One row per issued refresh token (its id doubles as the JWT's `jti`
+    // claim) - the one piece of server-side state a stateless JWT refresh
+    // token needs to be revocable at all. logoutUser marks a row revoked;
+    // refreshAccessToken checks revoked_at IS NULL on every refresh, so a
+    // revoked token stops minting new access tokens immediately instead of
+    // silently working until its own 7-day expiry.
+    `CREATE TABLE IF NOT EXISTS refresh_tokens (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      revoked_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+
     // Indexes - grouped together here rather than scattered between tables
+    `CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_states_zone_id ON states(zone_id)`,
     `CREATE INDEX IF NOT EXISTS idx_districts_state_id ON districts(state_id)`,
     `CREATE INDEX IF NOT EXISTS idx_areas_district_id ON areas(district_id)`,
