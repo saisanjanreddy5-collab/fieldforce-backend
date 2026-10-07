@@ -3,6 +3,32 @@ import { ApiError } from "../utils/ApiError";
 import { getLevelSecurityTier } from "./level-service";
 import { Role, ROLES } from "../utils/roles";
 
+// EMP-001, EMP-002, ... - picks up from whatever the highest real numeric
+// code already is, same MAX()+1 convention lead_number/claim_number already
+// use elsewhere. Only ever consulted when nobody supplied their own code -
+// a manually-entered one on create or edit still goes through its own
+// uniqueness check.
+export async function getNextEmployeeCode(): Promise<string> {
+  const result = await pool.query<{ max_num: number | null }>(
+    `SELECT MAX((regexp_match(employee_code, '^EMP-(\\d+)$'))[1]::int) AS max_num
+     FROM users WHERE employee_code ~ '^EMP-\\d+$'`
+  );
+  const next = (result.rows[0]?.max_num ?? 0) + 1;
+  return `EMP-${String(next).padStart(3, "0")}`;
+}
+
+// Distinct territory values already assigned to someone - lead-service.ts
+// has its own version of this over the leads table (what territories leads
+// mention), but the auto-assignment match in resolveAutoAssignee() checks
+// against users.territory, so this is the list that actually matters for
+// picking a non-colliding value here.
+export async function listDistinctTerritories(): Promise<string[]> {
+  const result = await pool.query<{ territory: string }>(
+    "SELECT DISTINCT territory FROM users WHERE territory IS NOT NULL AND territory <> '' ORDER BY territory ASC"
+  );
+  return result.rows.map((row) => row.territory);
+}
+
 export interface UpdateUserInput {
   name?: string;
   designation?: string;
@@ -75,13 +101,37 @@ function toPublicUser(row: UserRow) {
   };
 }
 
+export interface ListUsersFilters {
+  page: number;
+  limit: number;
+}
+
 // An Admin manages the whole org; a Manager only needs to see their own
 // reporting subtree when picking a manager or reviewing their team.
-export async function listUsers(requestingUserId: string, requestingRole: Role) {
+export async function listUsers(requestingUserId: string, requestingRole: Role, filters: ListUsersFilters) {
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
   if (requestingRole === ROLES.ADMIN) {
-    const result = await pool.query<UserRow>("SELECT * FROM users WHERE is_active = true ORDER BY name ASC");
-    return result.rows.map(toPublicUser);
+    const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM users WHERE is_active = true");
+    const result = await pool.query<UserRow>(
+      "SELECT * FROM users WHERE is_active = true ORDER BY name ASC LIMIT $1 OFFSET $2",
+      [limit, offset]
+    );
+    return { users: result.rows.map(toPublicUser), total: Number(countResult.rows[0].count) };
   }
+
+  const countResult = await pool.query<{ count: string }>(
+    `WITH RECURSIVE subtree AS (
+       SELECT id FROM users WHERE id = $1
+       UNION ALL
+       SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
+     )
+     SELECT COUNT(*) FROM users u
+     INNER JOIN subtree s ON u.id = s.id
+     WHERE u.is_active = true`,
+    [requestingUserId]
+  );
 
   const result = await pool.query<UserRow>(
     `WITH RECURSIVE subtree AS (
@@ -92,10 +142,11 @@ export async function listUsers(requestingUserId: string, requestingRole: Role) 
      SELECT u.* FROM users u
      INNER JOIN subtree s ON u.id = s.id
      WHERE u.is_active = true
-     ORDER BY u.name ASC`,
-    [requestingUserId]
+     ORDER BY u.name ASC
+     LIMIT $2 OFFSET $3`,
+    [requestingUserId, limit, offset]
   );
-  return result.rows.map(toPublicUser);
+  return { users: result.rows.map(toPublicUser), total: Number(countResult.rows[0].count) };
 }
 
 // Only the "Add user" flow set these fields before now - there was no way to

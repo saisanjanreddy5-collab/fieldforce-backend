@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { paginationQuerySchema } from "./pagination";
+
+export const listAssignmentRulesQuerySchema = paginationQuerySchema;
 
 export const createAssignmentRuleSchema = z.object({
   stateId: z.string().uuid(),

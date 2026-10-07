@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { paginationQuerySchema } from "./pagination";
 
 export const createTerritoryTransferSchema = z.object({
   fromUserId: z.string().uuid(),
@@ -18,3 +19,5 @@ export const createExitSchema = z.object({
   fromUserId: z.string().uuid(),
   effectiveDate: z.string().min(1, "Effective date is required"),
 });
+
+export const listScheduledTransfersQuerySchema = paginationQuerySchema;

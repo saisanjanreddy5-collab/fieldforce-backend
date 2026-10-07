@@ -6,6 +6,7 @@ import { env } from "../config/env";
 import { ApiError } from "../utils/ApiError";
 import { getPermissionsForRole } from "./permission-service";
 import { getLevelSecurityTier } from "./level-service";
+import { getNextEmployeeCode } from "./user-service";
 import { Role } from "../utils/roles";
 
 interface UserRow {
@@ -161,6 +162,7 @@ export async function registerUser(input: RegisterInput) {
   }
 
   const passwordHash = await bcrypt.hash(input.password, 10);
+  const employeeCode = input.employeeCode || (await getNextEmployeeCode());
 
   // Picking a Level is what actually determines real backend access, not
   // just a display label - a level's security_tier wins over any role the
@@ -193,7 +195,7 @@ export async function registerUser(input: RegisterInput) {
       input.smartfloAgentNumber ?? null,
       input.mobile ?? null,
       input.territory ?? null,
-      input.employeeCode ?? null,
+      employeeCode,
       input.dateOfJoining ?? null,
       input.status ?? null,
       input.levelId ?? null,

@@ -380,6 +380,12 @@ export async function listComments(activityId: string, requestingUserId: string)
 // admin already has full read access everywhere else in FieldForce - so an
 // admin's "Calendar of" lists every other active user instead of their
 // (always-empty) direct reports.
+// Widened from direct reports only to the full reporting chain - same
+// manager-subtree rule leads/opportunities/activities' own main list
+// already uses, so a Zonal Head can open an indirect subordinate's
+// calendar, not just a direct report's. The picker below and the access
+// check both need to agree on this, or the UI would offer someone the
+// backend then refuses.
 export async function getCalendarTeam(userId: string, role: string) {
   if (role === "admin") {
     const result = await pool.query<{ id: string; name: string }>(
@@ -389,7 +395,7 @@ export async function getCalendarTeam(userId: string, role: string) {
     return result.rows;
   }
   const result = await pool.query<{ id: string; name: string }>(
-    "SELECT id, name FROM users WHERE manager_id = $1 AND is_active = true ORDER BY name ASC",
+    `${SUBTREE_CTE} SELECT u.id, u.name FROM users u JOIN subtree s ON s.id = u.id WHERE u.id != $1 AND u.is_active = true ORDER BY u.name ASC`,
     [userId]
   );
   return result.rows;
@@ -397,12 +403,9 @@ export async function getCalendarTeam(userId: string, role: string) {
 
 async function assertCalendarAccess(requestingUserId: string, viewingUserId: string, requestingRole: string): Promise<void> {
   if (requestingUserId === viewingUserId || requestingRole === "admin") return;
-  const result = await pool.query("SELECT 1 FROM users WHERE id = $1 AND manager_id = $2", [
-    viewingUserId,
-    requestingUserId,
-  ]);
+  const result = await pool.query(`${SUBTREE_CTE} SELECT 1 FROM subtree WHERE id = $2`, [requestingUserId, viewingUserId]);
   if ((result.rowCount ?? 0) === 0) {
-    throw new ApiError(403, "You can only view your own calendar or a direct report's");
+    throw new ApiError(403, "You can only view your own calendar or someone in your reporting chain's");
   }
 }
 

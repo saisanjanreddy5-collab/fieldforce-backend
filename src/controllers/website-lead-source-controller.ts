@@ -3,8 +3,9 @@ import { asyncHandler } from "../utils/asyncHandler";
 import { sendSuccess } from "../utils/response";
 import * as websiteLeadService from "../services/website-lead-service";
 
-export const list = asyncHandler(async (_req: Request, res: Response) => {
-  sendSuccess(res, await websiteLeadService.listWebsiteLeadSources());
+export const list = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.validatedQuery as unknown as { page: number; limit: number };
+  sendSuccess(res, await websiteLeadService.listWebsiteLeadSources(query));
 });
 
 export const create = asyncHandler(async (req: Request, res: Response) => {

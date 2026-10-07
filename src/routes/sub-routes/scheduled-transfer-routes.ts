@@ -2,18 +2,24 @@ import { Router } from "express";
 import * as scheduledTransferController from "../../controllers/scheduled-transfer-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
-import { validateBody } from "../../middleware/validate-middleware";
+import { validateBody, validateQuery } from "../../middleware/validate-middleware";
 import {
   createExitSchema,
   createScheduledReassignSchema,
   createTerritoryTransferSchema,
+  listScheduledTransfersQuerySchema,
 } from "../../validators/scheduled-transfer-validator";
 
 const router = Router();
 
 router.use(requireAuth);
 
-router.get("/", requirePermission("territory_transfers.view"), scheduledTransferController.list);
+router.get(
+  "/",
+  requirePermission("territory_transfers.view"),
+  validateQuery(listScheduledTransfersQuerySchema),
+  scheduledTransferController.list
+);
 router.post(
   "/territory",
   requirePermission("territory_transfers.create"),

@@ -1,7 +1,19 @@
 import { z } from "zod";
 import { LEAVE_REQUEST_KINDS } from "../services/leave-service";
+import { paginationQuerySchema } from "./pagination";
 
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Enter a valid date");
+
+export const listLeaveTypesQuerySchema = paginationQuerySchema;
+
+// Mobile API handoff - "pick any month, optionally one person, see every
+// request in my reporting chain". Plain ISO dates, same convention as the
+// expense claims search - a whole month is just that month's first/last day.
+export const searchLeaveRequestsQuerySchema = paginationQuerySchema.extend({
+  userId: z.string().uuid().optional(),
+  from: isoDate.optional(),
+  to: isoDate.optional(),
+});
 
 export const createLeaveRequestSchema = z.object({
   kind: z.enum(LEAVE_REQUEST_KINDS),

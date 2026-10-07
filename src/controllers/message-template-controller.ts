@@ -4,8 +4,12 @@ import { sendSuccess } from "../utils/response";
 import * as messageTemplateService from "../services/message-template-service";
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
-  const channel = req.query.channel as messageTemplateService.TemplateChannel | undefined;
-  sendSuccess(res, await messageTemplateService.listMessageTemplates(channel));
+  const query = req.validatedQuery as unknown as {
+    channel?: messageTemplateService.TemplateChannel;
+    page: number;
+    limit: number;
+  };
+  sendSuccess(res, await messageTemplateService.listMessageTemplates(query));
 });
 
 export const create = asyncHandler(async (req: Request, res: Response) => {

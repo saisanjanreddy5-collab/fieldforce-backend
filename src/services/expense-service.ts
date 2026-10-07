@@ -130,9 +130,22 @@ function toPublicExpenseClaim(row: ExpenseClaimRow) {
   };
 }
 
-export async function listExpenseTypes() {
-  const result = await pool.query<ExpenseTypeRow>("SELECT * FROM expense_types ORDER BY sort_order ASC");
-  return result.rows.map(toPublicExpenseType);
+export interface ListExpenseTypesFilters {
+  page: number;
+  limit: number;
+}
+
+export async function listExpenseTypes(filters: ListExpenseTypesFilters) {
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM expense_types");
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
+  const result = await pool.query<ExpenseTypeRow>(
+    "SELECT * FROM expense_types ORDER BY sort_order ASC LIMIT $1 OFFSET $2",
+    [limit, offset]
+  );
+  return { expenseTypes: result.rows.map(toPublicExpenseType), total: Number(countResult.rows[0].count) };
 }
 
 async function getExpenseTypeByKey(key: ExpenseTypeKey): Promise<ExpenseTypeRow> {
@@ -249,6 +262,66 @@ export async function listTeamClaims(managerId: string) {
     [managerId]
   );
   return result.rows.map(toPublicExpenseClaim);
+}
+
+// Same manager-subtree rule leads/opportunities/activities already use -
+// not just direct reports like listTeamClaims above, the full reporting
+// chain beneath the requester. Built for the mobile API handoff: "pick a
+// month, optionally one specific person, see every real claim in scope" -
+// nothing here existed before (listTeamClaims has no date filter at all and
+// stops at direct reports), so this is new query capability, not a
+// relabeling of something that already worked this way.
+const EXPENSE_SUBTREE_CTE = `
+  WITH RECURSIVE subtree AS (
+    SELECT id FROM users WHERE id = $1
+    UNION ALL
+    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
+  )
+`;
+
+export interface SearchExpenseClaimsFilters {
+  userId?: string;
+  from?: string;
+  to?: string;
+  page: number;
+  limit: number;
+}
+
+export async function searchExpenseClaims(requestingUserId: string, filters: SearchExpenseClaimsFilters) {
+  const conditions: string[] = ["u.id IN (SELECT id FROM subtree)"];
+  const params: unknown[] = [requestingUserId];
+
+  if (filters.userId) {
+    params.push(filters.userId);
+    conditions.push(`ec.user_id = $${params.length}`);
+  }
+  if (filters.from) {
+    params.push(filters.from);
+    conditions.push(`ec.expense_date >= $${params.length}`);
+  }
+  if (filters.to) {
+    params.push(filters.to);
+    conditions.push(`ec.expense_date <= $${params.length}`);
+  }
+
+  const whereClause = conditions.join(" AND ");
+
+  const countResult = await pool.query<{ count: string }>(
+    `${EXPENSE_SUBTREE_CTE} SELECT COUNT(*) FROM expense_claims ec JOIN users u ON u.id = ec.user_id WHERE ${whereClause}`,
+    params
+  );
+
+  const listParams = [...params, filters.limit, (filters.page - 1) * filters.limit];
+  const result = await pool.query<ExpenseClaimRow>(
+    `${EXPENSE_SUBTREE_CTE}
+     ${CLAIM_SELECT}
+     WHERE ${whereClause}
+     ORDER BY ec.expense_date DESC
+     LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+    listParams
+  );
+
+  return { claims: result.rows.map(toPublicExpenseClaim), total: Number(countResult.rows[0].count) };
 }
 
 export async function listPendingApprovals(userId: string) {

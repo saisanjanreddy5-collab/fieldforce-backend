@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { TEMPLATE_CHANNELS } from "../services/message-template-service";
+import { paginationQuerySchema } from "./pagination";
 
-export const listMessageTemplatesQuerySchema = z.object({
+export const listMessageTemplatesQuerySchema = paginationQuerySchema.extend({
   channel: z.enum(TEMPLATE_CHANNELS).optional(),
 });
 

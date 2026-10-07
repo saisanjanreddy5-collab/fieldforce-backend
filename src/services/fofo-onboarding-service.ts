@@ -256,18 +256,30 @@ const LIST_COLUMNS = `
 // to roll up to the one real admin account - this file adds no broader
 // bypass, since that would show admin leads in the list that getHandoff
 // then refuses to open.
-export async function listFofoOnboardings(requestingUserId: string) {
+export async function listFofoOnboardings(requestingUserId: string, page: number, limit: number) {
+  const countResult = await pool.query<{ count: string }>(
+    `${SUBTREE_CTE}
+     SELECT COUNT(*) FROM leads l
+     WHERE l.is_deleted = false AND l.category = 'FOFO' AND l.owner_id IN (SELECT id FROM subtree)`,
+    [requestingUserId]
+  );
+
+  const offset = (page - 1) * limit;
   const result = await pool.query<{ expectedValue: string | null } & Record<string, unknown>>(
     `${SUBTREE_CTE}
      SELECT ${LIST_COLUMNS}
      FROM leads l LEFT JOIN users u ON u.id = l.owner_id
      WHERE l.is_deleted = false AND l.category = 'FOFO' AND l.owner_id IN (SELECT id FROM subtree)
-     ORDER BY l.created_at DESC`,
-    [requestingUserId]
+     ORDER BY l.created_at DESC
+     LIMIT $2 OFFSET $3`,
+    [requestingUserId, limit, offset]
   );
   // pg returns DECIMAL columns as strings - convert here, same as
   // lead-service's toPublicLead does for every other money column.
-  return result.rows.map((row) => ({ ...row, expectedValue: row.expectedValue === null ? null : Number(row.expectedValue) }));
+  return {
+    leads: result.rows.map((row) => ({ ...row, expectedValue: row.expectedValue === null ? null : Number(row.expectedValue) })),
+    total: Number(countResult.rows[0].count),
+  };
 }
 
 interface PendingStepRow {

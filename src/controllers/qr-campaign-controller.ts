@@ -3,8 +3,9 @@ import { asyncHandler } from "../utils/asyncHandler";
 import { sendSuccess } from "../utils/response";
 import * as qrCampaignService from "../services/qr-campaign-service";
 
-export const list = asyncHandler(async (_req: Request, res: Response) => {
-  sendSuccess(res, await qrCampaignService.listCampaigns());
+export const list = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.validatedQuery as unknown as { page: number; limit: number };
+  sendSuccess(res, await qrCampaignService.listCampaigns(query));
 });
 
 export const summary = asyncHandler(async (_req: Request, res: Response) => {

@@ -1577,6 +1577,48 @@ Regards,', 'active', 4)
       ('manager','quotes.view'), ('manager','quotes.create'), ('manager','quotes.update'),
       ('agent','quotes.view'), ('agent','quotes.create'), ('agent','quotes.update')
     ON CONFLICT (role, permission) DO NOTHING`,
+    // Permissions screen rebuild - "Export" as a real, enforced grid column.
+    // Only on the four screens that actually have a working Excel export
+    // button (Leads, Opportunities, Reports, Audit & consent) - every other
+    // module has no export feature to gate, so it stays a dash in the grid.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','leads.export'), ('admin','opportunities.export'), ('admin','reports.export'), ('admin','audit_log.export'),
+      ('manager','leads.export'), ('manager','opportunities.export'), ('manager','reports.export'), ('manager','audit_log.export')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    // Phase 2 permission migration - every route still gated by a hardcoded
+    // requireRole() check switches to requirePermission() reading this same
+    // table, so the Permissions screen's grants become real everywhere, not
+    // just for Leads/Opportunities/Activities. "levels.update" and the whole
+    // "structure_axis" module never had a permission entry at all (the PATCH
+    // routes existed, nothing in role_permissions represented them) - added
+    // here so requirePermission has something real to check, seeded to match
+    // the exact roles the old MANAGER_AND_ABOVE/open-GET gates already let
+    // through, so switching the gate doesn't change anyone's access today.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','levels.update'), ('manager','levels.update'),
+      ('admin','structure_axis.view'), ('admin','structure_axis.update'),
+      ('manager','structure_axis.view'), ('manager','structure_axis.update'),
+      ('agent','structure_axis.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    // Authorization-only scaffolding for 3 nav items that are still
+    // "Coming soon" placeholders (see ComingSoonPage/App.tsx) - no page, no
+    // data, no table yet. Seeded now so who-can-access-what is configurable
+    // from day one, the moment each one is actually built, rather than
+    // retrofitted later. Verb sets mirror the closest existing analog:
+    // customers.* mirrors leads.* (same CRUD shape, same roles); call_center
+    // is view-only (a dashboard over existing call activity, not a
+    // manually-created record); support_tickets.* mirrors the
+    // expense_claims/leave_requests workflow shape (agent can raise/edit,
+    // not delete).
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','customers.view'), ('admin','customers.create'), ('admin','customers.update'), ('admin','customers.delete'),
+      ('manager','customers.view'), ('manager','customers.create'), ('manager','customers.update'), ('manager','customers.delete'),
+      ('agent','customers.view'), ('agent','customers.create'), ('agent','customers.update'), ('agent','customers.delete'),
+      ('admin','call_center.view'), ('manager','call_center.view'), ('agent','call_center.view'),
+      ('admin','support_tickets.view'), ('admin','support_tickets.create'), ('admin','support_tickets.update'), ('admin','support_tickets.delete'),
+      ('manager','support_tickets.view'), ('manager','support_tickets.create'), ('manager','support_tickets.update'),
+      ('agent','support_tickets.view'), ('agent','support_tickets.create'), ('agent','support_tickets.update')
+    ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {

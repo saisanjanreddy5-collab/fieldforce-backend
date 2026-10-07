@@ -154,18 +154,19 @@ export async function convertLeadToOpportunity(leadId: string, input: Opportunit
   try {
     await client.query("BEGIN");
 
-    // Guarded by "AND status <> 'converted'" rather than a plain UPDATE -
-    // this both locks the lead row for the duration of the transaction (so
-    // a concurrent conversion attempt blocks here instead of racing) and
-    // rejects a double-submit/retry that would otherwise create a second
-    // orphan opportunity for an already-converted lead.
-    const leadUpdate = await client.query(
-      "UPDATE leads SET status = 'converted', updated_by = $1, updated_at = now() WHERE id = $2 AND status <> 'converted' RETURNING id",
-      [requestingUserId, leadId]
-    );
-    if (leadUpdate.rowCount === 0) {
-      throw new ApiError(409, "This lead has already been converted");
-    }
+    // Not guarded against an already-'converted' lead - a lead can
+    // legitimately pick up any number of opportunities over its lifetime
+    // (see OpportunitiesTab's own "Opportunities from this lead" list, a
+    // running total across all of them, with "+ New opportunity" always
+    // available, never hidden after the first one). This UPDATE is
+    // idempotent either way - setting status to 'converted' again on a
+    // lead that's already 'converted' is a harmless no-op - it's kept here
+    // (rather than dropped) only so it stays in the same transaction as
+    // the opportunity INSERT below, for atomicity.
+    await client.query("UPDATE leads SET status = 'converted', updated_by = $1, updated_at = now() WHERE id = $2", [
+      requestingUserId,
+      leadId,
+    ]);
 
     // A brand-new opportunity can start life already in 'won' (e.g. "+Add"
     // clicked directly in the Won column) - that's a transition into won too,
@@ -253,7 +254,17 @@ export async function listOpportunitiesForUser(requestingUserId: string, filters
     conditions.push(`(o.name ILIKE $${params.length} OR l.full_name ILIKE $${params.length})`);
   }
 
-  params.push(filters.limit, (filters.page - 1) * filters.limit);
+  const whereClause = conditions.join(" AND ");
+
+  // Same WHERE/params as the main query, minus limit/offset - needed so the
+  // mobile client (and any future web paging UI) can know the real total,
+  // not just whether the current 200-row page happened to be full.
+  const countResult = await pool.query<{ count: string }>(
+    `${SUBTREE_CTE} SELECT COUNT(*) FROM opportunities o JOIN leads l ON l.id = o.lead_id WHERE ${whereClause}`,
+    params
+  );
+
+  const listParams = [...params, filters.limit, (filters.page - 1) * filters.limit];
 
   const result = await pool.query<OpportunityListRow>(
     `${SUBTREE_CTE}
@@ -265,13 +276,13 @@ export async function listOpportunitiesForUser(requestingUserId: string, filters
      FROM opportunities o
      JOIN leads l ON l.id = o.lead_id
      LEFT JOIN users u ON u.id = l.owner_id
-     WHERE ${conditions.join(" AND ")}
+     WHERE ${whereClause}
      ORDER BY o.created_at DESC
-     LIMIT $${params.length - 1} OFFSET $${params.length}`,
-    params
+     LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+    listParams
   );
 
-  return result.rows.map(toPublicOpportunityListItem);
+  return { opportunities: result.rows.map(toPublicOpportunityListItem), total: Number(countResult.rows[0].count) };
 }
 
 export async function getOpportunityById(id: string, requestingUserId: string) {

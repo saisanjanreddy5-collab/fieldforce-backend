@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { REQUEST_TYPES } from "../services/approval-band-service";
+import { paginationQuerySchema } from "./pagination";
 
 export const createApprovalBandSchema = z.object({
   requestType: z.enum(REQUEST_TYPES),
@@ -21,3 +22,6 @@ export const updateApprovalBandSchema = z.object({
   slaHours: z.number().int().min(0).nullable().optional(),
   sortOrder: z.number().int().optional(),
 });
+
+// No filters yet - just the shared page/limit pagination contract.
+export const listApprovalBandsQuerySchema = paginationQuerySchema;

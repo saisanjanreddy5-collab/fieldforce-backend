@@ -4,8 +4,9 @@ import { sendSuccess } from "../utils/response";
 import * as scheduledTransferService from "../services/scheduled-transfer-service";
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
-  const transfers = await scheduledTransferService.listScheduledTransfers(req.user!.id, req.user!.role);
-  sendSuccess(res, transfers);
+  const query = req.validatedQuery as unknown as { page: number; limit: number };
+  const result = await scheduledTransferService.listScheduledTransfers(req.user!.id, req.user!.role, query);
+  sendSuccess(res, result);
 });
 
 export const createTerritoryTransfer = asyncHandler(async (req: Request, res: Response) => {

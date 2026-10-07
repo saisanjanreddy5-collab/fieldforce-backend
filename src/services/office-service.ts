@@ -92,11 +92,25 @@ const EMPLOYEE_COUNT_JOIN = `
   ) ec ON true
 `;
 
-export async function listOffices() {
+export interface ListOfficesFilters {
+  page: number;
+  limit: number;
+}
+
+export async function listOffices(filters: ListOfficesFilters) {
+  // No filters yet, so the WHERE clause is trivial - COUNT still runs as
+  // its own query so the frontend gets a real total independent of the
+  // page it's looking at, same shape as listLeadsForUser.
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM offices");
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
   const result = await pool.query<OfficeRow>(
-    `SELECT o.*, ec.count AS employee_count FROM offices o ${EMPLOYEE_COUNT_JOIN} ORDER BY o.name ASC`
+    `SELECT o.*, ec.count AS employee_count FROM offices o ${EMPLOYEE_COUNT_JOIN} ORDER BY o.name ASC LIMIT $1 OFFSET $2`,
+    [limit, offset]
   );
-  return result.rows.map(toPublicOffice);
+  return { offices: result.rows.map(toPublicOffice), total: Number(countResult.rows[0].count) };
 }
 
 export async function getOfficeById(id: string) {

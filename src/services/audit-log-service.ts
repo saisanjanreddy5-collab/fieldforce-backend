@@ -67,7 +67,16 @@ function toPublicEvent(row: AuditLogRow) {
   };
 }
 
-export async function listAuditLog(limit = 100) {
-  const result = await pool.query<AuditLogRow>("SELECT * FROM audit_log ORDER BY created_at DESC LIMIT $1", [limit]);
-  return result.rows.map(toPublicEvent);
+// Was a silent, unconditional LIMIT 100 with no way to page further - real
+// audit history beyond the most recent 100 events was permanently
+// unreachable through this endpoint. Now genuinely paginated: callers can
+// walk the whole table via page/limit, and total tells them when to stop.
+export async function listAuditLog(page: number, limit: number) {
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM audit_log");
+  const offset = (page - 1) * limit;
+  const result = await pool.query<AuditLogRow>(
+    "SELECT * FROM audit_log ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+    [limit, offset]
+  );
+  return { events: result.rows.map(toPublicEvent), total: Number(countResult.rows[0].count) };
 }

@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { paginationQuerySchema } from "./pagination";
+
+export const listFofoOnboardingsQuerySchema = paginationQuerySchema;
 
 export const decideStepSchema = z.object({
   decision: z.enum(["approved", "rejected"]),

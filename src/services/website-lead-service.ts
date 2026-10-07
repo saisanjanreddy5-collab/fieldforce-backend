@@ -68,9 +68,24 @@ function generateApiKey(): string {
   return crypto.randomBytes(24).toString("hex");
 }
 
-export async function listWebsiteLeadSources() {
-  const result = await pool.query<SourceQueryRow>(`${SOURCE_SELECT} GROUP BY c.id, uo.name, uc.name ORDER BY c.created_at DESC`);
-  return result.rows.map(toPublicSource);
+export interface ListWebsiteLeadSourcesFilters {
+  page: number;
+  limit: number;
+}
+
+export async function listWebsiteLeadSources(filters: ListWebsiteLeadSourcesFilters) {
+  const countResult = await pool.query<{ count: string }>(
+    "SELECT COUNT(*) FROM campaigns c WHERE c.source_type = 'website'"
+  );
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
+  const result = await pool.query<SourceQueryRow>(
+    `${SOURCE_SELECT} GROUP BY c.id, uo.name, uc.name ORDER BY c.created_at DESC LIMIT $1 OFFSET $2`,
+    [limit, offset]
+  );
+  return { websiteLeadSources: result.rows.map(toPublicSource), total: Number(countResult.rows[0].count) };
 }
 
 async function getSourceById(id: string) {

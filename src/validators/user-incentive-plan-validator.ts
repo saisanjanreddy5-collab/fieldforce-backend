@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { paginationQuerySchema } from "./pagination";
 
 export const createUserIncentivePlanSchema = z.object({
   userId: z.string().uuid(),
@@ -10,6 +11,6 @@ export const createUserIncentivePlanSchema = z.object({
   paysFromAttainmentPercent: z.number().min(0).max(1000).optional(),
 });
 
-export const listUserIncentivePlansQuerySchema = z.object({
+export const listUserIncentivePlansQuerySchema = paginationQuerySchema.extend({
   userId: z.string().uuid().optional(),
 });

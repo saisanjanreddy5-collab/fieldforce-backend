@@ -113,6 +113,28 @@ export async function listLeaveTypes() {
   return result.rows.map(toPublicLeaveType);
 }
 
+export interface ListLeaveTypesFilters {
+  page: number;
+  limit: number;
+}
+
+// Separate from listLeaveTypes() above - that unpaginated helper is still
+// relied on internally by getBalances() below, which needs every real leave
+// type to build one balance entry per type, never a single page of them.
+// This one backs the GET /leave/types list endpoint only.
+export async function listLeaveTypesPaginated(filters: ListLeaveTypesFilters) {
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM leave_types");
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
+  const result = await pool.query<LeaveTypeRow>(
+    "SELECT * FROM leave_types ORDER BY sort_order ASC LIMIT $1 OFFSET $2",
+    [limit, offset]
+  );
+  return { leaveTypes: result.rows.map(toPublicLeaveType), total: Number(countResult.rows[0].count) };
+}
+
 export interface UpdateLeaveTypeInput {
   annualDays?: number | null;
   accrualPerMonth?: number | null;
@@ -268,6 +290,68 @@ export async function listTeamRequests(managerId: string) {
     [managerId]
   );
   return result.rows.map(toPublicLeaveRequest);
+}
+
+// Same manager-subtree rule leads/opportunities/activities already use, not
+// just direct reports (listTeamRequests above) and not just the rolling
+// "next 30 days" window that one is hardcoded to. Built for the mobile API
+// handoff: "pick any month, past or future, optionally one specific person,
+// see every real request in my reporting chain" - genuinely new query
+// capability, since nothing existing could look at a past month at all.
+const LEAVE_SUBTREE_CTE = `
+  WITH RECURSIVE subtree AS (
+    SELECT id FROM users WHERE id = $1
+    UNION ALL
+    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
+  )
+`;
+
+export interface SearchLeaveRequestsFilters {
+  userId?: string;
+  from?: string;
+  to?: string;
+  page: number;
+  limit: number;
+}
+
+export async function searchLeaveRequests(requestingUserId: string, filters: SearchLeaveRequestsFilters) {
+  const conditions: string[] = ["u.id IN (SELECT id FROM subtree)"];
+  const params: unknown[] = [requestingUserId];
+
+  if (filters.userId) {
+    params.push(filters.userId);
+    conditions.push(`lr.user_id = $${params.length}`);
+  }
+  // Overlap test, same shape listTeamRequests already uses for its own
+  // fixed window - a request overlaps the queried range as soon as it
+  // starts on or before the range's end and ends on or after its start.
+  if (filters.from) {
+    params.push(filters.from);
+    conditions.push(`lr.end_date >= $${params.length}`);
+  }
+  if (filters.to) {
+    params.push(filters.to);
+    conditions.push(`lr.start_date <= $${params.length}`);
+  }
+
+  const whereClause = conditions.join(" AND ");
+
+  const countResult = await pool.query<{ count: string }>(
+    `${LEAVE_SUBTREE_CTE} SELECT COUNT(*) FROM leave_requests lr JOIN users u ON u.id = lr.user_id WHERE ${whereClause}`,
+    params
+  );
+
+  const listParams = [...params, filters.limit, (filters.page - 1) * filters.limit];
+  const result = await pool.query<LeaveRequestRow>(
+    `${LEAVE_SUBTREE_CTE}
+     ${REQUEST_SELECT}
+     WHERE ${whereClause}
+     ORDER BY lr.start_date DESC
+     LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+    listParams
+  );
+
+  return { requests: result.rows.map(toPublicLeaveRequest), total: Number(countResult.rows[0].count) };
 }
 
 // Distinct from listTeamRequests (which is direct-reports-only, for the

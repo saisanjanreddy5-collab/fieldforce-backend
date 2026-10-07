@@ -39,9 +39,22 @@ const RULE_SELECT = `
   JOIN users u ON u.id = ar.assigned_user_id
 `;
 
-export async function listAssignmentRules() {
-  const result = await pool.query<AssignmentRuleRow>(`${RULE_SELECT} ORDER BY s.name ASC NULLS LAST, ar.category ASC NULLS LAST`);
-  return result.rows.map(toPublicRule);
+export interface ListAssignmentRulesFilters {
+  page: number;
+  limit: number;
+}
+
+export async function listAssignmentRules(filters: ListAssignmentRulesFilters) {
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM assignment_rules");
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
+  const result = await pool.query<AssignmentRuleRow>(
+    `${RULE_SELECT} ORDER BY s.name ASC NULLS LAST, ar.category ASC NULLS LAST LIMIT $1 OFFSET $2`,
+    [limit, offset]
+  );
+  return { assignmentRules: result.rows.map(toPublicRule), total: Number(countResult.rows[0].count) };
 }
 
 export interface CreateAssignmentRuleInput {

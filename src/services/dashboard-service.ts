@@ -161,7 +161,14 @@ export async function getVisitHistory(requestingUserId: string, filters: VisitHi
     conditions.push(`a.created_at <= $${params.length}`);
   }
 
-  params.push(filters.limit, (filters.page - 1) * filters.limit);
+  const whereClause = conditions.join(" AND ");
+
+  const countResult = await pool.query<{ count: string }>(
+    `${SUBTREE_CTE} SELECT COUNT(*) FROM activities a JOIN leads l ON l.id = a.lead_id WHERE ${whereClause}`,
+    params
+  );
+
+  const listParams = [...params, filters.limit, (filters.page - 1) * filters.limit];
 
   const result = await pool.query(
     `${SUBTREE_CTE}
@@ -172,11 +179,11 @@ export async function getVisitHistory(requestingUserId: string, filters: VisitHi
      FROM activities a
      JOIN leads l ON l.id = a.lead_id
      LEFT JOIN users u ON u.id = a.created_by
-     WHERE ${conditions.join(" AND ")}
+     WHERE ${whereClause}
      ORDER BY a.created_at DESC
-     LIMIT $${params.length - 1} OFFSET $${params.length}`,
-    params
+     LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+    listParams
   );
 
-  return result.rows;
+  return { visits: result.rows, total: Number(countResult.rows[0].count) };
 }

@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { paginationQuerySchema } from "./pagination";
+
+export const listWebsiteLeadSourcesQuerySchema = paginationQuerySchema;
 
 // z.coerce.boolean() runs JS's Boolean(x) - a string "false" (which is what
 // a plain HTML form or a non-JSON client would send) is truthy under that

@@ -45,11 +45,24 @@ function toPublicPlan(row: IncentivePlanRow) {
   };
 }
 
+export interface ListIncentivePlansFilters {
+  page: number;
+  limit: number;
+}
+
 // Configuration data, not a per-person record - visible to any Manager+ the
 // same way sales_teams/levels/offices are, no subtree scoping needed.
-export async function listIncentivePlans() {
-  const result = await pool.query<IncentivePlanRow>("SELECT * FROM incentive_plans ORDER BY name ASC");
-  return result.rows.map(toPublicPlan);
+export async function listIncentivePlans(filters: ListIncentivePlansFilters) {
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM incentive_plans");
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
+  const result = await pool.query<IncentivePlanRow>(
+    "SELECT * FROM incentive_plans ORDER BY name ASC LIMIT $1 OFFSET $2",
+    [limit, offset]
+  );
+  return { incentivePlans: result.rows.map(toPublicPlan), total: Number(countResult.rows[0].count) };
 }
 
 export async function getIncentivePlanById(id: string) {

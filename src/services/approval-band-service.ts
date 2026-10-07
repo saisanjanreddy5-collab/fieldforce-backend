@@ -58,11 +58,22 @@ function toPublicBand(row: ApprovalBandRow) {
 // Configuration only - nothing reads this table to actually approve or
 // escalate anything, because FieldForce has no request/workflow system
 // anywhere else to enforce it against (see Phase 8 note in models/model.ts).
-export async function listApprovalBands() {
+export interface ListApprovalBandsFilters {
+  page: number;
+  limit: number;
+}
+
+export async function listApprovalBands(filters: ListApprovalBandsFilters) {
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM approval_bands");
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
   const result = await pool.query<ApprovalBandRow>(
-    "SELECT * FROM approval_bands ORDER BY request_type ASC, sort_order ASC, range_from ASC"
+    "SELECT * FROM approval_bands ORDER BY request_type ASC, sort_order ASC, range_from ASC LIMIT $1 OFFSET $2",
+    [limit, offset]
   );
-  return result.rows.map(toPublicBand);
+  return { approvalBands: result.rows.map(toPublicBand), total: Number(countResult.rows[0].count) };
 }
 
 async function getBandById(id: string) {

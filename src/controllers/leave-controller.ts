@@ -3,8 +3,9 @@ import { asyncHandler } from "../utils/asyncHandler";
 import { sendSuccess } from "../utils/response";
 import * as leaveService from "../services/leave-service";
 
-export const listTypes = asyncHandler(async (_req: Request, res: Response) => {
-  sendSuccess(res, await leaveService.listLeaveTypes());
+export const listTypes = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.validatedQuery as unknown as { page: number; limit: number };
+  sendSuccess(res, await leaveService.listLeaveTypesPaginated(query));
 });
 
 export const updateType = asyncHandler(async (req: Request, res: Response) => {
@@ -30,6 +31,11 @@ export const listTeam = asyncHandler(async (req: Request, res: Response) => {
 
 export const listPendingApprovals = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, await leaveService.listPendingApprovals(req.user!.id));
+});
+
+export const search = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.validatedQuery as unknown as { userId?: string; from?: string; to?: string; page: number; limit: number };
+  sendSuccess(res, await leaveService.searchLeaveRequests(req.user!.id, query));
 });
 
 export const create = asyncHandler(async (req: Request, res: Response) => {

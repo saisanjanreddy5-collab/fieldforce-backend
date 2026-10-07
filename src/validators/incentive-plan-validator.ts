@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { paginationQuerySchema } from "./pagination";
 
 export const createIncentivePlanSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -15,3 +16,5 @@ export const updateIncentivePlanSchema = z.object({
   effectiveStartDate: z.string().optional(),
   effectiveEndDate: z.string().optional(),
 });
+
+export const listIncentivePlansQuerySchema = paginationQuerySchema;
