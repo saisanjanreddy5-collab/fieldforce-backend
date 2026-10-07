@@ -26,6 +26,29 @@ export async function listLeadCategories() {
   return result.rows.map(toPublicCategory);
 }
 
+export interface ListLeadCategoriesFilters {
+  page: number;
+  limit: number;
+}
+
+// Separate from listLeadCategories() above - that unpaginated helper is still
+// relied on internally by reorderLeadCategories() below (needs the full
+// freshly-ordered set back, not one page of it) and by qr-campaign-service's
+// public QR info lookup (resolves a category key to its label, needs every
+// category to find a match). This one backs the GET list endpoint only.
+export async function listLeadCategoriesPaginated(filters: ListLeadCategoriesFilters) {
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM lead_categories");
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
+  const result = await pool.query<LeadCategoryRow>(
+    "SELECT * FROM lead_categories ORDER BY sort_order ASC LIMIT $1 OFFSET $2",
+    [limit, offset]
+  );
+  return { leadCategories: result.rows.map(toPublicCategory), total: Number(countResult.rows[0].count) };
+}
+
 export interface CreateLeadCategoryInput {
   key: string;
   label: string;

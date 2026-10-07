@@ -33,14 +33,35 @@ function toPublicTemplate(row: MessageTemplateRow) {
   };
 }
 
-export async function listMessageTemplates(channel?: TemplateChannel) {
-  const result = channel
-    ? await pool.query<MessageTemplateRow>(
-        "SELECT * FROM message_templates WHERE channel = $1 ORDER BY sort_order ASC",
-        [channel]
-      )
-    : await pool.query<MessageTemplateRow>("SELECT * FROM message_templates ORDER BY sort_order ASC");
-  return result.rows.map(toPublicTemplate);
+export interface ListMessageTemplatesFilters {
+  channel?: TemplateChannel;
+  page: number;
+  limit: number;
+}
+
+export async function listMessageTemplates(filters: ListMessageTemplatesFilters) {
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (filters.channel) {
+    params.push(filters.channel);
+    conditions.push(`channel = $${params.length}`);
+  }
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+  const countResult = await pool.query<{ count: string }>(
+    `SELECT COUNT(*) FROM message_templates ${whereClause}`,
+    params
+  );
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+  const listParams = [...params, limit, offset];
+
+  const result = await pool.query<MessageTemplateRow>(
+    `SELECT * FROM message_templates ${whereClause} ORDER BY sort_order ASC LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+    listParams
+  );
+  return { messageTemplates: result.rows.map(toPublicTemplate), total: Number(countResult.rows[0].count) };
 }
 
 export interface CreateMessageTemplateInput {

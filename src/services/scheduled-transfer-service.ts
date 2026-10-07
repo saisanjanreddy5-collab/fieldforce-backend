@@ -97,22 +97,42 @@ async function applyDueTransfers(): Promise<void> {
   }
 }
 
-export async function listScheduledTransfers(requestingUserId: string, requestingRole: string) {
+export interface ListScheduledTransfersFilters {
+  page: number;
+  limit: number;
+}
+
+export async function listScheduledTransfers(requestingUserId: string, requestingRole: string, filters: ListScheduledTransfersFilters) {
   await applyDueTransfers();
 
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
   if (requestingRole === "admin") {
-    const result = await pool.query<ScheduledTransferRow>("SELECT * FROM scheduled_transfers ORDER BY effective_date DESC, created_at DESC");
-    return result.rows.map(toPublicTransfer);
+    const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM scheduled_transfers");
+    const result = await pool.query<ScheduledTransferRow>(
+      "SELECT * FROM scheduled_transfers ORDER BY effective_date DESC, created_at DESC LIMIT $1 OFFSET $2",
+      [limit, offset]
+    );
+    return { transfers: result.rows.map(toPublicTransfer), total: Number(countResult.rows[0].count) };
   }
+
+  const countResult = await pool.query<{ count: string }>(
+    `${SUBTREE_CTE}
+     SELECT COUNT(*) FROM scheduled_transfers
+     WHERE from_user_id IN (SELECT id FROM subtree) OR to_user_id IN (SELECT id FROM subtree)`,
+    [requestingUserId]
+  );
 
   const result = await pool.query<ScheduledTransferRow>(
     `${SUBTREE_CTE}
      SELECT * FROM scheduled_transfers
      WHERE from_user_id IN (SELECT id FROM subtree) OR to_user_id IN (SELECT id FROM subtree)
-     ORDER BY effective_date DESC, created_at DESC`,
-    [requestingUserId]
+     ORDER BY effective_date DESC, created_at DESC
+     LIMIT $2 OFFSET $3`,
+    [requestingUserId, limit, offset]
   );
-  return result.rows.map(toPublicTransfer);
+  return { transfers: result.rows.map(toPublicTransfer), total: Number(countResult.rows[0].count) };
 }
 
 async function assertInOwnSubtree(requestingUserId: string, requestingRole: string, targetUserId: string): Promise<void> {

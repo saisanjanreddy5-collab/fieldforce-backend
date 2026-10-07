@@ -55,35 +55,58 @@ const SUBTREE_CTE = `
   )
 `;
 
-export async function listUserIncentivePlans(requestingUserId: string, requestingRole: Role, userId?: string) {
+export interface ListUserIncentivePlansFilters {
+  userId?: string;
+  page: number;
+  limit: number;
+}
+
+export async function listUserIncentivePlans(requestingUserId: string, requestingRole: Role, filters: ListUserIncentivePlansFilters) {
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
   if (requestingRole === ROLES.ADMIN) {
     const params: unknown[] = [];
     let where = "";
-    if (userId) {
-      params.push(userId);
+    if (filters.userId) {
+      params.push(filters.userId);
       where = "WHERE user_id = $1";
     }
+
+    const countResult = await pool.query<{ count: string }>(`SELECT COUNT(*) FROM user_incentive_plans ${where}`, params);
+
+    const listParams = [...params, limit, offset];
     const result = await pool.query<UserIncentivePlanRow>(
-      `SELECT * FROM user_incentive_plans ${where} ORDER BY effective_start_date DESC`,
-      params
+      `SELECT * FROM user_incentive_plans ${where} ORDER BY effective_start_date DESC LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+      listParams
     );
-    return result.rows.map(toPublicAssignment);
+    return { userIncentivePlans: result.rows.map(toPublicAssignment), total: Number(countResult.rows[0].count) };
   }
 
   const params: unknown[] = [requestingUserId];
   let extraFilter = "";
-  if (userId) {
-    params.push(userId);
+  if (filters.userId) {
+    params.push(filters.userId);
     extraFilter = `AND user_id = $${params.length}`;
   }
+
+  const countResult = await pool.query<{ count: string }>(
+    `${SUBTREE_CTE}
+     SELECT COUNT(*) FROM user_incentive_plans
+     WHERE user_id IN (SELECT id FROM subtree) ${extraFilter}`,
+    params
+  );
+
+  const listParams = [...params, limit, offset];
   const result = await pool.query<UserIncentivePlanRow>(
     `${SUBTREE_CTE}
      SELECT * FROM user_incentive_plans
      WHERE user_id IN (SELECT id FROM subtree) ${extraFilter}
-     ORDER BY effective_start_date DESC`,
-    params
+     ORDER BY effective_start_date DESC
+     LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+    listParams
   );
-  return result.rows.map(toPublicAssignment);
+  return { userIncentivePlans: result.rows.map(toPublicAssignment), total: Number(countResult.rows[0].count) };
 }
 
 export async function createUserIncentivePlan(input: CreateUserIncentivePlanInput, requestingUserId: string) {

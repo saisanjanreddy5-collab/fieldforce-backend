@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { paginationQuerySchema } from "./pagination";
+
+export const listQrCampaignsQuerySchema = paginationQuerySchema;
 
 // z.coerce.boolean() runs JS's Boolean(x) - since this form always arrives
 // as multipart/form-data, an unchecked box still sends the string "false",

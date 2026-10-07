@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { RECORD_SCOPES } from "../services/level-service";
 import { ROLES } from "../utils/roles";
+import { paginationQuerySchema } from "./pagination";
 
 const securityTier = z.enum([ROLES.ADMIN, ROLES.MANAGER, ROLES.AGENT]);
 const recordScope = z.enum(RECORD_SCOPES);
@@ -42,3 +43,6 @@ export const updateLevelSchema = z.object({
   canViewCallRecordings: z.coerce.boolean().optional(),
   canSeeUnmaskedPii: z.coerce.boolean().optional(),
 });
+
+// No filters yet - just the shared page/limit pagination contract.
+export const listLevelsQuerySchema = paginationQuerySchema;

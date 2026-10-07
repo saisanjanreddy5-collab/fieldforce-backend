@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { paginationQuerySchema } from "./pagination";
+
+export const listLeadCategoriesQuerySchema = paginationQuerySchema;
 
 export const createLeadCategorySchema = z.object({
   key: z.string().min(1).max(50),

@@ -3,8 +3,9 @@ import { asyncHandler } from "../utils/asyncHandler";
 import { sendSuccess } from "../utils/response";
 import * as leadCategoryService from "../services/lead-category-service";
 
-export const list = asyncHandler(async (_req: Request, res: Response) => {
-  sendSuccess(res, await leadCategoryService.listLeadCategories());
+export const list = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.validatedQuery as unknown as { page: number; limit: number };
+  sendSuccess(res, await leadCategoryService.listLeadCategoriesPaginated(query));
 });
 
 export const create = asyncHandler(async (req: Request, res: Response) => {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { paginationQuerySchema } from "./pagination";
 
 const PERIOD_TYPES = ["monthly", "quarterly", "annual"] as const;
 
@@ -17,6 +18,6 @@ export const updateTargetSchema = z.object({
   unitTarget: z.string().optional(),
 });
 
-export const listTargetsQuerySchema = z.object({
+export const listTargetsQuerySchema = paginationQuerySchema.extend({
   userId: z.string().uuid().optional(),
 });

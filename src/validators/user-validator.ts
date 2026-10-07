@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { paginationQuerySchema } from "./pagination";
 
 // Deliberately narrow - self-service profile editing must never let a
 // user touch their own role, permissions, manager, level, or territory.
@@ -28,3 +29,5 @@ export const updateUserSchema = z.object({
   divisionChannelId: z.string().uuid().or(z.literal("")).optional(),
   customerCategoryId: z.string().uuid().or(z.literal("")).optional(),
 });
+
+export const listUsersQuerySchema = paginationQuerySchema;

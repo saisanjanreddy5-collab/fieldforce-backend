@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { COMMISSION_BASES, PAYOUT_CYCLES } from "../services/user-commission-service";
+import { paginationQuerySchema } from "./pagination";
 
 export const createUserCommissionSchema = z.object({
   userId: z.string().uuid(),
@@ -9,6 +10,6 @@ export const createUserCommissionSchema = z.object({
   payoutCycle: z.enum(PAYOUT_CYCLES),
 });
 
-export const listUserCommissionsQuerySchema = z.object({
+export const listUserCommissionsQuerySchema = paginationQuerySchema.extend({
   userId: z.string().uuid().optional(),
 });

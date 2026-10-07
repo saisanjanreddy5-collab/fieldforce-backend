@@ -23,12 +23,25 @@ function toPublicDelegation(row: DelegationRow) {
   };
 }
 
+export interface ListDelegationsFilters {
+  page: number;
+  limit: number;
+}
+
 // Foundation only (see model.ts) - FieldForce has no live approval-request
 // flow for a delegate to actually receive, so this just records who covers
 // for whom and when.
-export async function listDelegations() {
-  const result = await pool.query<DelegationRow>("SELECT * FROM delegations ORDER BY start_date DESC");
-  return result.rows.map(toPublicDelegation);
+export async function listDelegations(filters: ListDelegationsFilters) {
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM delegations");
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
+  const result = await pool.query<DelegationRow>(
+    "SELECT * FROM delegations ORDER BY start_date DESC LIMIT $1 OFFSET $2",
+    [limit, offset]
+  );
+  return { delegations: result.rows.map(toPublicDelegation), total: Number(countResult.rows[0].count) };
 }
 
 export interface CreateDelegationInput {

@@ -9,9 +9,11 @@ function toPublicZone(row: ZoneRow) {
   return { id: row.id, name: row.name };
 }
 
-export async function listZones() {
-  const result = await pool.query<ZoneRow>("SELECT * FROM zones ORDER BY name ASC");
-  return result.rows.map(toPublicZone);
+export async function listZones(page: number, limit: number) {
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM zones");
+  const offset = (page - 1) * limit;
+  const result = await pool.query<ZoneRow>("SELECT * FROM zones ORDER BY name ASC LIMIT $1 OFFSET $2", [limit, offset]);
+  return { zones: result.rows.map(toPublicZone), total: Number(countResult.rows[0].count) };
 }
 
 interface StateRow {
@@ -25,11 +27,17 @@ function toPublicState(row: StateRow) {
   return { id: row.id, name: row.name, zoneId: row.zone_id, gstCode: row.gst_code };
 }
 
-export async function listStates(zoneId?: string) {
-  if (zoneId) {
-    const result = await pool.query<StateRow>("SELECT * FROM states WHERE zone_id = $1 ORDER BY name ASC", [zoneId]);
-    return result.rows.map(toPublicState);
-  }
-  const result = await pool.query<StateRow>("SELECT * FROM states ORDER BY name ASC");
-  return result.rows.map(toPublicState);
+export async function listStates(zoneId: string | undefined, page: number, limit: number) {
+  const whereClause = zoneId ? "WHERE zone_id = $1" : "";
+  const baseParams = zoneId ? [zoneId] : [];
+
+  const countResult = await pool.query<{ count: string }>(`SELECT COUNT(*) FROM states ${whereClause}`, baseParams);
+
+  const offset = (page - 1) * limit;
+  const listParams = [...baseParams, limit, offset];
+  const result = await pool.query<StateRow>(
+    `SELECT * FROM states ${whereClause} ORDER BY name ASC LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+    listParams
+  );
+  return { states: result.rows.map(toPublicState), total: Number(countResult.rows[0].count) };
 }

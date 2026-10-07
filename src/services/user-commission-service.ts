@@ -50,36 +50,62 @@ const SUBTREE_CTE = `
   )
 `;
 
+export interface ListUserCommissionsFilters {
+  userId?: string;
+  page: number;
+  limit: number;
+}
+
 // Configuration only, same as user_incentive_plans (its sibling in the
 // Create/Edit user wizard's own "Commissions" section) - a per-employee
 // arrangement, not the shared commission_rules catalog. No payout engine
 // reads this.
-export async function listUserCommissions(requestingUserId: string, requestingRole: Role, userId?: string) {
+export async function listUserCommissions(requestingUserId: string, requestingRole: Role, filters: ListUserCommissionsFilters) {
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
   if (requestingRole === ROLES.ADMIN) {
     const params: unknown[] = [];
     let where = "";
-    if (userId) {
-      params.push(userId);
+    if (filters.userId) {
+      params.push(filters.userId);
       where = "WHERE user_id = $1";
     }
-    const result = await pool.query<UserCommissionRow>(`SELECT * FROM user_commissions ${where} ORDER BY created_at DESC`, params);
-    return result.rows.map(toPublicCommission);
+
+    const countResult = await pool.query<{ count: string }>(`SELECT COUNT(*) FROM user_commissions ${where}`, params);
+
+    const listParams = [...params, limit, offset];
+    const result = await pool.query<UserCommissionRow>(
+      `SELECT * FROM user_commissions ${where} ORDER BY created_at DESC LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+      listParams
+    );
+    return { userCommissions: result.rows.map(toPublicCommission), total: Number(countResult.rows[0].count) };
   }
 
   const params: unknown[] = [requestingUserId];
   let extraFilter = "";
-  if (userId) {
-    params.push(userId);
+  if (filters.userId) {
+    params.push(filters.userId);
     extraFilter = `AND user_id = $${params.length}`;
   }
+
+  const countResult = await pool.query<{ count: string }>(
+    `${SUBTREE_CTE}
+     SELECT COUNT(*) FROM user_commissions
+     WHERE user_id IN (SELECT id FROM subtree) ${extraFilter}`,
+    params
+  );
+
+  const listParams = [...params, limit, offset];
   const result = await pool.query<UserCommissionRow>(
     `${SUBTREE_CTE}
      SELECT * FROM user_commissions
      WHERE user_id IN (SELECT id FROM subtree) ${extraFilter}
-     ORDER BY created_at DESC`,
-    params
+     ORDER BY created_at DESC
+     LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+    listParams
   );
-  return result.rows.map(toPublicCommission);
+  return { userCommissions: result.rows.map(toPublicCommission), total: Number(countResult.rows[0].count) };
 }
 
 export async function createUserCommission(input: CreateUserCommissionInput, requestingUserId: string) {

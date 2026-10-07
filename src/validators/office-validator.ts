@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { paginationQuerySchema } from "./pagination";
 
 const OFFICE_TYPES = ["head_office", "regional_office", "branch"] as const;
 
@@ -35,3 +36,6 @@ export const updateOfficeSchema = z.object({
   longitude: z.number().min(-180).max(180).optional(),
   isActive: z.boolean().optional(),
 });
+
+// No filters yet - just the shared page/limit pagination contract.
+export const listOfficesQuerySchema = paginationQuerySchema;

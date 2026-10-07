@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { paginationQuerySchema } from "./pagination";
 
 export const createCommissionRuleSchema = z.object({
   incentivePlanId: z.string().uuid(),
@@ -17,6 +18,6 @@ export const updateCommissionRuleSchema = z.object({
   isActive: z.boolean().optional(),
 });
 
-export const listCommissionRulesQuerySchema = z.object({
+export const listCommissionRulesQuerySchema = paginationQuerySchema.extend({
   incentivePlanId: z.string().uuid().optional(),
 });

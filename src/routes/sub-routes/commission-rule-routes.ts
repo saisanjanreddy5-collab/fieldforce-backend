@@ -1,6 +1,7 @@
 import { Router } from "express";
 import * as commissionRuleController from "../../controllers/commission-rule-controller";
-import { ADMIN_ONLY, MANAGER_AND_ABOVE, requireAuth, requireRole } from "../../middleware/auth-middleware";
+import { requireAuth } from "../../middleware/auth-middleware";
+import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
 import {
   createCommissionRuleSchema,
@@ -12,10 +13,10 @@ const router = Router();
 
 router.use(requireAuth);
 
-router.get("/", requireRole(...MANAGER_AND_ABOVE), validateQuery(listCommissionRulesQuerySchema), commissionRuleController.list);
-router.get("/:id", requireRole(...MANAGER_AND_ABOVE), commissionRuleController.getById);
-router.post("/", requireRole(...ADMIN_ONLY), validateBody(createCommissionRuleSchema), commissionRuleController.create);
-router.patch("/:id", requireRole(...ADMIN_ONLY), validateBody(updateCommissionRuleSchema), commissionRuleController.update);
-router.delete("/:id", requireRole(...ADMIN_ONLY), commissionRuleController.remove);
+router.get("/", requirePermission("commission_rules.view"), validateQuery(listCommissionRulesQuerySchema), commissionRuleController.list);
+router.get("/:id", requirePermission("commission_rules.view"), commissionRuleController.getById);
+router.post("/", requirePermission("commission_rules.create"), validateBody(createCommissionRuleSchema), commissionRuleController.create);
+router.patch("/:id", requirePermission("commission_rules.update"), validateBody(updateCommissionRuleSchema), commissionRuleController.update);
+router.delete("/:id", requirePermission("commission_rules.delete"), commissionRuleController.remove);
 
 export default router;

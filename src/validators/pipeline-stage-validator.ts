@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { paginationQuerySchema } from "./pagination";
+
+export const listPipelineStagesQuerySchema = paginationQuerySchema;
 
 export const createPipelineStageSchema = z.object({
   key: z.string().min(1).max(50),

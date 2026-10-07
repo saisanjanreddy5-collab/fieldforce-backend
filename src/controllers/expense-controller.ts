@@ -5,8 +5,9 @@ import { ApiError } from "../utils/ApiError";
 import * as expenseService from "../services/expense-service";
 import type { ExpenseTypeKey } from "../services/expense-service";
 
-export const listTypes = asyncHandler(async (_req: Request, res: Response) => {
-  sendSuccess(res, await expenseService.listExpenseTypes());
+export const listTypes = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.validatedQuery as unknown as { page: number; limit: number };
+  sendSuccess(res, await expenseService.listExpenseTypes(query));
 });
 
 export const listMine = asyncHandler(async (req: Request, res: Response) => {
@@ -19,6 +20,11 @@ export const listTeam = asyncHandler(async (req: Request, res: Response) => {
 
 export const listPendingApprovals = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, await expenseService.listPendingApprovals(req.user!.id));
+});
+
+export const search = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.validatedQuery as unknown as { userId?: string; from?: string; to?: string; page: number; limit: number };
+  sendSuccess(res, await expenseService.searchExpenseClaims(req.user!.id, query));
 });
 
 // Multipart request (a receipt file rides alongside the form fields), so

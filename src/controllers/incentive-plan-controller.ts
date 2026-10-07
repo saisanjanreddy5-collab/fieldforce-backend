@@ -3,9 +3,10 @@ import { asyncHandler } from "../utils/asyncHandler";
 import { sendSuccess } from "../utils/response";
 import * as incentivePlanService from "../services/incentive-plan-service";
 
-export const list = asyncHandler(async (_req: Request, res: Response) => {
-  const plans = await incentivePlanService.listIncentivePlans();
-  sendSuccess(res, plans);
+export const list = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.validatedQuery as unknown as { page: number; limit: number };
+  const result = await incentivePlanService.listIncentivePlans(query);
+  sendSuccess(res, result);
 });
 
 export const getById = asyncHandler(async (req: Request, res: Response) => {

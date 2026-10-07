@@ -89,11 +89,24 @@ function mapQueryRow(row: CampaignQueryRow) {
   });
 }
 
-export async function listCampaigns() {
-  const result = await pool.query<CampaignQueryRow>(
-    `${CAMPAIGN_SELECT} GROUP BY c.id, uo.name, uc.name ORDER BY c.created_at DESC`
+export interface ListCampaignsFilters {
+  page: number;
+  limit: number;
+}
+
+export async function listCampaigns(filters: ListCampaignsFilters) {
+  const countResult = await pool.query<{ count: string }>(
+    "SELECT COUNT(*) FROM campaigns c WHERE c.code IS NOT NULL"
   );
-  return result.rows.map(mapQueryRow);
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
+  const result = await pool.query<CampaignQueryRow>(
+    `${CAMPAIGN_SELECT} GROUP BY c.id, uo.name, uc.name ORDER BY c.created_at DESC LIMIT $1 OFFSET $2`,
+    [limit, offset]
+  );
+  return { qrCampaigns: result.rows.map(mapQueryRow), total: Number(countResult.rows[0].count) };
 }
 
 export async function getSummaryStats() {

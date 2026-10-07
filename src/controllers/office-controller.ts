@@ -3,9 +3,10 @@ import { asyncHandler } from "../utils/asyncHandler";
 import { sendSuccess } from "../utils/response";
 import * as officeService from "../services/office-service";
 
-export const list = asyncHandler(async (_req: Request, res: Response) => {
-  const offices = await officeService.listOffices();
-  sendSuccess(res, offices);
+export const list = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.validatedQuery as unknown as { page: number; limit: number };
+  const result = await officeService.listOffices(query);
+  sendSuccess(res, result);
 });
 
 export const getById = asyncHandler(async (req: Request, res: Response) => {

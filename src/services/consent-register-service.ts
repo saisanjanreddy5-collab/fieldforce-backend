@@ -62,25 +62,32 @@ interface ConsentRecordRow {
   created_at: string;
 }
 
-export async function listConsentRecords() {
+export async function listConsentRecords(page: number, limit: number) {
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM consents");
+  const offset = (page - 1) * limit;
   const result = await pool.query<ConsentRecordRow>(
     `SELECT c.id, c.lead_id, l.full_name AS lead_full_name, l.lead_number AS lead_number,
        c.purposes, c.method, c.captured, c.status, c.captured_at, c.created_at
      FROM consents c
      JOIN leads l ON l.id = c.lead_id
-     ORDER BY c.created_at DESC`
+     ORDER BY c.created_at DESC
+     LIMIT $1 OFFSET $2`,
+    [limit, offset]
   );
-  return result.rows.map((row) => ({
-    id: row.id,
-    leadId: row.lead_id,
-    leadName: row.lead_full_name,
-    leadNumber: row.lead_number,
-    purposeBucket: classifyPurpose(row.purposes).label,
-    purposesRaw: row.purposes,
-    method: row.method,
-    captured: row.captured,
-    status: row.status,
-    capturedAt: row.captured_at,
-    createdAt: row.created_at,
-  }));
+  return {
+    records: result.rows.map((row) => ({
+      id: row.id,
+      leadId: row.lead_id,
+      leadName: row.lead_full_name,
+      leadNumber: row.lead_number,
+      purposeBucket: classifyPurpose(row.purposes).label,
+      purposesRaw: row.purposes,
+      method: row.method,
+      captured: row.captured,
+      status: row.status,
+      capturedAt: row.captured_at,
+      createdAt: row.created_at,
+    })),
+    total: Number(countResult.rows[0].count),
+  };
 }

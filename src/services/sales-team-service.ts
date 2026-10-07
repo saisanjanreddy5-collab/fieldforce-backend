@@ -22,9 +22,22 @@ function toPublicSalesTeam(row: SalesTeamRow) {
   };
 }
 
-export async function listSalesTeams() {
-  const result = await pool.query<SalesTeamRow>("SELECT * FROM sales_teams ORDER BY name ASC");
-  return result.rows.map(toPublicSalesTeam);
+export interface ListSalesTeamsFilters {
+  page: number;
+  limit: number;
+}
+
+export async function listSalesTeams(filters: ListSalesTeamsFilters) {
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM sales_teams");
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
+  const result = await pool.query<SalesTeamRow>("SELECT * FROM sales_teams ORDER BY name ASC LIMIT $1 OFFSET $2", [
+    limit,
+    offset,
+  ]);
+  return { salesTeams: result.rows.map(toPublicSalesTeam), total: Number(countResult.rows[0].count) };
 }
 
 export async function createSalesTeam(input: CreateSalesTeamInput) {

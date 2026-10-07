@@ -4,9 +4,9 @@ import { sendSuccess } from "../utils/response";
 import * as commissionRuleService from "../services/commission-rule-service";
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
-  const query = req.validatedQuery as unknown as { incentivePlanId?: string };
-  const rules = await commissionRuleService.listCommissionRules(query.incentivePlanId);
-  sendSuccess(res, rules);
+  const query = req.validatedQuery as unknown as { incentivePlanId?: string; page: number; limit: number };
+  const result = await commissionRuleService.listCommissionRules(query);
+  sendSuccess(res, result);
 });
 
 export const getById = asyncHandler(async (req: Request, res: Response) => {

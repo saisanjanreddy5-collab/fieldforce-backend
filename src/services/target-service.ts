@@ -123,42 +123,65 @@ const ACHIEVED_JOIN = `
   ) achieved ON true
 `;
 
-export async function listTargets(requestingUserId: string, requestingRole: Role, userId?: string) {
+export interface ListTargetsFilters {
+  userId?: string;
+  page: number;
+  limit: number;
+}
+
+export async function listTargets(requestingUserId: string, requestingRole: Role, filters: ListTargetsFilters) {
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
   if (requestingRole === ROLES.ADMIN) {
     const params: unknown[] = [];
     let where = "";
-    if (userId) {
-      params.push(userId);
+    if (filters.userId) {
+      params.push(filters.userId);
       where = "WHERE t.user_id = $1";
     }
+
+    const countResult = await pool.query<{ count: string }>(`SELECT COUNT(*) FROM targets t ${where}`, params);
+
+    const listParams = [...params, limit, offset];
     const result = await pool.query<TargetRow>(
       `SELECT t.*, achieved.total AS achieved_amount
        FROM targets t
        ${ACHIEVED_JOIN}
        ${where}
-       ORDER BY t.period_start DESC`,
-      params
+       ORDER BY t.period_start DESC
+       LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+      listParams
     );
-    return result.rows.map(toPublicTarget);
+    return { targets: result.rows.map(toPublicTarget), total: Number(countResult.rows[0].count) };
   }
 
   const params: unknown[] = [requestingUserId];
   let extraFilter = "";
-  if (userId) {
-    params.push(userId);
+  if (filters.userId) {
+    params.push(filters.userId);
     extraFilter = `AND t.user_id = $${params.length}`;
   }
 
+  const countResult = await pool.query<{ count: string }>(
+    `${SUBTREE_CTE}
+     SELECT COUNT(*) FROM targets t
+     WHERE t.user_id IN (SELECT id FROM subtree) ${extraFilter}`,
+    params
+  );
+
+  const listParams = [...params, limit, offset];
   const result = await pool.query<TargetRow>(
     `${SUBTREE_CTE}
      SELECT t.*, achieved.total AS achieved_amount
      FROM targets t
      ${ACHIEVED_JOIN}
      WHERE t.user_id IN (SELECT id FROM subtree) ${extraFilter}
-     ORDER BY t.period_start DESC`,
-    params
+     ORDER BY t.period_start DESC
+     LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+    listParams
   );
-  return result.rows.map(toPublicTarget);
+  return { targets: result.rows.map(toPublicTarget), total: Number(countResult.rows[0].count) };
 }
 
 async function isTargetVisibleToUser(targetUserId: string, requestingUserId: string, requestingRole: Role): Promise<boolean> {

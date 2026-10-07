@@ -4,7 +4,7 @@ import { sendSuccess } from "../utils/response";
 import * as managerChangeLogService from "../services/manager-change-log-service";
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
-  const userId = typeof req.query.userId === "string" ? req.query.userId : undefined;
-  const entries = await managerChangeLogService.listManagerChanges(userId);
+  const { userId, page, limit } = req.validatedQuery as unknown as { userId?: string; page: number; limit: number };
+  const entries = await managerChangeLogService.listManagerChanges(userId, page, limit);
   sendSuccess(res, entries);
 });

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import * as userIncentivePlanController from "../../controllers/user-incentive-plan-controller";
-import { ADMIN_ONLY, MANAGER_AND_ABOVE, requireAuth, requireRole } from "../../middleware/auth-middleware";
+import { requireAuth } from "../../middleware/auth-middleware";
+import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
 import {
   createUserIncentivePlanSchema,
@@ -11,10 +12,12 @@ const router = Router();
 
 router.use(requireAuth);
 
-// Foundation only - no UI calls this in Phase 1C. Same gates as targets:
-// Manager+ can view their own subtree's assignments, only Admin assigns.
-router.get("/", requireRole(...MANAGER_AND_ABOVE), validateQuery(listUserIncentivePlansQuerySchema), userIncentivePlanController.list);
-router.post("/", requireRole(...ADMIN_ONLY), validateBody(createUserIncentivePlanSchema), userIncentivePlanController.create);
-router.delete("/:id", requireRole(...ADMIN_ONLY), userIncentivePlanController.remove);
+// Foundation only - no UI calls this yet. Reuses the incentive_plans
+// permission rather than a separate user_incentive_plans entry: this is
+// just "assign a plan to a person" against the same plans, and there's no
+// UI section of its own to give a distinct catalog row meaning.
+router.get("/", requirePermission("incentive_plans.view"), validateQuery(listUserIncentivePlansQuerySchema), userIncentivePlanController.list);
+router.post("/", requirePermission("incentive_plans.create"), validateBody(createUserIncentivePlanSchema), userIncentivePlanController.create);
+router.delete("/:id", requirePermission("incentive_plans.delete"), userIncentivePlanController.remove);
 
 export default router;

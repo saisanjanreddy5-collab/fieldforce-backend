@@ -48,18 +48,31 @@ function toPublicRule(row: CommissionRuleRow) {
   };
 }
 
-export async function listCommissionRules(incentivePlanId?: string) {
+export interface ListCommissionRulesFilters {
+  incentivePlanId?: string;
+  page: number;
+  limit: number;
+}
+
+export async function listCommissionRules(filters: ListCommissionRulesFilters) {
   const params: unknown[] = [];
   let where = "";
-  if (incentivePlanId) {
-    params.push(incentivePlanId);
+  if (filters.incentivePlanId) {
+    params.push(filters.incentivePlanId);
     where = "WHERE incentive_plan_id = $1";
   }
+
+  const countResult = await pool.query<{ count: string }>(`SELECT COUNT(*) FROM commission_rules ${where}`, params);
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+  const listParams = [...params, limit, offset];
+
   const result = await pool.query<CommissionRuleRow>(
-    `SELECT * FROM commission_rules ${where} ORDER BY name ASC`,
-    params
+    `SELECT * FROM commission_rules ${where} ORDER BY name ASC LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+    listParams
   );
-  return result.rows.map(toPublicRule);
+  return { commissionRules: result.rows.map(toPublicRule), total: Number(countResult.rows[0].count) };
 }
 
 export async function getCommissionRuleById(id: string) {

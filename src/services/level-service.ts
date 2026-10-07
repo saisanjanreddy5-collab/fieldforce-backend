@@ -115,11 +115,22 @@ export async function getLevelSecurityTier(levelId: string): Promise<Role> {
   return result.rows[0].security_tier;
 }
 
-export async function listLevels() {
+export interface ListLevelsFilters {
+  page: number;
+  limit: number;
+}
+
+export async function listLevels(filters: ListLevelsFilters) {
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM levels");
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
   const result = await pool.query<LevelRow>(
-    `SELECT l.*, hc.count AS current_headcount FROM levels l ${HEADCOUNT_JOIN} ORDER BY l.sort_order ASC, l.name ASC`
+    `SELECT l.*, hc.count AS current_headcount FROM levels l ${HEADCOUNT_JOIN} ORDER BY l.sort_order ASC, l.name ASC LIMIT $1 OFFSET $2`,
+    [limit, offset]
   );
-  return result.rows.map(toPublicLevel);
+  return { levels: result.rows.map(toPublicLevel), total: Number(countResult.rows[0].count) };
 }
 
 async function getLevelById(id: string) {

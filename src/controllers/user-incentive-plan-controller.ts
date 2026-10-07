@@ -4,9 +4,9 @@ import { sendSuccess } from "../utils/response";
 import * as userIncentivePlanService from "../services/user-incentive-plan-service";
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
-  const query = req.validatedQuery as unknown as { userId?: string };
-  const assignments = await userIncentivePlanService.listUserIncentivePlans(req.user!.id, req.user!.role, query.userId);
-  sendSuccess(res, assignments);
+  const query = req.validatedQuery as unknown as { userId?: string; page: number; limit: number };
+  const result = await userIncentivePlanService.listUserIncentivePlans(req.user!.id, req.user!.role, query);
+  sendSuccess(res, result);
 });
 
 export const create = asyncHandler(async (req: Request, res: Response) => {

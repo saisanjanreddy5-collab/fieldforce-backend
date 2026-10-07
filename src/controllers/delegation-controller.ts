@@ -3,9 +3,10 @@ import { asyncHandler } from "../utils/asyncHandler";
 import { sendSuccess } from "../utils/response";
 import * as delegationService from "../services/delegation-service";
 
-export const list = asyncHandler(async (_req: Request, res: Response) => {
-  const delegations = await delegationService.listDelegations();
-  sendSuccess(res, delegations);
+export const list = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.validatedQuery as unknown as { page: number; limit: number };
+  const result = await delegationService.listDelegations(query);
+  sendSuccess(res, result);
 });
 
 export const create = asyncHandler(async (req: Request, res: Response) => {

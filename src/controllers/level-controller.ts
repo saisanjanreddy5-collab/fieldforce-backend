@@ -3,9 +3,10 @@ import { asyncHandler } from "../utils/asyncHandler";
 import { sendSuccess } from "../utils/response";
 import * as levelService from "../services/level-service";
 
-export const list = asyncHandler(async (_req: Request, res: Response) => {
-  const levels = await levelService.listLevels();
-  sendSuccess(res, levels);
+export const list = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.validatedQuery as unknown as { page: number; limit: number };
+  const result = await levelService.listLevels(query);
+  sendSuccess(res, result);
 });
 
 export const create = asyncHandler(async (req: Request, res: Response) => {

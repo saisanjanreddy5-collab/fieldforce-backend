@@ -2,15 +2,24 @@ import { Router } from "express";
 import * as fofoOnboardingController from "../../controllers/fofo-onboarding-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
-import { validateBody } from "../../middleware/validate-middleware";
+import { validateBody, validateQuery } from "../../middleware/validate-middleware";
 import { documentUpload } from "../../services/lead-document-service";
-import { decideStepSchema, updateDocumentStatusSchema } from "../../validators/fofo-onboarding-validator";
+import {
+  decideStepSchema,
+  listFofoOnboardingsQuerySchema,
+  updateDocumentStatusSchema,
+} from "../../validators/fofo-onboarding-validator";
 
 const router = Router();
 
 router.use(requireAuth);
 
-router.get("/", requirePermission("fofo_onboarding.view"), fofoOnboardingController.list);
+router.get(
+  "/",
+  requirePermission("fofo_onboarding.view"),
+  validateQuery(listFofoOnboardingsQuerySchema),
+  fofoOnboardingController.list
+);
 router.get("/:leadId", requirePermission("fofo_onboarding.view"), fofoOnboardingController.getHandoff);
 router.patch(
   "/steps/:stepId/decide",

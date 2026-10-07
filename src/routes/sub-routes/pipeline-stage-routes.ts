@@ -2,9 +2,10 @@ import { Router } from "express";
 import * as pipelineStageController from "../../controllers/pipeline-stage-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
-import { validateBody } from "../../middleware/validate-middleware";
+import { validateBody, validateQuery } from "../../middleware/validate-middleware";
 import {
   createPipelineStageSchema,
+  listPipelineStagesQuerySchema,
   reorderPipelineStagesSchema,
   updatePipelineStageSchema,
 } from "../../validators/pipeline-stage-validator";
@@ -13,7 +14,12 @@ const router = Router();
 
 router.use(requireAuth);
 
-router.get("/", requirePermission("pipeline_stages.view"), pipelineStageController.list);
+router.get(
+  "/",
+  requirePermission("pipeline_stages.view"),
+  validateQuery(listPipelineStagesQuerySchema),
+  pipelineStageController.list
+);
 router.post(
   "/",
   requirePermission("pipeline_stages.manage"),

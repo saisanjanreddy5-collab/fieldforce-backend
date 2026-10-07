@@ -14,6 +14,8 @@ const router = Router();
 // bypasses CORS entirely regardless, same trust model QR's public code
 // already uses.
 
+router.get("/states", publicWebsiteLeadController.listStates);
+
 router.post(
   "/:apiKey/submit",
   qrSubmitRateLimiter,

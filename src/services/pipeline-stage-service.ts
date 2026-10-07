@@ -30,6 +30,29 @@ export async function listPipelineStages() {
   return result.rows.map(toPublicStage);
 }
 
+export interface ListPipelineStagesFilters {
+  page: number;
+  limit: number;
+}
+
+// Separate from listPipelineStages() above, which reorderPipelineStages()
+// below still calls internally to hand back the full fresh ordering after a
+// drag-to-reorder - that caller needs every stage, never a single page of
+// them, so it keeps using the unpaginated helper. This one backs the GET
+// list endpoint only.
+export async function listPipelineStagesPaginated(filters: ListPipelineStagesFilters) {
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM pipeline_stages");
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
+  const result = await pool.query<PipelineStageRow>(
+    "SELECT * FROM pipeline_stages ORDER BY sort_order ASC LIMIT $1 OFFSET $2",
+    [limit, offset]
+  );
+  return { pipelineStages: result.rows.map(toPublicStage), total: Number(countResult.rows[0].count) };
+}
+
 export interface CreatePipelineStageInput {
   key: string;
   label: string;

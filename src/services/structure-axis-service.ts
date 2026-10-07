@@ -22,9 +22,22 @@ function toPublicAxis(row: StructureAxisRow) {
   };
 }
 
-export async function listStructureAxes() {
-  const result = await pool.query<StructureAxisRow>("SELECT * FROM structure_axes ORDER BY sort_order ASC");
-  return result.rows.map(toPublicAxis);
+export interface ListStructureAxesFilters {
+  page: number;
+  limit: number;
+}
+
+export async function listStructureAxes(filters: ListStructureAxesFilters) {
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM structure_axes");
+
+  const limit = filters.limit;
+  const offset = (filters.page - 1) * filters.limit;
+
+  const result = await pool.query<StructureAxisRow>(
+    "SELECT * FROM structure_axes ORDER BY sort_order ASC LIMIT $1 OFFSET $2",
+    [limit, offset]
+  );
+  return { structureAxes: result.rows.map(toPublicAxis), total: Number(countResult.rows[0].count) };
 }
 
 // Toggle only - per the approved Phase 3 scope, this table has no lookup

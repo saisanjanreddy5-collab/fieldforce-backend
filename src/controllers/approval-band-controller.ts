@@ -3,9 +3,10 @@ import { asyncHandler } from "../utils/asyncHandler";
 import { sendSuccess } from "../utils/response";
 import * as approvalBandService from "../services/approval-band-service";
 
-export const list = asyncHandler(async (_req: Request, res: Response) => {
-  const bands = await approvalBandService.listApprovalBands();
-  sendSuccess(res, bands);
+export const list = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.validatedQuery as unknown as { page: number; limit: number };
+  const result = await approvalBandService.listApprovalBands(query);
+  sendSuccess(res, result);
 });
 
 export const create = asyncHandler(async (req: Request, res: Response) => {
