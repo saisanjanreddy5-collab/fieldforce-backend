@@ -33,10 +33,17 @@ async function start(): Promise<void> {
     })
   );
 
-  // The verify callback runs for every request, but only stashes the raw
-  // buffer already being read - it changes nothing about normal parsing, and
-  // every route except the Frappe webhook ignores req.rawBody entirely.
-  app.use(express.json({ verify: (req, _res, buf) => { (req as express.Request).rawBody = buf; } }));
+  // Frappe's own webhook requests don't carry Content-Type: application/json
+  // (confirmed against a real failed delivery, not guessed) - express.json()
+  // below only parses a body when the Content-Type matches, so it silently
+  // skips these requests entirely, leaving nothing to verify the HMAC
+  // signature against. Reading them as raw bytes here, before the global
+  // JSON parser even sees them, works regardless of whatever Content-Type
+  // (or none) Frappe actually sends - every other route is unaffected, this
+  // only applies to these two specific paths.
+  app.use("/api/integrations/frappe/webhook", express.raw({ type: () => true, limit: "1mb" }));
+
+  app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
 
   app.use("/api", routes);
