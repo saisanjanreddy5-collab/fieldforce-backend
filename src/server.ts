@@ -33,7 +33,10 @@ async function start(): Promise<void> {
     })
   );
 
-  app.use(express.json());
+  // The verify callback runs for every request, but only stashes the raw
+  // buffer already being read - it changes nothing about normal parsing, and
+  // every route except the Frappe webhook ignores req.rawBody entirely.
+  app.use(express.json({ verify: (req, _res, buf) => { (req as express.Request).rawBody = buf; } }));
   app.use(express.urlencoded({ extended: true }));
 
   app.use("/api", routes);

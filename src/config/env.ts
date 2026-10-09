@@ -62,6 +62,14 @@ const envSchema = z.object({
   FRAPPE_BASE_URL: z.string().optional(),
   FRAPPE_API_KEY: z.string().optional(),
   FRAPPE_API_SECRET: z.string().optional(),
+
+  // The "Webhook Secret" entered on each Frappe-side Webhook record - Frappe
+  // signs every webhook POST with HMAC-SHA256 of this secret over the raw
+  // JSON body, sent as the X-Frappe-Webhook-Signature header (confirmed
+  // against Frappe framework's own webhook.py, not guessed) - a materially
+  // different scheme from WHATSAPP/SMARTFLO_WEBHOOK_SECRET above, which are
+  // plain shared-secret headers compared directly, not HMAC signatures.
+  FRAPPE_WEBHOOK_SECRET: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

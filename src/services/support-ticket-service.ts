@@ -80,7 +80,14 @@ export async function listSupportTickets(requestingUserId: string, filters: List
 
   const conditions = [
     "l.is_deleted = false",
-    "(l.owner_id IN (SELECT id FROM subtree) OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1))",
+    // Matches lead-service.ts's isLeadVisibleToUser exactly (subtree, shares,
+    // and the same admin-sees-unassigned-leads carve-out) - without the last
+    // clause, a ticket on an unowned lead an admin can otherwise see via
+    // GET /leads/:id/support-tickets would silently disappear from this
+    // top-level listing for that same admin.
+    `(l.owner_id IN (SELECT id FROM subtree)
+      OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
+      OR (l.owner_id IS NULL AND EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin')))`,
   ];
   const params: unknown[] = [requestingUserId];
 
@@ -124,7 +131,10 @@ export async function createTicketForLead(
   // also gives us the lead's email to hand Frappe as raised_by.
   const lead = await getLeadById(leadId, requestingUserId);
 
-  const frappeTicket = await frappeService.createTicketInFrappe(subject, description, lead.email ?? undefined);
+  // `||`, not `??` - a lead with email set to "" (not null) must still be
+  // treated as "no email", same as it would be for any other falsy-but-not-
+  // nullish value here.
+  const frappeTicket = await frappeService.createTicketInFrappe(subject, description, lead.email || undefined);
 
   const result = await pool.query<SupportTicketRow>(
     `INSERT INTO support_tickets (lead_id, subject, description, status, frappe_ticket_name, created_by)
@@ -207,6 +217,49 @@ export async function replyToTicket(ticketId: string, message: string, requestin
   );
 
   return toPublicMessage(result.rows[0]);
+}
+
+// Everything below is for Phase 2's webhook - called from Frappe itself,
+// not an authenticated FieldForce user, so (matching whatsapp-service.ts's
+// own handleWebhookEvent) there's no requestingUserId to check lead
+// visibility against and no Activity log entry raised, the same scope
+// whatsapp's inbound-message path already settled on for this exact kind of
+// system-to-system write.
+
+// Silently no-ops when the ticket isn't one we track locally (e.g. it was
+// never created through FieldForce) - same "nothing to do" shape as
+// whatsapp-service.ts's `if (!leadId) continue`, not an error condition.
+export async function syncTicketStatusFromWebhook(frappeTicketName: string, status: string): Promise<void> {
+  await pool.query("UPDATE support_tickets SET status = $1, updated_at = now() WHERE frappe_ticket_name = $2", [
+    status,
+    frappeTicketName,
+  ]);
+}
+
+// frappeCommunicationName is Frappe's own Communication doc name - the
+// ON CONFLICT DO NOTHING is what makes a retried webhook delivery (Frappe
+// does retry) a safe no-op instead of a duplicate message on the ticket.
+export async function recordInboundReplyFromWebhook(
+  frappeTicketName: string,
+  body: string,
+  frappeCommunicationName: string
+): Promise<void> {
+  const ticket = await pool.query<{ id: string }>("SELECT id FROM support_tickets WHERE frappe_ticket_name = $1", [
+    frappeTicketName,
+  ]);
+  if (ticket.rows.length === 0) return;
+
+  // The ON CONFLICT target has to repeat the partial index's own WHERE
+  // clause verbatim (model.ts's idx_support_ticket_messages_frappe_
+  // communication_name) - Postgres only infers a partial unique index as
+  // the arbiter when the predicate matches exactly, not from the column
+  // list alone.
+  await pool.query(
+    `INSERT INTO support_ticket_messages (ticket_id, direction, body, frappe_communication_name)
+     VALUES ($1, 'inbound', $2, $3)
+     ON CONFLICT (frappe_communication_name) WHERE frappe_communication_name IS NOT NULL DO NOTHING`,
+    [ticket.rows[0].id, body, frappeCommunicationName]
+  );
 }
 
 export async function listMessagesForTicket(ticketId: string, requestingUserId: string) {

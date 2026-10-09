@@ -1633,7 +1633,7 @@ Regards,', 'active', 4)
       lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
       subject VARCHAR(255) NOT NULL,
       description TEXT,
-      status VARCHAR(50) NOT NULL,
+      status VARCHAR(140) NOT NULL CHECK (length(trim(status)) > 0),
       frappe_ticket_name VARCHAR(140) UNIQUE,
       created_by UUID REFERENCES users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1656,6 +1656,15 @@ Regards,', 'active', 4)
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
     `CREATE INDEX IF NOT EXISTS idx_support_ticket_messages_ticket_id ON support_ticket_messages(ticket_id)`,
+
+    // Phase 2: Frappe's own Communication doc name for an inbound reply,
+    // used purely so a retried/duplicate webhook delivery (Frappe does
+    // retry) can be recognized and ignored via ON CONFLICT DO NOTHING,
+    // rather than appearing twice on the ticket. Added as a retrofit ALTER
+    // (not the inline CREATE TABLE above) since that table already exists -
+    // same reason activities_type_check is a separate ALTER further up.
+    `ALTER TABLE support_ticket_messages ADD COLUMN IF NOT EXISTS frappe_communication_name VARCHAR(140)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_support_ticket_messages_frappe_communication_name ON support_ticket_messages(frappe_communication_name) WHERE frappe_communication_name IS NOT NULL`,
   ];
 
   try {

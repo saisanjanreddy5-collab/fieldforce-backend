@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-export const ACTIVITY_TYPES = ["call", "email", "teams_meeting", "site_visit", "whatsapp", "internal"] as const;
+// Kept in sync with the activities_type_check CHECK constraint in model.ts -
+// a type allowed there but missing here means rows can be created (activity
+// creation doesn't go through this schema) but never filtered by via
+// GET /activities?type=..., which does.
+export const ACTIVITY_TYPES = ["call", "email", "teams_meeting", "site_visit", "whatsapp", "internal", "support_ticket"] as const;
 
 export const createActivitySchema = z.object({
   type: z.enum(ACTIVITY_TYPES),
