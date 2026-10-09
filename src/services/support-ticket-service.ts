@@ -28,17 +28,25 @@ interface SupportTicketRow {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  // Only present on queries that join leads/users for display purposes
+  // (same split quote-service.ts uses) - undefined, not null, when a query
+  // doesn't select them, so toPublicTicket can tell "not joined" apart from
+  // "joined but genuinely has no name".
+  lead_full_name?: string;
+  created_by_name?: string | null;
 }
 
 function toPublicTicket(row: SupportTicketRow) {
   return {
     id: row.id,
     leadId: row.lead_id,
+    leadFullName: row.lead_full_name ?? null,
     subject: row.subject,
     description: row.description,
     status: row.status,
     frappeTicketName: row.frappe_ticket_name,
     createdBy: row.created_by,
+    createdByName: row.created_by_name ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -108,10 +116,15 @@ export async function listSupportTickets(requestingUserId: string, filters: List
 
   const limitParamIndex = params.length + 1;
   const offsetParamIndex = params.length + 2;
+  // Same l.full_name/u.name enrichment quote-service.ts's own list query
+  // uses, so the frontend never has to separately look up a lead's name
+  // just to show who a ticket belongs to.
   const result = await pool.query<SupportTicketRow>(
     `${TICKET_VISIBILITY_SUBTREE_CTE}
-     SELECT t.* FROM support_tickets t
+     SELECT t.*, l.full_name AS lead_full_name, u.name AS created_by_name
+     FROM support_tickets t
      INNER JOIN leads l ON l.id = t.lead_id
+     LEFT JOIN users u ON u.id = t.created_by
      WHERE ${whereClause}
      ORDER BY t.created_at DESC
      LIMIT $${limitParamIndex} OFFSET $${offsetParamIndex}`,
@@ -175,7 +188,14 @@ export async function listTicketsForLead(leadId: string, requestingUserId: strin
 // ticketId calls this first, so none of them can be reached for a ticket
 // whose lead the caller can't see.
 async function getVisibleTicketOrThrow(ticketId: string, requestingUserId: string): Promise<SupportTicketRow> {
-  const result = await pool.query<SupportTicketRow>("SELECT * FROM support_tickets WHERE id = $1", [ticketId]);
+  const result = await pool.query<SupportTicketRow>(
+    `SELECT t.*, l.full_name AS lead_full_name, u.name AS created_by_name
+     FROM support_tickets t
+     JOIN leads l ON l.id = t.lead_id
+     LEFT JOIN users u ON u.id = t.created_by
+     WHERE t.id = $1`,
+    [ticketId]
+  );
   if (result.rows.length === 0) {
     throw new ApiError(404, "Support ticket not found");
   }
