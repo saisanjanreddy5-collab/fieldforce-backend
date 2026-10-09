@@ -40,6 +40,23 @@ export const listMessages = asyncHandler(async (req: Request, res: Response) => 
   sendSuccess(res, messages);
 });
 
+// Both webhook routes are mounted behind express.raw() (see server.ts), not
+// express.json() - Frappe's own requests don't carry a Content-Type the
+// JSON parser recognizes, so req.body here is the untouched raw Buffer, not
+// a pre-parsed object. Verifies the HMAC signature against those exact
+// bytes, then parses it - a body that isn't valid JSON is as much a
+// rejection as a bad signature, since there's nothing safe to act on.
+function verifyAndParseWebhookBody(req: Request): Record<string, unknown> | null {
+  const signature = req.headers["x-frappe-webhook-signature"] as string | undefined;
+  const rawBody = req.body as Buffer;
+  if (!frappeService.isWebhookSignatureValid(rawBody, signature)) return null;
+  try {
+    return JSON.parse(rawBody.toString("utf8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 // Public callback from Frappe's own Webhook doctype, configured on HD
 // Ticket's on_update event - no CRM user is logged in here, so the HMAC
 // signature stands in for auth, same role a shared secret plays for the
@@ -47,12 +64,12 @@ export const listMessages = asyncHandler(async (req: Request, res: Response) => 
 // Webhook Data on the Frappe side is configured to send exactly
 // {ticket_name, status} - see frappe-service.ts's isWebhookSignatureValid.
 export const ticketStatusWebhook = asyncHandler(async (req: Request, res: Response) => {
-  const signature = req.headers["x-frappe-webhook-signature"] as string | undefined;
-  if (!frappeService.isWebhookSignatureValid(req.rawBody, signature)) {
+  const body = verifyAndParseWebhookBody(req);
+  if (!body) {
     res.status(401).json({ success: false, message: "Unauthorized" });
     return;
   }
-  const { ticket_name, status } = req.body as { ticket_name?: string; status?: string };
+  const { ticket_name, status } = body as { ticket_name?: string; status?: string };
   if (ticket_name && status) {
     await supportTicketService.syncTicketStatusFromWebhook(ticket_name, status);
   }
@@ -65,12 +82,12 @@ export const ticketStatusWebhook = asyncHandler(async (req: Request, res: Respon
 // (sent_or_received == "Sent") never reach this endpoint at all, so there's
 // no need to filter those back out here.
 export const newReplyWebhook = asyncHandler(async (req: Request, res: Response) => {
-  const signature = req.headers["x-frappe-webhook-signature"] as string | undefined;
-  if (!frappeService.isWebhookSignatureValid(req.rawBody, signature)) {
+  const body = verifyAndParseWebhookBody(req);
+  if (!body) {
     res.status(401).json({ success: false, message: "Unauthorized" });
     return;
   }
-  const { ticket_name, content, communication_name } = req.body as {
+  const { ticket_name, content, communication_name } = body as {
     ticket_name?: string;
     content?: string;
     communication_name?: string;
