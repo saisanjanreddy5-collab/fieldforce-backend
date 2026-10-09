@@ -46,6 +46,7 @@ import publicWebsiteLeadRoutes from "./sub-routes/public-website-lead-routes";
 import quoteRoutes from "./sub-routes/quote-routes";
 import globalSearchRoutes from "./sub-routes/global-search-routes";
 import supportTicketRoutes from "./sub-routes/support-ticket-routes";
+import frappeWebhookRoutes from "./sub-routes/frappe-webhook-routes";
 
 const router = Router();
 
@@ -54,6 +55,7 @@ router.use("/users", userRoutes);
 router.use("/integrations/microsoft", microsoftRoutes);
 router.use("/integrations/smartflo", smartfloRoutes);
 router.use("/integrations/whatsapp", whatsappRoutes);
+router.use("/integrations/frappe", frappeWebhookRoutes);
 router.use("/integrations", integrationsRoutes);
 router.use("/leads", leadRoutes);
 router.use("/opportunities", opportunityRoutes);

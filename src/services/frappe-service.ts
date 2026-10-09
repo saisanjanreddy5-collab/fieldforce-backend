@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { env } from "../config/env";
 import { isFrappeConfigured } from "../config/frappe";
 import { ApiError } from "../utils/ApiError";
@@ -59,14 +60,46 @@ function parseServerMessages(body: FrappeErrorBody): FrappeServerMessage[] {
   }
 }
 
+// raise_exception is the only reliable signal that a message represents a
+// real failure - frappe.msgprint can set indicator: "red" on a purely
+// informational notice with no exception raised, so treating every red
+// message as fatal would misreport a genuine success (e.g. a ticket that
+// really was created) as a rejected request.
 function findServerError(body: FrappeErrorBody): string | undefined {
   const messages = parseServerMessages(body);
-  const errorMessage = messages.find((m) => m.raise_exception || m.indicator === "red");
+  const errorMessage = messages.find((m) => m.raise_exception);
   return errorMessage?.message;
 }
 
 function describeFrappeError(body: FrappeErrorBody): string {
   return findServerError(body) ?? body.exception ?? "Unknown error from Frappe";
+}
+
+// Shared by every call below: POST to Frappe, and treat both an HTTP error
+// and a 200-with-an-embedded-exception (see findServerError's comment) as a
+// real failure. A response body that isn't even valid JSON is also a
+// failure, never a silent success - a truncated/malformed 200 is not
+// evidence the ticket or reply actually went through.
+async function postToFrappe<T extends object>(path: string, payload: unknown, errorPrefix: string): Promise<T> {
+  assertConfigured();
+
+  const response = await fetch(`${env.FRAPPE_BASE_URL}${path}`, {
+    method: "POST",
+    headers: requestHeaders(),
+    body: JSON.stringify(payload),
+  });
+
+  let body: T & FrappeErrorBody;
+  try {
+    body = (await response.json()) as T & FrappeErrorBody;
+  } catch {
+    throw new ApiError(502, `${errorPrefix}: Frappe returned a response that could not be read`);
+  }
+
+  if (!response.ok || findServerError(body)) {
+    throw new ApiError(502, `${errorPrefix}: ${describeFrappeError(body)}`);
+  }
+  return body;
 }
 
 // The HD Ticket doctype's real field list, confirmed against Frappe
@@ -92,21 +125,13 @@ export async function createTicketInFrappe(
   description: string | undefined,
   raisedByEmail: string | undefined
 ): Promise<CreatedFrappeTicket> {
-  assertConfigured();
-
-  const response = await fetch(`${env.FRAPPE_BASE_URL}/api/resource/HD Ticket`, {
-    method: "POST",
-    headers: requestHeaders(),
-    body: JSON.stringify({
-      subject,
-      description,
-      raised_by: raisedByEmail,
-    }),
-  });
-
-  const body = (await response.json()) as { data?: FrappeTicketResource } & FrappeErrorBody;
-  if (!response.ok || !body.data || findServerError(body)) {
-    throw new ApiError(502, `Frappe rejected the ticket: ${describeFrappeError(body)}`);
+  const body = await postToFrappe<{ data?: FrappeTicketResource }>(
+    "/api/resource/HD Ticket",
+    { subject, description, raised_by: raisedByEmail },
+    "Frappe rejected the ticket"
+  );
+  if (!body.data) {
+    throw new ApiError(502, "Frappe rejected the ticket: no ticket data in the response");
   }
 
   return { frappeTicketName: body.data.name, status: body.data.status };
@@ -120,19 +145,31 @@ export async function createTicketInFrappe(
 // the ticket's raised_by - this is what actually sends the customer an
 // email, not a side effect we need to replicate ourselves.
 export async function replyToTicketInFrappe(frappeTicketName: string, message: string): Promise<void> {
-  assertConfigured();
+  await postToFrappe(
+    "/api/method/helpdesk.api.ticket.bulk_reply",
+    { ticket_ids: [frappeTicketName], message },
+    "Frappe rejected the reply"
+  );
+}
 
-  const response = await fetch(`${env.FRAPPE_BASE_URL}/api/method/helpdesk.api.ticket.bulk_reply`, {
-    method: "POST",
-    headers: requestHeaders(),
-    body: JSON.stringify({
-      ticket_ids: [frappeTicketName],
-      message,
-    }),
-  });
+// Frappe's webhook signing scheme (confirmed against frappe/integrations/
+// doctype/webhook/webhook.py, not guessed): base64(HMAC-SHA256(raw JSON
+// body, the webhook's configured secret)), sent as X-Frappe-Webhook-Signature.
+// Needs the exact raw bytes Frappe signed - see rawBody's definition in
+// types/express.d.ts for why a re-serialized req.body can't be used here.
+// Fails closed (false) whenever the secret isn't configured yet, same
+// "unset means not set up, not unguarded" rule every other webhook secret in
+// this codebase follows.
+export function isWebhookSignatureValid(rawBody: Buffer | undefined, signatureHeader: string | undefined): boolean {
+  if (!env.FRAPPE_WEBHOOK_SECRET || !rawBody || !signatureHeader) return false;
 
-  const body = (await response.json().catch(() => ({}))) as FrappeErrorBody;
-  if (!response.ok || findServerError(body)) {
-    throw new ApiError(502, `Frappe rejected the reply: ${describeFrappeError(body)}`);
-  }
+  const expected = crypto.createHmac("sha256", env.FRAPPE_WEBHOOK_SECRET).update(rawBody).digest("base64");
+
+  const expectedBuffer = Buffer.from(expected);
+  const providedBuffer = Buffer.from(signatureHeader);
+  // timingSafeEqual throws on mismatched lengths rather than returning
+  // false, and an attacker-controlled header is exactly the input this
+  // needs to be safe against.
+  if (expectedBuffer.length !== providedBuffer.length) return false;
+  return crypto.timingSafeEqual(expectedBuffer, providedBuffer);
 }
