@@ -165,7 +165,7 @@ export async function createTables(): Promise<void> {
     // recreated explicitly, same retrofit shape as every other
     // already-existing-table change in this file.
     `ALTER TABLE activities DROP CONSTRAINT IF EXISTS activities_type_check`,
-    `ALTER TABLE activities ADD CONSTRAINT activities_type_check CHECK (type IN ('call','email','teams_meeting','site_visit','whatsapp','internal'))`,
+    `ALTER TABLE activities ADD CONSTRAINT activities_type_check CHECK (type IN ('call','email','teams_meeting','site_visit','whatsapp','internal','support_ticket'))`,
     `CREATE INDEX IF NOT EXISTS idx_activities_assigned_to_due_date ON activities(assigned_to, due_date)`,
 
     `CREATE TABLE IF NOT EXISTS activity_comments (
@@ -1619,6 +1619,43 @@ Regards,', 'active', 4)
       ('manager','support_tickets.view'), ('manager','support_tickets.create'), ('manager','support_tickets.update'),
       ('agent','support_tickets.view'), ('agent','support_tickets.create'), ('agent','support_tickets.update')
     ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Support tickets, backed by Frappe Helpdesk (frappe-service.ts) - each
+    // row mirrors one real HD Ticket on our Frappe site, tied to a Lead since
+    // there's no Customers table yet (see customers.* permissions above,
+    // still authorization-only scaffolding). status has no CHECK constraint,
+    // unlike e.g. whatsapp_messages.status: Frappe's HD Ticket status is
+    // itself a configurable Link doctype (HD Ticket Status), not a fixed
+    // enum, so we store back whatever string Frappe reports rather than
+    // asserting a closed set here.
+    `CREATE TABLE IF NOT EXISTS support_tickets (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      subject VARCHAR(255) NOT NULL,
+      description TEXT,
+      status VARCHAR(50) NOT NULL,
+      frappe_ticket_name VARCHAR(140) UNIQUE,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_support_tickets_lead_id ON support_tickets(lead_id)`,
+
+    // The conversation thread for a ticket - outbound rows are our own
+    // agent's replies (also posted to Frappe at the same time, see
+    // support-ticket-service.ts's replyToTicket); inbound rows are the
+    // customer's/Frappe-side replies, which Phase 2's webhook will populate -
+    // this table exists now so Phase 1's outbound replies have somewhere to
+    // land, not because inbound ingestion is wired up yet.
+    `CREATE TABLE IF NOT EXISTS support_ticket_messages (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      ticket_id UUID NOT NULL REFERENCES support_tickets(id) ON DELETE CASCADE,
+      direction VARCHAR(10) NOT NULL CHECK (direction IN ('inbound','outbound')),
+      body TEXT NOT NULL,
+      sent_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_support_ticket_messages_ticket_id ON support_ticket_messages(ticket_id)`,
   ];
 
   try {

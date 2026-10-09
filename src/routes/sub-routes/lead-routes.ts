@@ -7,6 +7,7 @@ import { emailAttachmentUpload } from "../../services/microsoft-service";
 import * as smartfloController from "../../controllers/smartflo-controller";
 import * as whatsappController from "../../controllers/whatsapp-controller";
 import * as quoteController from "../../controllers/quote-controller";
+import * as supportTicketController from "../../controllers/support-ticket-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
@@ -47,6 +48,8 @@ router.post(
 router.get("/:id/consent", requirePermission("leads.view"), leadController.getConsent);
 
 router.get("/:id/quotes", requirePermission("quotes.view"), quoteController.listForLead);
+
+router.get("/:id/support-tickets", requirePermission("support_tickets.view"), supportTicketController.listForLead);
 
 router.post(
   "/:id/microsoft/email",

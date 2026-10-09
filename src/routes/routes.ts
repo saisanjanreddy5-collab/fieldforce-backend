@@ -45,6 +45,7 @@ import websiteLeadSourceRoutes from "./sub-routes/website-lead-source-routes";
 import publicWebsiteLeadRoutes from "./sub-routes/public-website-lead-routes";
 import quoteRoutes from "./sub-routes/quote-routes";
 import globalSearchRoutes from "./sub-routes/global-search-routes";
+import supportTicketRoutes from "./sub-routes/support-ticket-routes";
 
 const router = Router();
 
@@ -94,6 +95,7 @@ router.use("/website-lead-sources", websiteLeadSourceRoutes);
 router.use("/public/website-leads", publicWebsiteLeadRoutes);
 router.use("/quotes", quoteRoutes);
 router.use("/search", globalSearchRoutes);
+router.use("/support-tickets", supportTicketRoutes);
 
 router.get("/health", (_req, res) => {
   res.json({ success: true, message: "FieldForce API is running" });
