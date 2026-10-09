@@ -51,6 +51,17 @@ const envSchema = z.object({
   // apart from a random internet request - same pattern, and same
   // fail-closed-when-unset behavior, as SMARTFLO_WEBHOOK_SECRET.
   WHATSAPP_WEBHOOK_SECRET: z.string().optional(),
+
+  // Frappe Helpdesk (Support tickets) - our own dedicated Frappe Cloud site,
+  // one account for the whole org, not per-user. Unlike Smartflo/WhatsApp
+  // above, the base URL itself has no fixed vendor constant - it's our own
+  // site's address, so it's configured here rather than hardcoded next to a
+  // BASE_URL constant in config/frappe.ts. Auth is Frappe's token scheme
+  // (Authorization: token <key>:<secret>), both optional for the same
+  // boot-without-crashing reason as the other integrations' credentials.
+  FRAPPE_BASE_URL: z.string().optional(),
+  FRAPPE_API_KEY: z.string().optional(),
+  FRAPPE_API_SECRET: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
