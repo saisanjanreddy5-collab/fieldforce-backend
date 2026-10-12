@@ -2,6 +2,7 @@ import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { recordAuditEvent } from "./audit-log-service";
 import { bulkImportRowSchema } from "../validators/lead-validator";
+import { createCustomerFromLead } from "./customer-service";
 
 // Rule A (hierarchy-based visibility): a lead is visible to its owner and to
 // everyone directly above the owner in the reporting chain. Walking UP from a
@@ -992,6 +993,22 @@ export async function updateLead(
         actorName,
         ipAddress,
       });
+
+      // A customer is never created directly - this is the one place a
+      // lead becomes one, the moment it reaches 'converted'. Idempotent
+      // (ON CONFLICT (lead_id) DO NOTHING inside createCustomerFromLead), so
+      // re-saving an already-converted lead is a no-op, not a duplicate.
+      // Caught, not rethrown: the lead's own status UPDATE above already
+      // committed by this point, so a failure here must not turn into a 500
+      // that tells the caller the conversion failed when it actually
+      // succeeded - it would just mean the customer row needs a retry.
+      if (after.status === "converted") {
+        try {
+          await createCustomerFromLead(after);
+        } catch (err) {
+          console.error(`Failed to auto-create customer for converted lead ${leadId}:`, err);
+        }
+      }
     }
     if (updates.ownerId !== undefined && updates.ownerId !== before.owner_id) {
       const ownerIds = [before.owner_id, updates.ownerId].filter((id): id is string => id !== null);
