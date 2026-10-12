@@ -24,6 +24,7 @@ interface SupportTicketRow {
   subject: string;
   description: string | null;
   status: string;
+  priority: string;
   frappe_ticket_name: string | null;
   created_by: string | null;
   created_at: string;
@@ -44,6 +45,7 @@ function toPublicTicket(row: SupportTicketRow) {
     subject: row.subject,
     description: row.description,
     status: row.status,
+    priority: row.priority,
     frappeTicketName: row.frappe_ticket_name,
     createdBy: row.created_by,
     createdByName: row.created_by_name ?? null,
@@ -138,6 +140,7 @@ export async function createTicketForLead(
   leadId: string,
   subject: string,
   description: string | undefined,
+  priority: string,
   requestingUserId: string
 ) {
   // Throws 403/404 on its own if this lead isn't visible/doesn't exist -
@@ -147,13 +150,21 @@ export async function createTicketForLead(
   // `||`, not `??` - a lead with email set to "" (not null) must still be
   // treated as "no email", same as it would be for any other falsy-but-not-
   // nullish value here.
-  const frappeTicket = await frappeService.createTicketInFrappe(subject, description, lead.email || undefined);
+  const frappeTicket = await frappeService.createTicketInFrappe(subject, description, lead.email || undefined, priority);
 
   const result = await pool.query<SupportTicketRow>(
-    `INSERT INTO support_tickets (lead_id, subject, description, status, frappe_ticket_name, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO support_tickets (lead_id, subject, description, status, priority, frappe_ticket_name, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
-    [leadId, subject, description ?? null, frappeTicket.status, frappeTicket.frappeTicketName, requestingUserId]
+    [
+      leadId,
+      subject,
+      description ?? null,
+      frappeTicket.status,
+      frappeTicket.priority ?? priority,
+      frappeTicket.frappeTicketName,
+      requestingUserId,
+    ]
   );
 
   // Same "log a real activity" convention as every other integration
@@ -209,6 +220,38 @@ export async function getTicketById(ticketId: string, requestingUserId: string) 
   return toPublicTicket(ticket);
 }
 
+// The resolve/close action - lets an agent change a ticket's status from
+// inside FieldForce itself, rather than needing Frappe's own UI (closing
+// the gap that otherwise would have left this one action requiring direct
+// Frappe access, contrary to the whole point of this integration).
+export async function updateTicketStatus(ticketId: string, status: string, requestingUserId: string) {
+  const ticket = await getVisibleTicketOrThrow(ticketId, requestingUserId);
+
+  if (!ticket.frappe_ticket_name) {
+    throw new ApiError(409, "This ticket has no linked Frappe ticket yet");
+  }
+
+  await frappeService.updateTicketStatusInFrappe(ticket.frappe_ticket_name, status);
+
+  const result = await pool.query<SupportTicketRow>(
+    "UPDATE support_tickets SET status = $1, updated_at = now() WHERE id = $2 RETURNING *",
+    [status, ticketId]
+  );
+
+  await createActivityForLead(
+    ticket.lead_id,
+    {
+      type: "support_ticket",
+      subject: `Support ticket marked ${status}: ${ticket.subject}`,
+      status: "completed",
+      externalRefId: ticket.frappe_ticket_name,
+    },
+    requestingUserId
+  );
+
+  return toPublicTicket(result.rows[0]);
+}
+
 export async function replyToTicket(ticketId: string, message: string, requestingUserId: string) {
   const ticket = await getVisibleTicketOrThrow(ticketId, requestingUserId);
 
@@ -249,11 +292,25 @@ export async function replyToTicket(ticketId: string, message: string, requestin
 // Silently no-ops when the ticket isn't one we track locally (e.g. it was
 // never created through FieldForce) - same "nothing to do" shape as
 // whatsapp-service.ts's `if (!leadId) continue`, not an error condition.
-export async function syncTicketStatusFromWebhook(frappeTicketName: string, status: string): Promise<void> {
-  await pool.query("UPDATE support_tickets SET status = $1, updated_at = now() WHERE frappe_ticket_name = $2", [
-    status,
-    frappeTicketName,
-  ]);
+// priority is optional since the webhook payload only includes it once the
+// Frappe-side Webhook Data template is updated to send it - older deliveries
+// (or a site that hasn't added it yet) still carry status alone.
+export async function syncTicketStatusFromWebhook(
+  frappeTicketName: string,
+  status: string,
+  priority?: string
+): Promise<void> {
+  if (priority) {
+    await pool.query(
+      "UPDATE support_tickets SET status = $1, priority = $2, updated_at = now() WHERE frappe_ticket_name = $3",
+      [status, priority, frappeTicketName]
+    );
+  } else {
+    await pool.query("UPDATE support_tickets SET status = $1, updated_at = now() WHERE frappe_ticket_name = $2", [
+      status,
+      frappeTicketName,
+    ]);
+  }
 }
 
 // frappeCommunicationName is Frappe's own Communication doc name - the

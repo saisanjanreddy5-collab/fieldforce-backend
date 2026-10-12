@@ -9,6 +9,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
     req.body.leadId,
     req.body.subject,
     req.body.description,
+    req.body.priority,
     req.user!.id
   );
   sendSuccess(res, ticket, "Support ticket raised", 201);
@@ -28,6 +29,11 @@ export const getById = asyncHandler(async (req: Request, res: Response) => {
 export const listForLead = asyncHandler(async (req: Request, res: Response) => {
   const tickets = await supportTicketService.listTicketsForLead(String(req.params.id), req.user!.id);
   sendSuccess(res, tickets);
+});
+
+export const updateStatus = asyncHandler(async (req: Request, res: Response) => {
+  const ticket = await supportTicketService.updateTicketStatus(String(req.params.id), req.body.status, req.user!.id);
+  sendSuccess(res, ticket, "Ticket status updated");
 });
 
 export const reply = asyncHandler(async (req: Request, res: Response) => {
@@ -61,17 +67,18 @@ function verifyAndParseWebhookBody(req: Request): Record<string, unknown> | null
 // Ticket's on_update event - no CRM user is logged in here, so the HMAC
 // signature stands in for auth, same role a shared secret plays for the
 // WhatsApp/Smartflo webhooks, just a different (signature-based) scheme.
-// Webhook Data on the Frappe side is configured to send exactly
-// {ticket_name, status} - see frappe-service.ts's isWebhookSignatureValid.
+// Webhook Data on the Frappe side sends {ticket_name, status, priority} -
+// priority is optional here only because an existing Webhook record from
+// before Phase 4 may not have been updated yet to include it.
 export const ticketStatusWebhook = asyncHandler(async (req: Request, res: Response) => {
   const body = verifyAndParseWebhookBody(req);
   if (!body) {
     res.status(401).json({ success: false, message: "Unauthorized" });
     return;
   }
-  const { ticket_name, status } = body as { ticket_name?: string; status?: string };
+  const { ticket_name, status, priority } = body as { ticket_name?: string; status?: string; priority?: string };
   if (ticket_name && status) {
-    await supportTicketService.syncTicketStatusFromWebhook(ticket_name, status);
+    await supportTicketService.syncTicketStatusFromWebhook(ticket_name, status, priority);
   }
   sendSuccess(res, null, "ok");
 });

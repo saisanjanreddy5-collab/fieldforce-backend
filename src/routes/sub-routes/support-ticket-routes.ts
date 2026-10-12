@@ -7,6 +7,7 @@ import {
   createSupportTicketSchema,
   listSupportTicketsQuerySchema,
   replySupportTicketSchema,
+  updateSupportTicketStatusSchema,
 } from "../../validators/support-ticket-validator";
 
 const router = Router();
@@ -16,6 +17,12 @@ router.use(requireAuth);
 router.get("/", requirePermission("support_tickets.view"), validateQuery(listSupportTicketsQuerySchema), supportTicketController.list);
 router.post("/", requirePermission("support_tickets.create"), validateBody(createSupportTicketSchema), supportTicketController.create);
 router.get("/:id", requirePermission("support_tickets.view"), supportTicketController.getById);
+router.patch(
+  "/:id/status",
+  requirePermission("support_tickets.update"),
+  validateBody(updateSupportTicketStatusSchema),
+  supportTicketController.updateStatus
+);
 
 router.get("/:id/messages", requirePermission("support_tickets.view"), supportTicketController.listMessages);
 // Replying advances an existing ticket rather than raising a new one, so
