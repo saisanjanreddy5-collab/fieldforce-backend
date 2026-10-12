@@ -1641,6 +1641,13 @@ Regards,', 'active', 4)
     )`,
     `CREATE INDEX IF NOT EXISTS idx_support_tickets_lead_id ON support_tickets(lead_id)`,
 
+    // Phase 4: HD Ticket Priority is, like status, a configurable Link
+    // doctype on the Frappe side (confirmed real values: Urgent/High/Medium/
+    // Low) rather than a fixed enum, so no CHECK constraint here either -
+    // same reasoning as status above. Retrofit ALTER since the table already
+    // existed before this column did.
+    `ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS priority VARCHAR(140) NOT NULL DEFAULT 'Medium'`,
+
     // The conversation thread for a ticket - outbound rows are our own
     // agent's replies (also posted to Frappe at the same time, see
     // support-ticket-service.ts's replyToTicket); inbound rows are the

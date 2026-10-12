@@ -75,16 +75,21 @@ function describeFrappeError(body: FrappeErrorBody): string {
   return findServerError(body) ?? body.exception ?? "Unknown error from Frappe";
 }
 
-// Shared by every call below: POST to Frappe, and treat both an HTTP error
+// Shared by every call below: send to Frappe, and treat both an HTTP error
 // and a 200-with-an-embedded-exception (see findServerError's comment) as a
 // real failure. A response body that isn't even valid JSON is also a
 // failure, never a silent success - a truncated/malformed 200 is not
 // evidence the ticket or reply actually went through.
-async function postToFrappe<T extends object>(path: string, payload: unknown, errorPrefix: string): Promise<T> {
+async function sendToFrappe<T extends object>(
+  method: "POST" | "PUT",
+  path: string,
+  payload: unknown,
+  errorPrefix: string
+): Promise<T> {
   assertConfigured();
 
   const response = await fetch(`${env.FRAPPE_BASE_URL}${path}`, {
-    method: "POST",
+    method,
     headers: requestHeaders(),
     body: JSON.stringify(payload),
   });
@@ -112,29 +117,45 @@ interface FrappeTicketResource {
   name: string;
   subject: string;
   status: string;
+  priority: string | null;
   raised_by: string | null;
 }
 
 export interface CreatedFrappeTicket {
   frappeTicketName: string;
   status: string;
+  priority: string | null;
 }
 
 export async function createTicketInFrappe(
   subject: string,
   description: string | undefined,
-  raisedByEmail: string | undefined
+  raisedByEmail: string | undefined,
+  priority: string
 ): Promise<CreatedFrappeTicket> {
-  const body = await postToFrappe<{ data?: FrappeTicketResource }>(
+  const body = await sendToFrappe<{ data?: FrappeTicketResource }>(
+    "POST",
     "/api/resource/HD Ticket",
-    { subject, description, raised_by: raisedByEmail },
+    { subject, description, raised_by: raisedByEmail, priority },
     "Frappe rejected the ticket"
   );
   if (!body.data) {
     throw new ApiError(502, "Frappe rejected the ticket: no ticket data in the response");
   }
 
-  return { frappeTicketName: body.data.name, status: body.data.status };
+  return { frappeTicketName: body.data.name, status: body.data.status, priority: body.data.priority };
+}
+
+// Generic single-field update, used today only for status (resolving/
+// closing a ticket from FieldForce's own UI) - a plain REST PUT against the
+// HD Ticket resource, same endpoint shape createTicketInFrappe POSTs to.
+export async function updateTicketStatusInFrappe(frappeTicketName: string, status: string): Promise<void> {
+  await sendToFrappe(
+    "PUT",
+    `/api/resource/HD Ticket/${frappeTicketName}`,
+    { status },
+    "Frappe rejected the status change"
+  );
 }
 
 // Frappe Helpdesk's real agent-reply endpoint (helpdesk/api/ticket.py's
@@ -145,7 +166,8 @@ export async function createTicketInFrappe(
 // the ticket's raised_by - this is what actually sends the customer an
 // email, not a side effect we need to replicate ourselves.
 export async function replyToTicketInFrappe(frappeTicketName: string, message: string): Promise<void> {
-  await postToFrappe(
+  await sendToFrappe(
+    "POST",
     "/api/method/helpdesk.api.ticket.bulk_reply",
     { ticket_ids: [frappeTicketName], message },
     "Frappe rejected the reply"
@@ -155,8 +177,10 @@ export async function replyToTicketInFrappe(frappeTicketName: string, message: s
 // Frappe's webhook signing scheme (confirmed against frappe/integrations/
 // doctype/webhook/webhook.py, not guessed): base64(HMAC-SHA256(raw JSON
 // body, the webhook's configured secret)), sent as X-Frappe-Webhook-Signature.
-// Needs the exact raw bytes Frappe signed - see rawBody's definition in
-// types/express.d.ts for why a re-serialized req.body can't be used here.
+// Needs the exact raw bytes Frappe signed, not a re-serialized req.body
+// (which could legitimately differ in key order/whitespace and fail a
+// genuine request) - server.ts mounts these two routes behind express.raw()
+// for exactly this reason, so rawBody here is that untouched Buffer.
 // Fails closed (false) whenever the secret isn't configured yet, same
 // "unset means not set up, not unguarded" rule every other webhook secret in
 // this codebase follows.
