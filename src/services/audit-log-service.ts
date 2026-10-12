@@ -71,6 +71,17 @@ function toPublicEvent(row: AuditLogRow) {
 // audit history beyond the most recent 100 events was permanently
 // unreachable through this endpoint. Now genuinely paginated: callers can
 // walk the whole table via page/limit, and total tells them when to stop.
+// Scoped to one entity - powers the Customer detail panel's Activity tab
+// (merged alongside real Activities and Support Tickets), not a general
+// listing endpoint.
+export async function listAuditLogForEntity(entityType: string, entityId: string) {
+  const result = await pool.query<AuditLogRow>(
+    "SELECT * FROM audit_log WHERE entity_type = $1 AND entity_id = $2 ORDER BY created_at DESC",
+    [entityType, entityId]
+  );
+  return result.rows.map(toPublicEvent);
+}
+
 export async function listAuditLog(page: number, limit: number) {
   const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM audit_log");
   const offset = (page - 1) * limit;

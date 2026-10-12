@@ -1672,6 +1672,168 @@ Regards,', 'active', 4)
     // same reason activities_type_check is a separate ALTER further up.
     `ALTER TABLE support_ticket_messages ADD COLUMN IF NOT EXISTS frappe_communication_name VARCHAR(140)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_support_ticket_messages_frappe_communication_name ON support_ticket_messages(frappe_communication_name) WHERE frappe_communication_name IS NOT NULL`,
+
+    // Customers Phase 1: a customer row is created automatically the moment
+    // a lead's status is set to 'converted' (see lead-service.ts's
+    // updateLead) - there is no manual "add customer" form, since every
+    // customer here already started as a lead. lead_id is UNIQUE so that
+    // transition is idempotent (re-saving an already-converted lead never
+    // creates a second row). credit_limit/outstanding_balance are real,
+    // manually-entered fields (Finance/managers set and update them by
+    // hand) - there is no accounting/ERP system wired up yet to source them
+    // from, and this table does not pretend otherwise. Geography/contact
+    // columns mirror leads' own column names exactly, since they're carried
+    // over from the lead at conversion time.
+    `CREATE TABLE IF NOT EXISTS customers (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      lead_id UUID NOT NULL UNIQUE REFERENCES leads(id) ON DELETE RESTRICT,
+      full_name VARCHAR(255) NOT NULL,
+      contact_name VARCHAR(255),
+      phone VARCHAR(20),
+      alt_phone VARCHAR(20),
+      email VARCHAR(255),
+      company_name VARCHAR(255),
+      category VARCHAR(100),
+      owner_id UUID REFERENCES users(id) ON DELETE SET NULL,
+      zone_id UUID REFERENCES zones(id) ON DELETE SET NULL,
+      state_id UUID REFERENCES states(id) ON DELETE SET NULL,
+      district_id UUID REFERENCES districts(id) ON DELETE SET NULL,
+      area_id UUID REFERENCES areas(id) ON DELETE SET NULL,
+      pincode VARCHAR(20),
+      address_line1 VARCHAR(255),
+      address_line2 VARCHAR(255),
+      territory VARCHAR(150),
+      credit_limit DECIMAL(12,2) NOT NULL DEFAULT 0,
+      outstanding_balance DECIMAL(12,2) NOT NULL DEFAULT 0,
+      status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active','inactive','on_hold')),
+      is_deleted BOOLEAN NOT NULL DEFAULT false,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      updated_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_customers_owner_id ON customers(owner_id)`,
+
+    // Real lettered credit rating (A best - D worst), independent of the
+    // numeric credit_limit/outstanding_balance pair above - both are real,
+    // manually-set fields, neither is derived from the other.
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS credit_category VARCHAR(1) CHECK (credit_category IN ('A','B','C','D'))`,
+
+    // One customer, several real contacts (owner, accounts, store manager,
+    // ...) - the single contact_name/phone/email carried over from the
+    // originating lead at conversion stays on customers itself as the
+    // original/default contact; this table is for every contact beyond that.
+    `CREATE TABLE IF NOT EXISTS customer_contacts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      name VARCHAR(255) NOT NULL,
+      role VARCHAR(150),
+      phone VARCHAR(20),
+      email VARCHAR(255),
+      is_primary BOOLEAN NOT NULL DEFAULT false,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_customer_contacts_customer_id ON customer_contacts(customer_id)`,
+
+    `CREATE TABLE IF NOT EXISTS customer_addresses (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      type VARCHAR(20) NOT NULL CHECK (type IN ('billing','shipping')),
+      label VARCHAR(150),
+      address_line1 VARCHAR(255) NOT NULL,
+      address_line2 VARCHAR(255),
+      city VARCHAR(100),
+      state VARCHAR(100),
+      pincode VARCHAR(20),
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_customer_addresses_customer_id ON customer_addresses(customer_id)`,
+
+    // Real, new order/billing module - genuinely new business entities, not
+    // display dressing. Numbers follow the exact same pattern quotes.ts
+    // already uses (a dedicated sequence, formatted into a label like
+    // "SO-2026-0042" only at the mapping layer, never stored as a string).
+    `CREATE SEQUENCE IF NOT EXISTS sales_order_number_seq START 1`,
+    `CREATE TABLE IF NOT EXISTS sales_orders (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_number INTEGER NOT NULL DEFAULT nextval('sales_order_number_seq'),
+      customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      order_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      status VARCHAR(20) NOT NULL DEFAULT 'confirmed' CHECK (status IN ('confirmed','delivered','cancelled')),
+      amount DECIMAL(12,2) NOT NULL,
+      notes TEXT,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_orders_order_number ON sales_orders(order_number)`,
+    `CREATE INDEX IF NOT EXISTS idx_sales_orders_customer_id ON sales_orders(customer_id)`,
+
+    // status is a real, manually-set field like support_tickets.status -
+    // "overdue" is deliberately NOT a stored status (same reasoning as
+    // leads/activities' own has_overdue_activity): it's computed from
+    // due_date vs now() at query time, so it's never stale.
+    `CREATE SEQUENCE IF NOT EXISTS invoice_number_seq START 1`,
+    `CREATE TABLE IF NOT EXISTS invoices (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      invoice_number INTEGER NOT NULL DEFAULT nextval('invoice_number_seq'),
+      customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      sales_order_id UUID REFERENCES sales_orders(id) ON DELETE SET NULL,
+      invoice_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      due_date DATE,
+      status VARCHAR(20) NOT NULL DEFAULT 'unpaid' CHECK (status IN ('unpaid','partially_paid','paid')),
+      amount DECIMAL(12,2) NOT NULL,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_invoices_invoice_number ON invoices(invoice_number)`,
+    `CREATE INDEX IF NOT EXISTS idx_invoices_customer_id ON invoices(customer_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_invoices_sales_order_id ON invoices(sales_order_id)`,
+
+    // A payment can stand alone (an advance/on-account receipt) or be tied
+    // to one specific invoice - deliberately NOT auto-reconciled against
+    // invoices/customers.outstanding_balance (that stays a real, separately
+    // manually-set field, same as before); this is transaction history, not
+    // a ledger engine.
+    `CREATE SEQUENCE IF NOT EXISTS receipt_number_seq START 1`,
+    `CREATE TABLE IF NOT EXISTS payments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      receipt_number INTEGER NOT NULL DEFAULT nextval('receipt_number_seq'),
+      customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      invoice_id UUID REFERENCES invoices(id) ON DELETE SET NULL,
+      payment_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      method VARCHAR(50),
+      status VARCHAR(20) NOT NULL DEFAULT 'cleared' CHECK (status IN ('cleared','pending','bounced')),
+      amount DECIMAL(12,2) NOT NULL,
+      created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_receipt_number ON payments(receipt_number)`,
+    `CREATE INDEX IF NOT EXISTS idx_payments_customer_id ON payments(customer_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_payments_invoice_id ON payments(invoice_id)`,
+
+    // Sales orders/invoices/payments are first-class new entities, so they
+    // get their own permission namespace (same reasoning quotes.* already
+    // follows) - contacts/addresses stay gated on customers.view/update
+    // instead, since they're genuinely just sub-records of a customer, not
+    // independent entities with their own lifecycle.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','sales_orders.view'), ('admin','sales_orders.create'), ('admin','sales_orders.update'), ('admin','sales_orders.delete'),
+      ('manager','sales_orders.view'), ('manager','sales_orders.create'), ('manager','sales_orders.update'), ('manager','sales_orders.delete'),
+      ('agent','sales_orders.view'), ('agent','sales_orders.create'), ('agent','sales_orders.update'), ('agent','sales_orders.delete'),
+      ('admin','invoices.view'), ('admin','invoices.create'), ('admin','invoices.update'), ('admin','invoices.delete'),
+      ('manager','invoices.view'), ('manager','invoices.create'), ('manager','invoices.update'), ('manager','invoices.delete'),
+      ('agent','invoices.view'), ('agent','invoices.create'), ('agent','invoices.update'), ('agent','invoices.delete'),
+      ('admin','payments.view'), ('admin','payments.create'), ('admin','payments.update'), ('admin','payments.delete'),
+      ('manager','payments.view'), ('manager','payments.create'), ('manager','payments.update'), ('manager','payments.delete'),
+      ('agent','payments.view'), ('agent','payments.create'), ('agent','payments.update'), ('agent','payments.delete')
+    ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {

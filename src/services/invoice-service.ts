@@ -1,0 +1,138 @@
+import { pool } from "../config/db";
+import { ApiError } from "../utils/ApiError";
+import { isCustomerInScope } from "./customer-service";
+
+interface InvoiceRow {
+  id: string;
+  invoice_number: number;
+  customer_id: string;
+  sales_order_id: string | null;
+  invoice_date: string;
+  due_date: string | null;
+  status: string;
+  amount: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export function invoiceLabel(invoiceNumber: number): string {
+  return `INV-${new Date().getFullYear()}-${String(invoiceNumber).padStart(4, "0")}`;
+}
+
+// Overdue is computed here, not stored - same reasoning leads/activities'
+// own has_overdue_activity already uses, so it can never drift stale.
+function isOverdue(row: InvoiceRow): boolean {
+  return row.status !== "paid" && row.due_date !== null && new Date(row.due_date) < new Date();
+}
+
+function toPublicInvoice(row: InvoiceRow) {
+  return {
+    id: row.id,
+    invoiceNumber: row.invoice_number,
+    invoiceLabel: invoiceLabel(row.invoice_number),
+    customerId: row.customer_id,
+    salesOrderId: row.sales_order_id,
+    invoiceDate: row.invoice_date,
+    dueDate: row.due_date,
+    status: row.status,
+    isOverdue: isOverdue(row),
+    amount: Number(row.amount),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function assertInScope(customerId: string, requestingUserId: string): Promise<void> {
+  const inScope = await isCustomerInScope(customerId, requestingUserId);
+  if (!inScope) {
+    throw new ApiError(403, "You do not have access to this customer");
+  }
+}
+
+export async function listInvoicesForCustomer(customerId: string, requestingUserId: string) {
+  await assertInScope(customerId, requestingUserId);
+  const result = await pool.query<InvoiceRow>(
+    "SELECT * FROM invoices WHERE customer_id = $1 ORDER BY invoice_date DESC, created_at DESC",
+    [customerId]
+  );
+  return result.rows.map(toPublicInvoice);
+}
+
+export interface InvoiceInput {
+  salesOrderId?: string | null;
+  invoiceDate?: string;
+  dueDate?: string;
+  status?: string;
+  amount: number;
+}
+
+export async function createInvoice(customerId: string, input: InvoiceInput, requestingUserId: string) {
+  await assertInScope(customerId, requestingUserId);
+  const result = await pool.query<InvoiceRow>(
+    `INSERT INTO invoices (customer_id, sales_order_id, invoice_date, due_date, status, amount, created_by)
+     VALUES ($1, $2, COALESCE($3, CURRENT_DATE), $4, COALESCE($5,'unpaid'), $6, $7)
+     RETURNING *`,
+    [customerId, input.salesOrderId ?? null, input.invoiceDate ?? null, input.dueDate ?? null, input.status ?? null, input.amount, requestingUserId]
+  );
+  return toPublicInvoice(result.rows[0]);
+}
+
+async function getInvoiceOrThrow(invoiceId: string): Promise<InvoiceRow> {
+  const result = await pool.query<InvoiceRow>("SELECT * FROM invoices WHERE id = $1", [invoiceId]);
+  if (result.rows.length === 0) {
+    throw new ApiError(404, "Invoice not found");
+  }
+  return result.rows[0];
+}
+
+export async function updateInvoice(invoiceId: string, input: Partial<InvoiceInput>, requestingUserId: string) {
+  const existing = await getInvoiceOrThrow(invoiceId);
+  await assertInScope(existing.customer_id, requestingUserId);
+
+  const fieldMap: Record<string, unknown> = {
+    sales_order_id: input.salesOrderId,
+    invoice_date: input.invoiceDate,
+    due_date: input.dueDate,
+    status: input.status,
+    amount: input.amount,
+  };
+  const setClauses: string[] = [];
+  const params: unknown[] = [];
+  for (const [column, value] of Object.entries(fieldMap)) {
+    if (value !== undefined) {
+      params.push(value);
+      setClauses.push(`${column} = $${params.length}`);
+    }
+  }
+  if (setClauses.length === 0) return toPublicInvoice(existing);
+
+  setClauses.push("updated_at = now()");
+  params.push(invoiceId);
+  const result = await pool.query<InvoiceRow>(
+    `UPDATE invoices SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING *`,
+    params
+  );
+  return toPublicInvoice(result.rows[0]);
+}
+
+export async function deleteInvoice(invoiceId: string, requestingUserId: string): Promise<void> {
+  const existing = await getInvoiceOrThrow(invoiceId);
+  await assertInScope(existing.customer_id, requestingUserId);
+  await pool.query("DELETE FROM invoices WHERE id = $1", [invoiceId]);
+}
+
+export async function listInvoiceRowsForCustomer(customerId: string) {
+  const result = await pool.query<InvoiceRow>(
+    "SELECT * FROM invoices WHERE customer_id = $1 ORDER BY invoice_date DESC",
+    [customerId]
+  );
+  return result.rows.map(toPublicInvoice);
+}
+
+export async function countOverdueInvoices(customerId: string): Promise<number> {
+  const result = await pool.query<{ count: string }>(
+    "SELECT COUNT(*) FROM invoices WHERE customer_id = $1 AND status <> 'paid' AND due_date IS NOT NULL AND due_date < CURRENT_DATE",
+    [customerId]
+  );
+  return Number(result.rows[0].count);
+}

@@ -169,17 +169,25 @@ export async function createTicketForLead(
 
   // Same "log a real activity" convention as every other integration
   // (whatsapp-service.ts, smartflo-service.ts) - without this, raising a
-  // ticket would be invisible on the lead's own Activity timeline.
-  await createActivityForLead(
-    leadId,
-    {
-      type: "support_ticket",
-      subject: `Support ticket raised: ${subject}`,
-      status: "completed",
-      externalRefId: frappeTicket.frappeTicketName,
-    },
-    requestingUserId
-  );
+  // ticket would be invisible on the lead's own Activity timeline. Caught,
+  // not rethrown: the ticket already exists in Frappe and locally by this
+  // point, so a failure here must not turn into a 500 that reads as "ticket
+  // creation failed" - a confused retry would create a genuine duplicate
+  // ticket in Frappe, which has no idempotency key to catch that.
+  try {
+    await createActivityForLead(
+      leadId,
+      {
+        type: "support_ticket",
+        subject: `Support ticket raised: ${subject}`,
+        status: "completed",
+        externalRefId: frappeTicket.frappeTicketName,
+      },
+      requestingUserId
+    );
+  } catch (err) {
+    console.error(`Failed to log activity for new support ticket ${frappeTicket.frappeTicketName}:`, err);
+  }
 
   return toPublicTicket(result.rows[0]);
 }
@@ -238,16 +246,22 @@ export async function updateTicketStatus(ticketId: string, status: string, reque
     [status, ticketId]
   );
 
-  await createActivityForLead(
-    ticket.lead_id,
-    {
-      type: "support_ticket",
-      subject: `Support ticket marked ${status}: ${ticket.subject}`,
-      status: "completed",
-      externalRefId: ticket.frappe_ticket_name,
-    },
-    requestingUserId
-  );
+  // Caught, not rethrown - the status change already succeeded in Frappe
+  // and locally by this point, same reasoning as createTicketForLead above.
+  try {
+    await createActivityForLead(
+      ticket.lead_id,
+      {
+        type: "support_ticket",
+        subject: `Support ticket marked ${status}: ${ticket.subject}`,
+        status: "completed",
+        externalRefId: ticket.frappe_ticket_name,
+      },
+      requestingUserId
+    );
+  } catch (err) {
+    console.error(`Failed to log activity for ticket status change ${ticket.frappe_ticket_name}:`, err);
+  }
 
   return toPublicTicket(result.rows[0]);
 }
@@ -268,16 +282,22 @@ export async function replyToTicket(ticketId: string, message: string, requestin
     [ticketId, message, requestingUserId]
   );
 
-  await createActivityForLead(
-    ticket.lead_id,
-    {
-      type: "support_ticket",
-      subject: `Replied to support ticket: ${ticket.subject}`,
-      status: "completed",
-      externalRefId: ticket.frappe_ticket_name,
-    },
-    requestingUserId
-  );
+  // Caught, not rethrown - the reply already sent via Frappe and saved
+  // locally by this point, same reasoning as createTicketForLead above.
+  try {
+    await createActivityForLead(
+      ticket.lead_id,
+      {
+        type: "support_ticket",
+        subject: `Replied to support ticket: ${ticket.subject}`,
+        status: "completed",
+        externalRefId: ticket.frappe_ticket_name,
+      },
+      requestingUserId
+    );
+  } catch (err) {
+    console.error(`Failed to log activity for ticket reply ${ticket.frappe_ticket_name}:`, err);
+  }
 
   return toPublicMessage(result.rows[0]);
 }
