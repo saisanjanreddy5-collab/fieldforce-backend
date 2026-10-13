@@ -1,6 +1,7 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { isLeadInOwnerScope, isLeadVisibleToUser } from "./lead-service";
+import { createCustomerFromLead } from "./customer-service";
 
 // Reuses the same "subtree" idea as leads: an opportunity is visible to a
 // user exactly when the lead it belongs to is visible to that user (Rule A
@@ -140,7 +141,7 @@ export async function isOpportunityInOwnerScope(opportunityId: string, userId: s
   return (result.rowCount ?? 0) > 0;
 }
 
-// Conversion mutates the source lead (status -> 'converted', below) as well
+// Conversion mutates the source lead (status -> 'Converted', below) as well
 // as creating the opportunity, so - like update/delete/share - it requires
 // owner scope, not mere shared visibility. A lead shared with someone but
 // not owned by them (or a subordinate of theirs) cannot be converted.
@@ -154,19 +155,36 @@ export async function convertLeadToOpportunity(leadId: string, input: Opportunit
   try {
     await client.query("BEGIN");
 
-    // Not guarded against an already-'converted' lead - a lead can
+    // Not guarded against an already-'Converted' lead - a lead can
     // legitimately pick up any number of opportunities over its lifetime
     // (see OpportunitiesTab's own "Opportunities from this lead" list, a
     // running total across all of them, with "+ New opportunity" always
     // available, never hidden after the first one). This UPDATE is
-    // idempotent either way - setting status to 'converted' again on a
-    // lead that's already 'converted' is a harmless no-op - it's kept here
+    // idempotent either way - setting status to 'Converted' again on a
+    // lead that's already 'Converted' is a harmless no-op - it's kept here
     // (rather than dropped) only so it stays in the same transaction as
     // the opportunity INSERT below, for atomicity.
-    await client.query("UPDATE leads SET status = 'converted', updated_by = $1, updated_at = now() WHERE id = $2", [
+    // 'Converted' (capital C) matches pipeline_stages' real key for this
+    // stage - the admin-editable source of truth the generic lead-status
+    // dropdown also writes - not the lowercase 'converted' this used to
+    // write, which silently diverged from it and from every lowercase-vs-
+    // capitalized comparison below.
+    await client.query("UPDATE leads SET status = 'Converted', updated_by = $1, updated_at = now() WHERE id = $2", [
       requestingUserId,
       leadId,
     ]);
+
+    // Fetched inside the same transaction so it reflects the UPDATE above
+    // (status) alongside the lead's other real fields - passed to
+    // createCustomerFromLead after COMMIT, below, the same shape
+    // lead-service.ts's updateLead already passes it.
+    const leadResult = await client.query(
+      `SELECT id, full_name, contact_name, phone, alt_phone, email, company_name, category, owner_id,
+              store_city, zone_id, state_id, district_id, area_id, pincode, address_line1, address_line2,
+              territory, credit_limit_requested
+       FROM leads WHERE id = $1`,
+      [leadId]
+    );
 
     // A brand-new opportunity can start life already in 'won' (e.g. "+Add"
     // clicked directly in the Won column) - that's a transition into won too,
@@ -189,6 +207,21 @@ export async function convertLeadToOpportunity(leadId: string, input: Opportunit
     );
 
     await client.query("COMMIT");
+
+    // A customer is never created directly - this is the only place
+    // convertLeadToOpportunity's own 'Converted' write can reach, since it's
+    // a raw-SQL UPDATE that never passes through lead-service.ts's updateLead
+    // (the other place this same auto-creation happens, for a direct status
+    // edit). Idempotent (ON CONFLICT (lead_id) DO NOTHING inside
+    // createCustomerFromLead) and caught, not rethrown: the opportunity
+    // already committed above, so a failure here must not tell the caller
+    // the conversion failed when it actually succeeded.
+    try {
+      await createCustomerFromLead(leadResult.rows[0]);
+    } catch (err) {
+      console.error(`Failed to auto-create customer for converted lead ${leadId}:`, err);
+    }
+
     return toPublicOpportunity(result.rows[0]);
   } catch (err) {
     await client.query("ROLLBACK");

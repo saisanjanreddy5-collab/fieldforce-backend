@@ -2,7 +2,7 @@ import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { recordAuditEvent } from "./audit-log-service";
 import { bulkImportRowSchema } from "../validators/lead-validator";
-import { createCustomerFromLead } from "./customer-service";
+import { createCustomerFromLead, syncCustomerOwnerFromLead } from "./customer-service";
 
 // Rule A (hierarchy-based visibility): a lead is visible to its owner and to
 // everyone directly above the owner in the reporting chain. Walking UP from a
@@ -490,7 +490,12 @@ export async function createLead(input: CreateLeadInput, creatorId: string, ipAd
     qualified_person: input.qualifiedPerson,
     financial_status: input.financialStatus,
     welcome_message_sent: input.welcomeMessageSent,
-    status: input.status ?? "new",
+    // 'New' (capital N) matches pipeline_stages' real key for this stage -
+    // same reasoning as 'Converted' on the createCustomerFromLead path
+    // below. Used to default to lowercase 'new' here, silently diverging
+    // from the Title-Case value the Leads list's own Stage filter and the
+    // Dashboard's status breakdown actually group/filter by.
+    status: input.status ?? "New",
     prospect_status: input.prospectStatus,
     category: input.category,
     owner_id: ownerId,
@@ -994,15 +999,21 @@ export async function updateLead(
         ipAddress,
       });
 
-      // A customer is never created directly - this is the one place a
-      // lead becomes one, the moment it reaches 'converted'. Idempotent
-      // (ON CONFLICT (lead_id) DO NOTHING inside createCustomerFromLead), so
-      // re-saving an already-converted lead is a no-op, not a duplicate.
-      // Caught, not rethrown: the lead's own status UPDATE above already
-      // committed by this point, so a failure here must not turn into a 500
-      // that tells the caller the conversion failed when it actually
-      // succeeded - it would just mean the customer row needs a retry.
-      if (after.status === "converted") {
+      // A customer is never created directly - it's auto-created the moment
+      // a lead reaches 'Converted', whether that happens here (a direct
+      // status edit) or via opportunity-service.ts's convertLeadToOpportunity
+      // (which calls createCustomerFromLead itself, since its own status
+      // UPDATE is a separate raw-SQL write that never reaches this
+      // function). 'Converted' - capital C - matches pipeline_stages' real
+      // key for this stage, the same value the generic status dropdown
+      // writes. Idempotent (ON CONFLICT (lead_id) DO NOTHING inside
+      // createCustomerFromLead), so re-saving an already-converted lead is
+      // a no-op, not a duplicate. Caught, not rethrown: the lead's own
+      // status UPDATE above already committed by this point, so a failure
+      // here must not turn into a 500 that tells the caller the conversion
+      // failed when it actually succeeded - it would just mean the
+      // customer row needs a retry.
+      if (after.status === "Converted") {
         try {
           await createCustomerFromLead(after);
         } catch (err) {
@@ -1028,6 +1039,11 @@ export async function updateLead(
         actorName,
         ipAddress,
       });
+
+      // Keeps an already-converted customer's ownership in step with its
+      // lead - see syncCustomerOwnerFromLead's own comment for why this
+      // matters (a no-op when this lead never converted).
+      await syncCustomerOwnerFromLead(leadId, updates.ownerId);
     }
   }
 

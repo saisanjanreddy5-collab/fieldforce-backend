@@ -74,6 +74,16 @@ async function applyDueTransfers(): Promise<void> {
           row.to_user_id,
           row.from_user_id,
         ]);
+        // Without this, any lead in this batch that had already converted
+        // leaves its customer account permanently attached to from_user_id
+        // - the departed/previous rep keeps access to real accounts
+        // (orders, invoices, credit) they no longer own, while to_user_id,
+        // who just inherited this exact lead, gets none. Same owner_id
+        // match the leads UPDATE above just used, same transaction.
+        await client.query("UPDATE customers SET owner_id = $1, updated_at = now() WHERE owner_id = $2 AND is_deleted = false", [
+          row.to_user_id,
+          row.from_user_id,
+        ]);
       } else if (row.transfer_type === "territory" && row.from_user_id && row.new_territory) {
         await client.query("UPDATE users SET territory = $1 WHERE id = $2", [row.new_territory, row.from_user_id]);
         if (row.old_territory) {

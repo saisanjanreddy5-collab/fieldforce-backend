@@ -39,7 +39,18 @@ async function getAgentNumber(userId: string): Promise<string | null> {
   return result.rows[0]?.smartflo_agent_number ?? null;
 }
 
-export async function initiateCallForLead(leadId: string, requestingUserId: string): Promise<{ refId: string }> {
+// overridePhone/contactName let this dial a specific contact's own number
+// (e.g. a Customer's secondary contact) instead of the lead's registered
+// phone - the call is still logged against the same lead/customer, just
+// with the real contact's name in the subject so the record shows who was
+// actually reached, not just "Click-to-call" with no way to tell which
+// contact that was.
+export async function initiateCallForLead(
+  leadId: string,
+  requestingUserId: string,
+  overridePhone?: string,
+  contactName?: string
+): Promise<{ refId: string }> {
   assertConfigured();
 
   const agentNumber = await getAgentNumber(requestingUserId);
@@ -47,9 +58,13 @@ export async function initiateCallForLead(leadId: string, requestingUserId: stri
     throw new ApiError(409, "Set your calling number from your profile (top right) first");
   }
 
-  const lead = await getLeadById(leadId, requestingUserId);
-  if (!lead.phone) {
-    throw new ApiError(422, "This lead has no phone number on file");
+  let destinationNumber = overridePhone;
+  if (!destinationNumber) {
+    const lead = await getLeadById(leadId, requestingUserId);
+    destinationNumber = lead.phone ?? undefined;
+  }
+  if (!destinationNumber) {
+    throw new ApiError(422, "No phone number on file to call");
   }
 
   const response = await fetch(`${SMARTFLO_BASE_URL}/click_to_call`, {
@@ -57,7 +72,7 @@ export async function initiateCallForLead(leadId: string, requestingUserId: stri
     headers: { Authorization: `Bearer ${env.SMARTFLO_API_TOKEN}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       agent_number: agentNumber,
-      destination_number: lead.phone,
+      destination_number: destinationNumber,
       async: 1,
     }),
   });
@@ -72,7 +87,7 @@ export async function initiateCallForLead(leadId: string, requestingUserId: stri
     leadId,
     {
       type: "call",
-      subject: "Click-to-call",
+      subject: contactName ? `Click-to-call - ${contactName}` : "Click-to-call",
       status: "completed",
       externalRefId: body.ref_id,
     },

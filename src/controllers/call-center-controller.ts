@@ -14,3 +14,8 @@ export const upcoming = asyncHandler(async (req: Request, res: Response) => {
   const result = await callCenterService.listUpcomingCalls(req.user!.id, query);
   sendSuccess(res, result);
 });
+
+export const stats = asyncHandler(async (req: Request, res: Response) => {
+  const result = await callCenterService.getCallCenterStats(req.user!.id);
+  sendSuccess(res, result);
+});

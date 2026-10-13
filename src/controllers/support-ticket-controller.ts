@@ -36,6 +36,11 @@ export const updateStatus = asyncHandler(async (req: Request, res: Response) => 
   sendSuccess(res, ticket, "Ticket status updated");
 });
 
+export const assign = asyncHandler(async (req: Request, res: Response) => {
+  const ticket = await supportTicketService.assignTicket(String(req.params.id), req.body.assignedTo, req.user!.id);
+  sendSuccess(res, ticket, "Ticket assigned");
+});
+
 export const reply = asyncHandler(async (req: Request, res: Response) => {
   const message = await supportTicketService.replyToTicket(String(req.params.id), req.body.message, req.user!.id);
   sendSuccess(res, message, "Reply sent", 201);

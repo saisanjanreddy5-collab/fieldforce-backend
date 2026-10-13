@@ -4,6 +4,7 @@ import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
 import {
+  assignTicketSchema,
   createSupportTicketSchema,
   listSupportTicketsQuerySchema,
   replySupportTicketSchema,
@@ -22,6 +23,12 @@ router.patch(
   requirePermission("support_tickets.update"),
   validateBody(updateSupportTicketStatusSchema),
   supportTicketController.updateStatus
+);
+router.patch(
+  "/:id/assign",
+  requirePermission("support_tickets.update"),
+  validateBody(assignTicketSchema),
+  supportTicketController.assign
 );
 
 router.get("/:id/messages", requirePermission("support_tickets.view"), supportTicketController.listMessages);
