@@ -31,6 +31,7 @@ const UNASSIGNED_ADMIN_CLAUSE = `
 
 interface CustomerRow {
   id: string;
+  customer_number: number;
   lead_id: string;
   full_name: string;
   contact_name: string | null;
@@ -40,6 +41,7 @@ interface CustomerRow {
   company_name: string | null;
   category: string | null;
   owner_id: string | null;
+  city: string | null;
   zone_id: string | null;
   state_id: string | null;
   district_id: string | null;
@@ -58,15 +60,22 @@ interface CustomerRow {
   created_at: string;
   updated_at: string;
   owner_name?: string | null;
+  district_name?: string | null;
   open_ticket_count?: string;
   lifetime_value?: string;
   open_orders_count?: string;
   overdue_invoices_count?: string;
 }
 
+export function customerLabel(customerNumber: number): string {
+  return `C-${String(customerNumber).padStart(5, "0")}`;
+}
+
 function toPublicCustomer(row: CustomerRow) {
   return {
     id: row.id,
+    customerNumber: row.customer_number,
+    customerLabel: customerLabel(row.customer_number),
     leadId: row.lead_id,
     fullName: row.full_name,
     contactName: row.contact_name,
@@ -77,6 +86,11 @@ function toPublicCustomer(row: CustomerRow) {
     category: row.category,
     ownerId: row.owner_id,
     ownerName: row.owner_name ?? null,
+    // Honest fallback, not a guess: the lead's own store_city (FOFO
+    // onboarding only) when present, else the district every lead/customer
+    // genuinely has - never left silently blank when a real-enough answer
+    // already exists in data we already have.
+    city: row.city ?? row.district_name ?? null,
     zoneId: row.zone_id,
     stateId: row.state_id,
     districtId: row.district_id,
@@ -118,6 +132,7 @@ export async function createCustomerFromLead(lead: {
   company_name: string | null;
   category: string | null;
   owner_id: string | null;
+  store_city: string | null;
   zone_id: string | null;
   state_id: string | null;
   district_id: string | null;
@@ -131,9 +146,9 @@ export async function createCustomerFromLead(lead: {
   await pool.query(
     `INSERT INTO customers (
        lead_id, full_name, contact_name, phone, alt_phone, email, company_name, category,
-       owner_id, zone_id, state_id, district_id, area_id, pincode, address_line1, address_line2,
+       owner_id, city, zone_id, state_id, district_id, area_id, pincode, address_line1, address_line2,
        territory, credit_limit
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
      ON CONFLICT (lead_id) DO NOTHING`,
     [
       lead.id,
@@ -145,6 +160,7 @@ export async function createCustomerFromLead(lead: {
       lead.company_name,
       lead.category,
       lead.owner_id,
+      lead.store_city,
       lead.zone_id,
       lead.state_id,
       lead.district_id,
@@ -155,6 +171,22 @@ export async function createCustomerFromLead(lead: {
       lead.territory,
       lead.credit_limit_requested ?? 0,
     ]
+  );
+}
+
+// Called from lead-service.ts's updateLead (a single lead's owner changing)
+// and scheduled-transfer-service.ts's bulk reassignment (an exiting rep's
+// whole book moving to someone else) - both only ever wrote leads.owner_id,
+// never propagating to the already-converted customer this same lead may
+// have produced. That left every inherited customer account permanently
+// attached to the departed/previous rep: the real bug the offboarding
+// transfer feature exists to prevent. A no-op (zero rows affected) when
+// this lead never converted, same as createCustomerFromLead's own
+// ON CONFLICT DO NOTHING - never something the caller needs to branch on.
+export async function syncCustomerOwnerFromLead(leadId: string, newOwnerId: string | null): Promise<void> {
+  await pool.query(
+    "UPDATE customers SET owner_id = $1, updated_at = now() WHERE lead_id = $2 AND is_deleted = false",
+    [newOwnerId, leadId]
   );
 }
 
@@ -215,10 +247,11 @@ export async function listCustomers(requestingUserId: string, filters: ListCusto
 
   const result = await pool.query<CustomerRow>(
     `${SUBTREE_CTE}
-     SELECT c.*, u.name AS owner_name,
+     SELECT c.*, u.name AS owner_name, d.name AS district_name,
        (SELECT COUNT(*) FROM support_tickets st WHERE st.lead_id = c.lead_id AND st.status NOT IN ('Resolved','Closed')) AS open_ticket_count
      FROM customers c
      LEFT JOIN users u ON u.id = c.owner_id
+     LEFT JOIN districts d ON d.id = c.district_id
      WHERE ${whereClause}
      ORDER BY c.created_at DESC
      LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
@@ -235,10 +268,11 @@ export async function getCustomerById(customerId: string, requestingUserId: stri
   }
 
   const result = await pool.query<CustomerRow>(
-    `SELECT c.*, u.name AS owner_name,
+    `SELECT c.*, u.name AS owner_name, d.name AS district_name,
        (SELECT COUNT(*) FROM support_tickets st WHERE st.lead_id = c.lead_id AND st.status NOT IN ('Resolved','Closed')) AS open_ticket_count
      FROM customers c
      LEFT JOIN users u ON u.id = c.owner_id
+     LEFT JOIN districts d ON d.id = c.district_id
      WHERE c.id = $1 AND c.is_deleted = false`,
     [customerId]
   );

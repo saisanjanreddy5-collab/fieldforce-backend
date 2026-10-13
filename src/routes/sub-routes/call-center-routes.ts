@@ -19,5 +19,6 @@ router.get(
   validateQuery(listUpcomingCallsQuerySchema),
   callCenterController.upcoming
 );
+router.get("/stats", requirePermission("call_center.view"), callCenterController.stats);
 
 export default router;

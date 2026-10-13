@@ -39,7 +39,7 @@ export async function getOverview(requestingUserId: string) {
       pool.query<{ converted: string; created: string }>(
         `${SUBTREE_CTE}
          SELECT
-           COUNT(*) FILTER (WHERE l.status = 'converted' AND l.updated_at >= now() - interval '30 days') AS converted,
+           COUNT(*) FILTER (WHERE l.status = 'Converted' AND l.updated_at >= now() - interval '30 days') AS converted,
            COUNT(*) FILTER (WHERE l.created_at >= now() - interval '30 days') AS created
          FROM leads l
          WHERE l.is_deleted = false AND l.owner_id IN (SELECT id FROM subtree)`,
@@ -114,7 +114,7 @@ export async function getTeamPerformance(requestingUserId: string) {
        SELECT owner_id, COUNT(*) AS count FROM leads WHERE is_deleted = false GROUP BY owner_id
      ) lead_counts ON lead_counts.owner_id = u.id
      LEFT JOIN (
-       SELECT owner_id, COUNT(*) AS count FROM leads WHERE is_deleted = false AND status = 'converted' GROUP BY owner_id
+       SELECT owner_id, COUNT(*) AS count FROM leads WHERE is_deleted = false AND status = 'Converted' GROUP BY owner_id
      ) converted_counts ON converted_counts.owner_id = u.id
      LEFT JOIN (
        SELECT l.owner_id, COUNT(*) AS count

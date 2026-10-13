@@ -16,6 +16,7 @@ import { convertLeadSchema } from "../../validators/opportunity-validator";
 import { createActivitySchema } from "../../validators/activity-validator";
 import { createTeamsMeetingSchema, sendLeadEmailSchema } from "../../validators/microsoft-validator";
 import { sendWhatsappMessageSchema } from "../../validators/whatsapp-validator";
+import { callLeadSchema } from "../../validators/smartflo-validator";
 
 const router = Router();
 
@@ -65,7 +66,7 @@ router.post(
   microsoftController.createMeetingForLead
 );
 
-router.post("/:id/call", requirePermission("activities.create"), smartfloController.callLead);
+router.post("/:id/call", requirePermission("activities.create"), validateBody(callLeadSchema), smartfloController.callLead);
 
 router.get("/:id/whatsapp-messages", requirePermission("whatsapp.view"), whatsappController.listForLead);
 router.post(

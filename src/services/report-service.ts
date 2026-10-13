@@ -47,7 +47,7 @@ export async function getSalespersonPerformance(requestingUserId: string, filter
      ) lead_counts ON lead_counts.owner_id = u.id
      LEFT JOIN (
        SELECT l.owner_id, COUNT(*) AS count FROM leads l
-       WHERE l.is_deleted = false AND l.status = 'converted' ${monthCondition} GROUP BY l.owner_id
+       WHERE l.is_deleted = false AND l.status = 'Converted' ${monthCondition} GROUP BY l.owner_id
      ) converted_counts ON converted_counts.owner_id = u.id
      LEFT JOIN (
        SELECT l.owner_id, SUM(o.value) AS total
@@ -82,7 +82,7 @@ export async function getStateWiseReport(requestingUserId: string) {
        st.id AS "stateId",
        st.name AS "stateName",
        COUNT(l.id) AS "leads",
-       COUNT(l.id) FILTER (WHERE l.status = 'converted') AS "customers",
+       COUNT(l.id) FILTER (WHERE l.status = 'Converted') AS "customers",
        COUNT(l.id) FILTER (WHERE l.category = 'FOFO' AND l.push_status = 'pushed') AS "fofoLive"
      FROM states st
      LEFT JOIN leads l ON l.state_id = st.id AND l.is_deleted = false AND l.owner_id IN (SELECT id FROM subtree)
@@ -112,7 +112,7 @@ export async function getB2BGroupPerformance(requestingUserId: string) {
     `${SUBTREE_CTE}
      SELECT
        COALESCE(l.category, 'Uncategorized') AS "category",
-       COUNT(*) FILTER (WHERE l.status = 'converted') AS "accounts",
+       COUNT(*) FILTER (WHERE l.status = 'Converted') AS "accounts",
        COALESCE(SUM(o.value) FILTER (WHERE o.stage = 'won'), 0) AS "revenue"
      FROM leads l
      LEFT JOIN opportunities o ON o.lead_id = l.id AND o.is_deleted = false

@@ -15,15 +15,18 @@ interface PaymentRow {
   updated_at: string;
 }
 
-export function receiptLabel(receiptNumber: number): string {
-  return `RCPT-${new Date().getFullYear()}-${String(receiptNumber).padStart(4, "0")}`;
+// Year comes from the payment's own payment_date, not "now" - see
+// sales-order-service.ts's orderLabel for the full reasoning (same bug,
+// same fix, three sibling services).
+export function receiptLabel(receiptNumber: number, paymentDate: string): string {
+  return `RCPT-${paymentDate.slice(0, 4)}-${String(receiptNumber).padStart(4, "0")}`;
 }
 
 function toPublicPayment(row: PaymentRow) {
   return {
     id: row.id,
     receiptNumber: row.receipt_number,
-    receiptLabel: receiptLabel(row.receipt_number),
+    receiptLabel: receiptLabel(row.receipt_number, row.payment_date),
     customerId: row.customer_id,
     invoiceId: row.invoice_id,
     paymentDate: row.payment_date,

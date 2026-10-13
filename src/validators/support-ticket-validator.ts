@@ -23,6 +23,13 @@ export const updateSupportTicketStatusSchema = z.object({
   status: z.enum(TICKET_STATUSES),
 });
 
+// null unassigns - deliberately distinct from omitting the field, so the
+// same endpoint covers both "assign to X" and "take this off someone".
+export const assignTicketSchema = z.object({
+  assignedTo: z.string().uuid().nullable(),
+});
+
 export const listSupportTicketsQuerySchema = paginationQuerySchema.extend({
   leadId: z.string().uuid().optional(),
+  assignedTo: z.string().uuid().optional(),
 });

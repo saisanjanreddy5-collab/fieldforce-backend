@@ -14,15 +14,23 @@ interface SalesOrderRow {
   updated_at: string;
 }
 
-export function orderLabel(orderNumber: number): string {
-  return `SO-${new Date().getFullYear()}-${String(orderNumber).padStart(4, "0")}`;
+// Year comes from the order's own order_date, not "now" - otherwise every
+// existing label would silently flip to the new year the moment the
+// calendar turns, since order_number itself never resets annually. Sliced
+// from the string directly (order_date is a DATE column, returned as
+// "YYYY-MM-DD" by node-postgres) rather than parsed through `new Date()`,
+// which would re-introduce the exact UTC-midnight/local-timezone drift
+// that caused invoice-service.ts's isOverdue to disagree with its own
+// SQL-side count.
+export function orderLabel(orderNumber: number, orderDate: string): string {
+  return `SO-${orderDate.slice(0, 4)}-${String(orderNumber).padStart(4, "0")}`;
 }
 
 function toPublicOrder(row: SalesOrderRow) {
   return {
     id: row.id,
     orderNumber: row.order_number,
-    orderLabel: orderLabel(row.order_number),
+    orderLabel: orderLabel(row.order_number, row.order_date),
     customerId: row.customer_id,
     orderDate: row.order_date,
     status: row.status,

@@ -3,6 +3,7 @@ import { ApiError } from "../utils/ApiError";
 import { getLeadById } from "./lead-service";
 import { createActivityForLead } from "./activity-service";
 import * as frappeService from "./frappe-service";
+import { TICKET_PRIORITIES, TICKET_STATUSES } from "../validators/support-ticket-validator";
 
 // Same hierarchy-visibility rule leads themselves use (owner in the
 // requesting user's subtree, or shared with them directly) - a ticket is
@@ -27,6 +28,7 @@ interface SupportTicketRow {
   priority: string;
   frappe_ticket_name: string | null;
   created_by: string | null;
+  assigned_to: string | null;
   created_at: string;
   updated_at: string;
   // Only present on queries that join leads/users for display purposes
@@ -35,6 +37,7 @@ interface SupportTicketRow {
   // "joined but genuinely has no name".
   lead_full_name?: string;
   created_by_name?: string | null;
+  assigned_to_name?: string | null;
 }
 
 function toPublicTicket(row: SupportTicketRow) {
@@ -49,6 +52,8 @@ function toPublicTicket(row: SupportTicketRow) {
     frappeTicketName: row.frappe_ticket_name,
     createdBy: row.created_by,
     createdByName: row.created_by_name ?? null,
+    assignedTo: row.assigned_to,
+    assignedToName: row.assigned_to_name ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -76,6 +81,7 @@ function toPublicMessage(row: SupportTicketMessageRow) {
 
 export interface ListSupportTicketsFilters {
   leadId?: string;
+  assignedTo?: string;
   page: number;
   limit: number;
 }
@@ -105,6 +111,10 @@ export async function listSupportTickets(requestingUserId: string, filters: List
     params.push(filters.leadId);
     conditions.push(`t.lead_id = $${params.length}`);
   }
+  if (filters.assignedTo) {
+    params.push(filters.assignedTo);
+    conditions.push(`t.assigned_to = $${params.length}`);
+  }
 
   const whereClause = conditions.join(" AND ");
 
@@ -120,13 +130,15 @@ export async function listSupportTickets(requestingUserId: string, filters: List
   const offsetParamIndex = params.length + 2;
   // Same l.full_name/u.name enrichment quote-service.ts's own list query
   // uses, so the frontend never has to separately look up a lead's name
-  // just to show who a ticket belongs to.
+  // just to show who a ticket belongs to. assignee needs its own join
+  // alias since created_by already uses `u`.
   const result = await pool.query<SupportTicketRow>(
     `${TICKET_VISIBILITY_SUBTREE_CTE}
-     SELECT t.*, l.full_name AS lead_full_name, u.name AS created_by_name
+     SELECT t.*, l.full_name AS lead_full_name, u.name AS created_by_name, au.name AS assigned_to_name
      FROM support_tickets t
      INNER JOIN leads l ON l.id = t.lead_id
      LEFT JOIN users u ON u.id = t.created_by
+     LEFT JOIN users au ON au.id = t.assigned_to
      WHERE ${whereClause}
      ORDER BY t.created_at DESC
      LIMIT $${limitParamIndex} OFFSET $${offsetParamIndex}`,
@@ -208,10 +220,11 @@ export async function listTicketsForLead(leadId: string, requestingUserId: strin
 // whose lead the caller can't see.
 async function getVisibleTicketOrThrow(ticketId: string, requestingUserId: string): Promise<SupportTicketRow> {
   const result = await pool.query<SupportTicketRow>(
-    `SELECT t.*, l.full_name AS lead_full_name, u.name AS created_by_name
+    `SELECT t.*, l.full_name AS lead_full_name, u.name AS created_by_name, au.name AS assigned_to_name
      FROM support_tickets t
      JOIN leads l ON l.id = t.lead_id
      LEFT JOIN users u ON u.id = t.created_by
+     LEFT JOIN users au ON au.id = t.assigned_to
      WHERE t.id = $1`,
     [ticketId]
   );
@@ -266,6 +279,48 @@ export async function updateTicketStatus(ticketId: string, status: string, reque
   return toPublicTicket(result.rows[0]);
 }
 
+// Who's actually working this ticket - a FieldForce-only field (see
+// model.ts's own comment on the column), so unlike updateTicketStatus/
+// replyToTicket above there's no Frappe API call here, nothing that can
+// fail on Frappe's side. assigneeId can be any real user (not restricted
+// to this ticket's lead's visibility scope - a deliberate choice, since
+// assignment is about who does the work, not who's allowed to see it,
+// which is already enforced separately via getVisibleTicketOrThrow).
+export async function assignTicket(ticketId: string, assigneeId: string | null, requestingUserId: string) {
+  const ticket = await getVisibleTicketOrThrow(ticketId, requestingUserId);
+
+  let assigneeName: string | null = null;
+  if (assigneeId) {
+    const assignee = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [assigneeId]);
+    if (assignee.rows.length === 0) {
+      throw new ApiError(404, "That user doesn't exist");
+    }
+    assigneeName = assignee.rows[0].name;
+  }
+
+  await pool.query("UPDATE support_tickets SET assigned_to = $1, updated_at = now() WHERE id = $2", [assigneeId, ticketId]);
+
+  // Same "nothing to do" try/catch as every other write here - the
+  // assignment itself already committed above, so a failure logging it
+  // must not read back as the assignment having failed.
+  try {
+    await createActivityForLead(
+      ticket.lead_id,
+      {
+        type: "support_ticket",
+        subject: assigneeName ? `Support ticket assigned to ${assigneeName}: ${ticket.subject}` : `Support ticket unassigned: ${ticket.subject}`,
+        status: "completed",
+        externalRefId: ticket.frappe_ticket_name ?? undefined,
+      },
+      requestingUserId
+    );
+  } catch (err) {
+    console.error(`Failed to log activity for ticket assignment on ${ticketId}:`, err);
+  }
+
+  return getTicketById(ticketId, requestingUserId);
+}
+
 export async function replyToTicket(ticketId: string, message: string, requestingUserId: string) {
   const ticket = await getVisibleTicketOrThrow(ticketId, requestingUserId);
 
@@ -310,26 +365,57 @@ export async function replyToTicket(ticketId: string, message: string, requestin
 // system-to-system write.
 
 // Silently no-ops when the ticket isn't one we track locally (e.g. it was
-// never created through FieldForce) - same "nothing to do" shape as
-// whatsapp-service.ts's `if (!leadId) continue`, not an error condition.
+// never created through FieldForce), or when its lead has since been
+// soft-deleted (support_tickets.lead_id's ON DELETE CASCADE only ever
+// fires on a real DELETE, which leads never get - every lead delete is the
+// is_deleted soft-delete, so without this check a ticket for an already
+// "deleted" lead would keep accepting webhook writes forever, invisibly,
+// since every UI/API surface filters is_deleted = false) - same
+// "nothing to do" shape as whatsapp-service.ts's `if (!leadId) continue`,
+// not an error condition.
 // priority is optional since the webhook payload only includes it once the
 // Frappe-side Webhook Data template is updated to send it - older deliveries
 // (or a site that hasn't added it yet) still carry status alone.
+//
+// status/priority are validated against the same real, confirmed value
+// lists the authenticated PATCH path enforces (TICKET_STATUSES/
+// TICKET_PRIORITIES) - not to reject Frappe's payload (there's no one to
+// return an error to), but so a renamed/re-cased doctype value on the
+// Frappe side can't silently corrupt this ticket's status/priority into
+// something the dashboard's exact-match counts and the status/priority Tag
+// color lookups then can't recognize. An unrecognized value is logged and
+// that one field is left unchanged rather than written as-is.
 export async function syncTicketStatusFromWebhook(
   frappeTicketName: string,
   status: string,
   priority?: string
 ): Promise<void> {
-  if (priority) {
-    await pool.query(
-      "UPDATE support_tickets SET status = $1, priority = $2, updated_at = now() WHERE frappe_ticket_name = $3",
-      [status, priority, frappeTicketName]
-    );
-  } else {
-    await pool.query("UPDATE support_tickets SET status = $1, updated_at = now() WHERE frappe_ticket_name = $2", [
-      status,
-      frappeTicketName,
+  const ticket = await pool.query<{ id: string }>(
+    `SELECT t.id FROM support_tickets t JOIN leads l ON l.id = t.lead_id
+     WHERE t.frappe_ticket_name = $1 AND l.is_deleted = false`,
+    [frappeTicketName]
+  );
+  if (ticket.rows.length === 0) return;
+
+  const validStatus = (TICKET_STATUSES as readonly string[]).includes(status) ? status : null;
+  if (!validStatus) {
+    console.error(`syncTicketStatusFromWebhook: unrecognized status "${status}" for ticket ${frappeTicketName}, leaving status unchanged`);
+  }
+  const validPriority = priority && (TICKET_PRIORITIES as readonly string[]).includes(priority) ? priority : null;
+  if (priority && !validPriority) {
+    console.error(`syncTicketStatusFromWebhook: unrecognized priority "${priority}" for ticket ${frappeTicketName}, leaving priority unchanged`);
+  }
+
+  if (validStatus && validPriority) {
+    await pool.query("UPDATE support_tickets SET status = $1, priority = $2, updated_at = now() WHERE id = $3", [
+      validStatus,
+      validPriority,
+      ticket.rows[0].id,
     ]);
+  } else if (validStatus) {
+    await pool.query("UPDATE support_tickets SET status = $1, updated_at = now() WHERE id = $2", [validStatus, ticket.rows[0].id]);
+  } else if (validPriority) {
+    await pool.query("UPDATE support_tickets SET priority = $1, updated_at = now() WHERE id = $2", [validPriority, ticket.rows[0].id]);
   }
 }
 
@@ -341,9 +427,14 @@ export async function recordInboundReplyFromWebhook(
   body: string,
   frappeCommunicationName: string
 ): Promise<void> {
-  const ticket = await pool.query<{ id: string }>("SELECT id FROM support_tickets WHERE frappe_ticket_name = $1", [
-    frappeTicketName,
-  ]);
+  // Same soft-delete check as syncTicketStatusFromWebhook above - without
+  // it, a lead soft-deleted while its Frappe ticket is still open would
+  // keep silently accumulating inbound messages nobody can ever read back.
+  const ticket = await pool.query<{ id: string }>(
+    `SELECT t.id FROM support_tickets t JOIN leads l ON l.id = t.lead_id
+     WHERE t.frappe_ticket_name = $1 AND l.is_deleted = false`,
+    [frappeTicketName]
+  );
   if (ticket.rows.length === 0) return;
 
   // The ON CONFLICT target has to repeat the partial index's own WHERE

@@ -15,21 +15,38 @@ interface InvoiceRow {
   updated_at: string;
 }
 
-export function invoiceLabel(invoiceNumber: number): string {
-  return `INV-${new Date().getFullYear()}-${String(invoiceNumber).padStart(4, "0")}`;
+// Year comes from the invoice's own invoice_date, not "now" - see
+// sales-order-service.ts's orderLabel for the full reasoning (same bug,
+// same fix, three sibling services).
+export function invoiceLabel(invoiceNumber: number, invoiceDate: string): string {
+  return `INV-${invoiceDate.slice(0, 4)}-${String(invoiceNumber).padStart(4, "0")}`;
 }
 
 // Overdue is computed here, not stored - same reasoning leads/activities'
 // own has_overdue_activity already uses, so it can never drift stale.
+// due_date is a DATE column (calendar day, no time-of-day) - compared as a
+// plain "YYYY-MM-DD" string against today's own date-only string, matching
+// countOverdueInvoices' SQL-side `due_date < CURRENT_DATE` exactly. The
+// previous `new Date(due_date) < new Date()` compared a UTC-midnight
+// timestamp against the current instant, which disagreed with that SQL
+// comparison for any invoice due today (true here almost the entire day,
+// false in SQL until tomorrow) - same invoice, same screen, contradicting
+// itself between the Transactions feed and the Overview tab.
 function isOverdue(row: InvoiceRow): boolean {
-  return row.status !== "paid" && row.due_date !== null && new Date(row.due_date) < new Date();
+  if (row.status === "paid" || row.due_date === null) return false;
+  // IST, not UTC - the Postgres connection's own session timezone is
+  // Asia/Calcutta (confirmed via `SHOW timezone`), which is what
+  // countOverdueInvoices' CURRENT_DATE actually evaluates against. Using
+  // UTC here would just trade one disagreement for another.
+  const todayIST = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+  return row.due_date < todayIST;
 }
 
 function toPublicInvoice(row: InvoiceRow) {
   return {
     id: row.id,
     invoiceNumber: row.invoice_number,
-    invoiceLabel: invoiceLabel(row.invoice_number),
+    invoiceLabel: invoiceLabel(row.invoice_number, row.invoice_date),
     customerId: row.customer_id,
     salesOrderId: row.sales_order_id,
     invoiceDate: row.invoice_date,

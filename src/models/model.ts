@@ -1347,6 +1347,19 @@ Regards,', 'active', 4)
       ('Converted', 'Converted', 'Won - became a customer', 100, 8),
       ('Closed Lost', 'Closed Lost', 'Did not convert', 0, 9)
     ON CONFLICT (key) DO NOTHING`,
+
+    // leads.status's own column default was still the pre-pipeline_stages
+    // lowercase 'new', silently diverging from this table's real key for
+    // the same stage ('New') the moment this table became the actual
+    // source of truth above - fixed at both ends: createLead's own default
+    // (lead-service.ts) and here, for any insert that ever relies on the
+    // column default directly. ALTER COLUMN SET DEFAULT only changes
+    // future inserts; the one-time data fix for rows already written under
+    // the old lowercase default is a separate, explicit UPDATE, not folded
+    // in here, so it stays easy to audit as its own step.
+    `ALTER TABLE leads ALTER COLUMN status SET DEFAULT 'New'`,
+    `UPDATE leads SET status = 'New' WHERE status = 'new'`,
+
     `INSERT INTO role_permissions (role, permission) VALUES
       ('admin','pipeline_stages.view'), ('admin','pipeline_stages.manage')
     ON CONFLICT (role, permission) DO NOTHING`,
@@ -1648,6 +1661,15 @@ Regards,', 'active', 4)
     // existed before this column did.
     `ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS priority VARCHAR(140) NOT NULL DEFAULT 'Medium'`,
 
+    // Phase 5: who owns working this ticket - a FieldForce-only field, by
+    // design decision, not synced to Frappe's own (more complex, generic
+    // cross-doctype ToDo-based) assignment system. All real support work
+    // already happens inside FieldForce's UI, not Frappe directly, so there
+    // was no real need to keep two assignment systems in sync for a field
+    // nothing outside FieldForce ever reads.
+    `ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS assigned_to UUID REFERENCES users(id) ON DELETE SET NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_support_tickets_assigned_to ON support_tickets(assigned_to)`,
+
     // The conversation thread for a ticket - outbound rows are our own
     // agent's replies (also posted to Frappe at the same time, see
     // support-ticket-service.ts's replyToTicket); inbound rows are the
@@ -1674,11 +1696,12 @@ Regards,', 'active', 4)
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_support_ticket_messages_frappe_communication_name ON support_ticket_messages(frappe_communication_name) WHERE frappe_communication_name IS NOT NULL`,
 
     // Customers Phase 1: a customer row is created automatically the moment
-    // a lead's status is set to 'converted' (see lead-service.ts's
-    // updateLead) - there is no manual "add customer" form, since every
-    // customer here already started as a lead. lead_id is UNIQUE so that
-    // transition is idempotent (re-saving an already-converted lead never
-    // creates a second row). credit_limit/outstanding_balance are real,
+    // a lead's status is set to 'Converted' (see lead-service.ts's
+    // updateLead and opportunity-service.ts's convertLeadToOpportunity -
+    // the two places that write this status) - there is no manual "add
+    // customer" form, since every customer here already started as a lead.
+    // lead_id is UNIQUE so that transition is idempotent (re-saving an
+    // already-converted lead never creates a second row). credit_limit/outstanding_balance are real,
     // manually-entered fields (Finance/managers set and update them by
     // hand) - there is no accounting/ERP system wired up yet to source them
     // from, and this table does not pretend otherwise. Geography/contact
@@ -1713,6 +1736,22 @@ Regards,', 'active', 4)
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
     `CREATE INDEX IF NOT EXISTS idx_customers_owner_id ON customers(owner_id)`,
+
+    // A real customer code ("C-00042"), same retrofit pattern leads.lead_number
+    // already uses - a dedicated sequence, backfilled for any existing rows,
+    // formatted into the "C-xxxxx" label only at the mapping layer.
+    `CREATE SEQUENCE IF NOT EXISTS customer_number_seq`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS customer_number INTEGER`,
+    `ALTER TABLE customers ALTER COLUMN customer_number SET DEFAULT nextval('customer_number_seq')`,
+    `UPDATE customers SET customer_number = nextval('customer_number_seq') WHERE customer_number IS NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_customers_customer_number ON customers(customer_number)`,
+
+    // Real city, carried over from the lead's own store_city at conversion
+    // time (set during FOFO onboarding) - not every lead goes through FOFO,
+    // so this is honestly null for the rest rather than guessed; the
+    // district name (already captured via district_id on every lead) is
+    // used as a display-time fallback instead of inventing a value here.
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS city VARCHAR(100)`,
 
     // Real lettered credit rating (A best - D worst), independent of the
     // numeric credit_limit/outstanding_balance pair above - both are real,
