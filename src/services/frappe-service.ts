@@ -119,12 +119,23 @@ interface FrappeTicketResource {
   status: string;
   priority: string | null;
   raised_by: string | null;
+  // Set synchronously by HD Ticket's own before_insert hook the moment an
+  // SLA policy applies (confirmed live against our own site: a ticket's
+  // create response already carries both, computed from the real SLA's
+  // per-priority response/resolution times and its work-schedule/holiday
+  // calendar - not something safe to recompute ourselves, since a ticket
+  // raised outside working hours gets a deadline that skips closed hours,
+  // which simple addition on our side could never replicate correctly).
+  response_by: string | null;
+  resolution_by: string | null;
 }
 
 export interface CreatedFrappeTicket {
   frappeTicketName: string;
   status: string;
   priority: string | null;
+  responseBy: string | null;
+  resolutionBy: string | null;
 }
 
 export async function createTicketInFrappe(
@@ -143,7 +154,13 @@ export async function createTicketInFrappe(
     throw new ApiError(502, "Frappe rejected the ticket: no ticket data in the response");
   }
 
-  return { frappeTicketName: body.data.name, status: body.data.status, priority: body.data.priority };
+  return {
+    frappeTicketName: body.data.name,
+    status: body.data.status,
+    priority: body.data.priority,
+    responseBy: body.data.response_by ?? null,
+    resolutionBy: body.data.resolution_by ?? null,
+  };
 }
 
 // Generic single-field update, used today only for status (resolving/

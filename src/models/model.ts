@@ -1670,6 +1670,17 @@ Regards,', 'active', 4)
     `ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS assigned_to UUID REFERENCES users(id) ON DELETE SET NULL`,
     `CREATE INDEX IF NOT EXISTS idx_support_tickets_assigned_to ON support_tickets(assigned_to)`,
 
+    // Phase 6: real SLA deadlines, captured once at creation from Frappe's
+    // own response (see frappe-service.ts's createTicketInFrappe) - not
+    // live-fetched on every read, since these don't change after creation
+    // under this app's current scope (there's no "change priority after
+    // raising" action yet). Null on every ticket raised before this column
+    // existed, and that's accurate, not a gap to backfill - Frappe never
+    // computed a deadline for those at the time, because the "Standard" SLA
+    // policy's own Valid From/To window hadn't been corrected yet either.
+    `ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS response_by TIMESTAMPTZ`,
+    `ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS resolution_by TIMESTAMPTZ`,
+
     // The conversation thread for a ticket - outbound rows are our own
     // agent's replies (also posted to Frappe at the same time, see
     // support-ticket-service.ts's replyToTicket); inbound rows are the

@@ -19,6 +19,8 @@ const TICKET_VISIBILITY_SUBTREE_CTE = `
   )
 `;
 
+const TERMINAL_TICKET_STATUSES = ["Resolved", "Closed"];
+
 interface SupportTicketRow {
   id: string;
   lead_id: string;
@@ -29,6 +31,8 @@ interface SupportTicketRow {
   frappe_ticket_name: string | null;
   created_by: string | null;
   assigned_to: string | null;
+  response_by: string | null;
+  resolution_by: string | null;
   created_at: string;
   updated_at: string;
   // Only present on queries that join leads/users for display purposes
@@ -38,9 +42,29 @@ interface SupportTicketRow {
   lead_full_name?: string;
   created_by_name?: string | null;
   assigned_to_name?: string | null;
+  // Whether at least one outbound reply exists - whether "first response"
+  // was actually met, not just whether time has passed. Undefined, not
+  // false, when a query doesn't join it (same "not joined" convention as
+  // the name fields above) - toPublicTicket treats that as "unknown",
+  // never defaults it to breached.
+  has_responded?: boolean;
 }
 
+// Computed here, not stored - same reasoning invoice-service.ts's own
+// isOverdue already uses: a deadline passing is a fact about the current
+// moment, not the ticket row, so storing a stale "breached" boolean would
+// drift the instant time moves on without anyone touching the ticket.
+// responseBreached only cares whether a reply was ever sent, regardless of
+// current status; resolutionBreached only cares whether the ticket reached
+// a terminal status, regardless of replies - these are two independent
+// promises, not one "is this ticket late" flag.
 function toPublicTicket(row: SupportTicketRow) {
+  const now = Date.now();
+  const responseBreached =
+    row.response_by !== null && row.has_responded === false && new Date(row.response_by).getTime() < now;
+  const resolutionBreached =
+    row.resolution_by !== null && !TERMINAL_TICKET_STATUSES.includes(row.status) && new Date(row.resolution_by).getTime() < now;
+
   return {
     id: row.id,
     leadId: row.lead_id,
@@ -54,6 +78,10 @@ function toPublicTicket(row: SupportTicketRow) {
     createdByName: row.created_by_name ?? null,
     assignedTo: row.assigned_to,
     assignedToName: row.assigned_to_name ?? null,
+    responseBy: row.response_by,
+    resolutionBy: row.resolution_by,
+    responseBreached,
+    resolutionBreached,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -134,7 +162,8 @@ export async function listSupportTickets(requestingUserId: string, filters: List
   // alias since created_by already uses `u`.
   const result = await pool.query<SupportTicketRow>(
     `${TICKET_VISIBILITY_SUBTREE_CTE}
-     SELECT t.*, l.full_name AS lead_full_name, u.name AS created_by_name, au.name AS assigned_to_name
+     SELECT t.*, l.full_name AS lead_full_name, u.name AS created_by_name, au.name AS assigned_to_name,
+       EXISTS (SELECT 1 FROM support_ticket_messages m WHERE m.ticket_id = t.id AND m.direction = 'outbound') AS has_responded
      FROM support_tickets t
      INNER JOIN leads l ON l.id = t.lead_id
      LEFT JOIN users u ON u.id = t.created_by
@@ -165,8 +194,8 @@ export async function createTicketForLead(
   const frappeTicket = await frappeService.createTicketInFrappe(subject, description, lead.email || undefined, priority);
 
   const result = await pool.query<SupportTicketRow>(
-    `INSERT INTO support_tickets (lead_id, subject, description, status, priority, frappe_ticket_name, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO support_tickets (lead_id, subject, description, status, priority, frappe_ticket_name, created_by, response_by, resolution_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      RETURNING *`,
     [
       leadId,
@@ -176,6 +205,8 @@ export async function createTicketForLead(
       frappeTicket.priority ?? priority,
       frappeTicket.frappeTicketName,
       requestingUserId,
+      frappeTicket.responseBy,
+      frappeTicket.resolutionBy,
     ]
   );
 
@@ -220,7 +251,8 @@ export async function listTicketsForLead(leadId: string, requestingUserId: strin
 // whose lead the caller can't see.
 async function getVisibleTicketOrThrow(ticketId: string, requestingUserId: string): Promise<SupportTicketRow> {
   const result = await pool.query<SupportTicketRow>(
-    `SELECT t.*, l.full_name AS lead_full_name, u.name AS created_by_name, au.name AS assigned_to_name
+    `SELECT t.*, l.full_name AS lead_full_name, u.name AS created_by_name, au.name AS assigned_to_name,
+       EXISTS (SELECT 1 FROM support_ticket_messages m WHERE m.ticket_id = t.id AND m.direction = 'outbound') AS has_responded
      FROM support_tickets t
      JOIN leads l ON l.id = t.lead_id
      LEFT JOIN users u ON u.id = t.created_by
