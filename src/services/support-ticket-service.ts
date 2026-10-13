@@ -1,5 +1,6 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
+import { convert } from "html-to-text";
 import { getLeadById } from "./lead-service";
 import { createActivityForLead } from "./activity-service";
 import * as frappeService from "./frappe-service";
@@ -469,6 +470,16 @@ export async function recordInboundReplyFromWebhook(
   );
   if (ticket.rows.length === 0) return;
 
+  // A real customer reply arrives as the email's full HTML (Frappe's
+  // Communication.content, confirmed against a genuine inbox reply, not
+  // just a manually-typed test message) - rendered as plain text in the
+  // reply thread (see SupportTicketDetailDrawer.tsx's Bubble component),
+  // raw HTML would otherwise show up as literal <table>/<div> markup
+  // instead of readable text. Converted once here, at write time, so the
+  // stored value is already clean - same plain-text shape an outbound
+  // reply typed directly in FieldForce already has.
+  const plainTextBody = convert(body, { wordwrap: false });
+
   // The ON CONFLICT target has to repeat the partial index's own WHERE
   // clause verbatim (model.ts's idx_support_ticket_messages_frappe_
   // communication_name) - Postgres only infers a partial unique index as
@@ -478,7 +489,7 @@ export async function recordInboundReplyFromWebhook(
     `INSERT INTO support_ticket_messages (ticket_id, direction, body, frappe_communication_name)
      VALUES ($1, 'inbound', $2, $3)
      ON CONFLICT (frappe_communication_name) WHERE frappe_communication_name IS NOT NULL DO NOTHING`,
-    [ticket.rows[0].id, body, frappeCommunicationName]
+    [ticket.rows[0].id, plainTextBody, frappeCommunicationName]
   );
 }
 
