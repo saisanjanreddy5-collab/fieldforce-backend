@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { paginationQuerySchema } from "./pagination";
+import { decimal12_2 } from "./money";
 
 export const CUSTOMER_STATUSES = ["active", "inactive", "on_hold"] as const;
 export const CREDIT_CATEGORIES = ["A", "B", "C", "D"] as const;
@@ -11,8 +12,8 @@ export const CREDIT_CATEGORIES = ["A", "B", "C", "D"] as const;
 export const updateCustomerSchema = z.object({
   ownerId: z.string().uuid().nullable().optional(),
   status: z.enum(CUSTOMER_STATUSES).optional(),
-  creditLimit: z.coerce.number().min(0).optional(),
-  outstandingBalance: z.coerce.number().min(0).optional(),
+  creditLimit: decimal12_2().min(0).optional(),
+  outstandingBalance: decimal12_2().min(0).optional(),
   creditCategory: z.enum(CREDIT_CATEGORIES).nullable().optional(),
 });
 

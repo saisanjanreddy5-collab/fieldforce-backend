@@ -1,6 +1,7 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { isCustomerInScope } from "./customer-service";
+import { recordAuditEvent } from "./audit-log-service";
 
 interface SalesOrderRow {
   id: string;
@@ -116,6 +117,25 @@ export async function deleteOrder(orderId: string, requestingUserId: string): Pr
   const existing = await getOrderOrThrow(orderId);
   await assertInScope(existing.customer_id, requestingUserId);
   await pool.query("DELETE FROM sales_orders WHERE id = $1", [orderId]);
+
+  // There's no is_deleted column here (a hard DELETE is the real, correct
+  // behavior for this table - see model.ts), so this audit entry is the
+  // only trace that a real sales order ever existed once it's gone.
+  // Matches the seriousness updateCustomer's own credit/balance changes
+  // already get - deleting a real financial record is at least as
+  // consequential.
+  const actorName = (await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId])).rows[0]?.name ?? null;
+  await recordAuditEvent({
+    entityType: "sales_order",
+    entityId: orderId,
+    entityLabel: orderLabel(existing.order_number, existing.order_date),
+    action: "deleted",
+    summary: `Sales order deleted - ${orderLabel(existing.order_number, existing.order_date)} (₹${existing.amount}, ${existing.status})`,
+    oldValue: `₹${existing.amount} · ${existing.status}`,
+    newValue: "Deleted",
+    actorId: requestingUserId,
+    actorName,
+  });
 }
 
 // For customer-service.ts's merged Transactions feed - needs the real rows,

@@ -1036,6 +1036,20 @@ export async function createTables(): Promise<void> {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_lead_id ON whatsapp_messages(lead_id)`,
 
+    // wa_message_id turned out not to be unique forever in practice -
+    // confirmed against real provider data: the exact same id was reused
+    // for two genuinely different messages weeks apart. The old UNIQUE
+    // constraint + ON CONFLICT DO NOTHING treated that reuse as "already
+    // processed", so every real inbound message that happened to land on
+    // a previously-used id was silently dropped - no error, nothing in
+    // the logs, just gone. whatsapp-service.ts now does its own recency-
+    // bounded duplicate check instead (a real provider retry of the same
+    // delivery happens within minutes, never weeks), so the column no
+    // longer needs - or can safely keep - a hard uniqueness constraint.
+    // Kept as a plain index since every lookup here is still by this column.
+    `ALTER TABLE whatsapp_messages DROP CONSTRAINT IF EXISTS whatsapp_messages_wa_message_id_key`,
+    `CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_wa_message_id ON whatsapp_messages(wa_message_id)`,
+
     // New module, wired to requirePermission from day one. Agents get both
     // view and send - they're the ones messaging their own leads; manager
     // and admin inherit the same pair for now, no separate "manage" action

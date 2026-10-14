@@ -1,6 +1,7 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { isCustomerInScope } from "./customer-service";
+import { recordAuditEvent } from "./audit-log-service";
 
 interface PaymentRow {
   id: string;
@@ -45,6 +46,17 @@ async function assertInScope(customerId: string, requestingUserId: string): Prom
   }
 }
 
+// Same reasoning as invoice-service.ts's assertSalesOrderBelongsToCustomer
+// - an invoiceId belonging to a different customer passes the foreign key
+// check fine on its own, silently cross-linking two unrelated customers'
+// transaction records with no validation error.
+async function assertInvoiceBelongsToCustomer(invoiceId: string, customerId: string): Promise<void> {
+  const result = await pool.query("SELECT 1 FROM invoices WHERE id = $1 AND customer_id = $2", [invoiceId, customerId]);
+  if ((result.rowCount ?? 0) === 0) {
+    throw new ApiError(422, "That invoice does not belong to this customer");
+  }
+}
+
 export async function listPaymentsForCustomer(customerId: string, requestingUserId: string) {
   await assertInScope(customerId, requestingUserId);
   const result = await pool.query<PaymentRow>(
@@ -64,6 +76,9 @@ export interface PaymentInput {
 
 export async function createPayment(customerId: string, input: PaymentInput, requestingUserId: string) {
   await assertInScope(customerId, requestingUserId);
+  if (input.invoiceId) {
+    await assertInvoiceBelongsToCustomer(input.invoiceId, customerId);
+  }
   const result = await pool.query<PaymentRow>(
     `INSERT INTO payments (customer_id, invoice_id, payment_date, method, status, amount, created_by)
      VALUES ($1, $2, COALESCE($3, CURRENT_DATE), $4, COALESCE($5,'cleared'), $6, $7)
@@ -84,6 +99,9 @@ async function getPaymentOrThrow(paymentId: string): Promise<PaymentRow> {
 export async function updatePayment(paymentId: string, input: Partial<PaymentInput>, requestingUserId: string) {
   const existing = await getPaymentOrThrow(paymentId);
   await assertInScope(existing.customer_id, requestingUserId);
+  if (input.invoiceId) {
+    await assertInvoiceBelongsToCustomer(input.invoiceId, existing.customer_id);
+  }
 
   const fieldMap: Record<string, unknown> = {
     invoice_id: input.invoiceId,
@@ -115,6 +133,24 @@ export async function deletePayment(paymentId: string, requestingUserId: string)
   const existing = await getPaymentOrThrow(paymentId);
   await assertInScope(existing.customer_id, requestingUserId);
   await pool.query("DELETE FROM payments WHERE id = $1", [paymentId]);
+
+  // There's no is_deleted column here (a hard DELETE is the real, correct
+  // behavior for this table - see model.ts), so this audit entry is the
+  // only trace that a real payment ever existed once it's gone. Matches
+  // the seriousness updateCustomer's own credit/balance changes already
+  // get - deleting a real financial record is at least as consequential.
+  const actorName = (await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId])).rows[0]?.name ?? null;
+  await recordAuditEvent({
+    entityType: "payment",
+    entityId: paymentId,
+    entityLabel: receiptLabel(existing.receipt_number, existing.payment_date),
+    action: "deleted",
+    summary: `Payment deleted - ${receiptLabel(existing.receipt_number, existing.payment_date)} (₹${existing.amount}, ${existing.status})`,
+    oldValue: `₹${existing.amount} · ${existing.status}`,
+    newValue: "Deleted",
+    actorId: requestingUserId,
+    actorName,
+  });
 }
 
 export async function listPaymentRowsForCustomer(customerId: string) {
