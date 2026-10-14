@@ -299,10 +299,15 @@ export async function sendMailForLead(
   subject: string,
   body: string,
   requestingUserId: string,
-  attachments: EmailAttachmentInput[] = []
+  attachments: EmailAttachmentInput[] = [],
+  overrideEmail?: string
 ): Promise<void> {
   const lead = await getLeadById(leadId, requestingUserId);
-  if (!lead.email) {
+  // overrideEmail lets a caller target a specific person (e.g. one of a
+  // customer's own contacts) instead of the lead/customer's own default
+  // email - still logged against this same lead either way.
+  const recipient = overrideEmail ?? lead.email;
+  if (!recipient) {
     throw new ApiError(422, "This lead has no email address on file");
   }
 
@@ -315,7 +320,7 @@ export async function sendMailForLead(
       message: {
         subject,
         body: { contentType: "Text", content: body },
-        toRecipients: [{ emailAddress: { address: lead.email } }],
+        toRecipients: [{ emailAddress: { address: recipient } }],
         ...(attachments.length > 0 && {
           attachments: attachments.map((a) => ({
             "@odata.type": "#microsoft.graph.fileAttachment",
