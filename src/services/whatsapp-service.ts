@@ -128,9 +128,9 @@ export function isWebhookSecretValid(providedSecret: string | undefined): boolea
 // almost field-for-field ("messaging_product", template component
 // structure, etc.), which is the basis for assuming their webhook follows
 // Meta's standard convention too - entry[].changes[].value.messages for an
-// inbound message, .statuses for a delivery/read/failed update. Not
-// confirmed against a real K3 payload yet; the raw body is logged on every
-// call specifically so a mismatch is easy to spot and fix once this is live.
+// inbound message, .statuses for a delivery/read/failed update. Now
+// confirmed against real K3 production traffic (not just Meta's public
+// docs) - this shape is correct.
 interface WhatsappWebhookPayload {
   entry?: {
     changes?: {
@@ -141,6 +141,15 @@ interface WhatsappWebhookPayload {
     }[];
   }[];
 }
+
+// How long a repeated wa_message_id is treated as the same delivery
+// retried, not a genuinely new message that happens to reuse an old id.
+// A real provider retry of the same event lands within seconds to
+// minutes of the original; 10 minutes is generous headroom for that
+// while still being nowhere near the days/weeks apart the real collision
+// (two different real messages, confirmed in production data) turned out
+// to span.
+const DUPLICATE_DELIVERY_WINDOW = "10 minutes";
 
 export async function handleWebhookEvent(payload: WhatsappWebhookPayload): Promise<void> {
   console.log("WhatsApp webhook payload:", JSON.stringify(payload));
@@ -153,16 +162,34 @@ export async function handleWebhookEvent(payload: WhatsappWebhookPayload): Promi
         const leadId = await findLeadIdByPhone(inbound.from);
         if (!leadId) continue;
 
+        // wa_message_id is not guaranteed unique forever in practice (see
+        // model.ts's own comment on this table for the real incident this
+        // traces back to) - a blind ON CONFLICT (wa_message_id) DO NOTHING
+        // silently dropped every later message that happened to share an
+        // id with one already in the table, no matter how long ago. This
+        // only skips the insert when a same-id row is recent enough to be
+        // a genuine retry of the same delivery.
+        const recentDuplicate = await pool.query(
+          `SELECT 1 FROM whatsapp_messages WHERE wa_message_id = $1 AND created_at > now() - interval '${DUPLICATE_DELIVERY_WINDOW}'`,
+          [inbound.id]
+        );
+        if ((recentDuplicate.rowCount ?? 0) > 0) continue;
+
         await pool.query(
           `INSERT INTO whatsapp_messages (lead_id, direction, body, status, wa_message_id)
-           VALUES ($1, 'inbound', $2, 'received', $3)
-           ON CONFLICT (wa_message_id) DO NOTHING`,
+           VALUES ($1, 'inbound', $2, 'received', $3)`,
           [leadId, inbound.text.body, inbound.id]
         );
       }
 
       for (const status of change.value?.statuses ?? []) {
-        await pool.query("UPDATE whatsapp_messages SET status = $1 WHERE wa_message_id = $2", [
+        // Scoped to direction = 'outbound' - status updates (sent/
+        // delivered/read) only ever apply to a message this app itself
+        // sent, never to one it received. Without this, the same
+        // wa_message_id reuse that broke inbound inserts above could also
+        // make a stale status update land on an unrelated inbound row
+        // that happens to share an old id.
+        await pool.query("UPDATE whatsapp_messages SET status = $1 WHERE wa_message_id = $2 AND direction = 'outbound'", [
           status.status,
           status.id,
         ]);
