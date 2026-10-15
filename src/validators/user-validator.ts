@@ -28,6 +28,10 @@ export const updateUserSchema = z.object({
   officeId: z.string().uuid().or(z.literal("")).optional(),
   divisionChannelId: z.string().uuid().or(z.literal("")).optional(),
   customerCategoryId: z.string().uuid().or(z.literal("")).optional(),
+  // Login access toggle - Administrator only (same users.update gate as
+  // every other field here). true/false, not a tri-state - there's no
+  // separate "deleted" state in the app itself, only this.
+  isActive: z.boolean().optional(),
 });
 
 export const listUsersQuerySchema = paginationQuerySchema;

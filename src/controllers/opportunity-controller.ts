@@ -50,6 +50,11 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, null, "Opportunity deleted");
 });
 
+export const getHistory = asyncHandler(async (req: Request, res: Response) => {
+  const history = await opportunityService.listOpportunityHistory(String(req.params.id), req.user!.id);
+  sendSuccess(res, history);
+});
+
 export const teamRollup = asyncHandler(async (req: Request, res: Response) => {
   const groups = await teamRollupService.getTeamRollup(req.user!.id, req.user!.role);
   sendSuccess(res, groups);

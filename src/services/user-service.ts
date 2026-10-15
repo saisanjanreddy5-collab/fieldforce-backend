@@ -47,6 +47,7 @@ export interface UpdateUserInput {
   officeId?: string;
   divisionChannelId?: string;
   customerCategoryId?: string;
+  isActive?: boolean;
 }
 
 interface UserRow {
@@ -113,9 +114,13 @@ export async function listUsers(requestingUserId: string, requestingRole: Role, 
   const offset = (filters.page - 1) * filters.limit;
 
   if (requestingRole === ROLES.ADMIN) {
-    const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM users WHERE is_active = true");
+    // Not filtered to is_active = true like the manager branch below - an
+    // Administrator is the only one who can disable an account at all, so
+    // this has to be the one view where a disabled account doesn't just
+    // disappear with no way back to re-enable it.
+    const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM users");
     const result = await pool.query<UserRow>(
-      "SELECT * FROM users WHERE is_active = true ORDER BY name ASC LIMIT $1 OFFSET $2",
+      "SELECT * FROM users ORDER BY name ASC LIMIT $1 OFFSET $2",
       [limit, offset]
     );
     return { users: result.rows.map(toPublicUser), total: Number(countResult.rows[0].count) };
@@ -183,6 +188,33 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
     }
   }
 
+  // Disabling login access - two guardrails against locking everyone out
+  // by accident, same reasoning a cloud IAM console applies to its own
+  // "disable this user" action. Both checks only run when access is
+  // actually being turned off (updates.isActive === false), never on a
+  // re-enable or on an unrelated field edit.
+  if (updates.isActive === false) {
+    if (id === changedBy) {
+      throw new ApiError(400, "You cannot disable your own account");
+    }
+    const target = await pool.query<{ role: Role; is_active: boolean }>(
+      "SELECT role, is_active FROM users WHERE id = $1",
+      [id]
+    );
+    if (target.rows.length === 0) {
+      throw new ApiError(404, "User not found");
+    }
+    if (target.rows[0].role === ROLES.ADMIN && target.rows[0].is_active) {
+      const activeAdmins = await pool.query<{ count: string }>(
+        "SELECT COUNT(*) FROM users WHERE role = $1 AND is_active = true",
+        [ROLES.ADMIN]
+      );
+      if (Number(activeAdmins.rows[0].count) <= 1) {
+        throw new ApiError(400, "Cannot disable the only active Admin account");
+      }
+    }
+  }
+
   // Same rule as registration: changing someone's Level actually changes
   // their real security tier, not just the label shown for them. Clearing
   // the level (levelId === "") leaves role untouched - there's no tier to
@@ -208,6 +240,7 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
     office_id: normalize(updates.officeId),
     division_channel_id: normalize(updates.divisionChannelId),
     customer_category_id: normalize(updates.customerCategoryId),
+    is_active: updates.isActive,
     role,
   };
 
