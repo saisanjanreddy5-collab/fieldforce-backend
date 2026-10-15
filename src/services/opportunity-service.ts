@@ -2,6 +2,7 @@ import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { isLeadInOwnerScope, isLeadVisibleToUser } from "./lead-service";
 import { createCustomerFromLead } from "./customer-service";
+import { recordAuditEvent, listAuditLogForEntity } from "./audit-log-service";
 
 // Reuses the same "subtree" idea as leads: an opportunity is visible to a
 // user exactly when the lead it belongs to is visible to that user (Rule A
@@ -318,21 +319,36 @@ export async function listOpportunitiesForUser(requestingUserId: string, filters
   return { opportunities: result.rows.map(toPublicOpportunityListItem), total: Number(countResult.rows[0].count) };
 }
 
+// Same joined shape listOpportunitiesForUser already returns (lead name,
+// category, owner, ...) - not the bare row. Without this, an opportunity
+// opened via a deep link (e.g. Global Search's "/opportunities?opportunityId=")
+// came back with no leadFullName at all, even though every other entry
+// point (clicking a Kanban card, already working off the list response)
+// had it - the same data silently present or missing depending on how you
+// got there.
 export async function getOpportunityById(id: string, requestingUserId: string) {
   const visible = await isOpportunityVisibleToUser(id, requestingUserId);
   if (!visible) {
     throw new ApiError(403, "You do not have access to this opportunity");
   }
 
-  const result = await pool.query<OpportunityRow>(
-    "SELECT * FROM opportunities WHERE id = $1 AND is_deleted = false",
+  const result = await pool.query<OpportunityListRow>(
+    `SELECT o.*, l.full_name AS lead_full_name, l.category AS lead_category,
+       l.store_city AS lead_store_city, l.store_state AS lead_store_state,
+       l.zone_id AS lead_zone_id, l.territory AS lead_territory, l.sales_team_id AS lead_sales_team_id,
+       l.owner_id AS owner_id, u.name AS owner_name,
+       (SELECT COUNT(*) FROM activities a WHERE a.opportunity_id = o.id) AS activity_count
+     FROM opportunities o
+     JOIN leads l ON l.id = o.lead_id
+     LEFT JOIN users u ON u.id = l.owner_id
+     WHERE o.id = $1 AND o.is_deleted = false`,
     [id]
   );
   if (result.rows.length === 0) {
     throw new ApiError(404, "Opportunity not found");
   }
 
-  return toPublicOpportunity(result.rows[0]);
+  return toPublicOpportunityListItem(result.rows[0]);
 }
 
 export async function updateOpportunity(id: string, updates: OpportunityInput, requestingUserId: string) {
@@ -365,15 +381,28 @@ export async function updateOpportunity(id: string, updates: OpportunityInput, r
     return getOpportunityById(id, requestingUserId);
   }
 
+  // Fetched once, before the UPDATE, whenever stage is changing - serves
+  // both the won_at stamp below and the stage-change history entry after
+  // the UPDATE commits. label prefers the opportunity's own name, falling
+  // back to the lead's name exactly like the card/drawer display does, so
+  // the history entry reads the same way the opportunity is shown anywhere
+  // else in the UI.
+  let before: { stage: string; label: string } | null = null;
+  if (updates.stage !== undefined) {
+    const current = await pool.query<{ stage: string; name: string | null; lead_full_name: string }>(
+      `SELECT o.stage, o.name, l.full_name AS lead_full_name FROM opportunities o JOIN leads l ON l.id = o.lead_id WHERE o.id = $1`,
+      [id]
+    );
+    const row = current.rows[0];
+    before = row ? { stage: row.stage, label: row.name ?? row.lead_full_name } : null;
+  }
+
   // Stamp won_at the moment stage actually transitions into 'won' - not on
   // every edit while it's already won (won_at is left alone), and not
   // touched at all when moving away from won (the historical value is
   // preserved, never cleared).
-  if (updates.stage === "won") {
-    const current = await pool.query<{ stage: string }>("SELECT stage FROM opportunities WHERE id = $1", [id]);
-    if (current.rows[0]?.stage !== "won") {
-      setClauses.push("won_at = now()");
-    }
+  if (updates.stage === "won" && before && before.stage !== "won") {
+    setClauses.push("won_at = now()");
   }
 
   params.push(requestingUserId);
@@ -387,7 +416,38 @@ export async function updateOpportunity(id: string, updates: OpportunityInput, r
     params
   );
 
+  // A real, permanent log of every stage move - not just the updated_by/
+  // updated_at pair above, which only ever remembers the single latest
+  // change and gets silently overwritten the next time the deal moves.
+  // Same pattern updateLead's own status_changed audit entry already uses.
+  if (before && updates.stage !== undefined && updates.stage !== before.stage) {
+    const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
+    await recordAuditEvent({
+      entityType: "opportunity",
+      entityId: id,
+      entityLabel: before.label,
+      action: "stage_changed",
+      summary: `Stage changed - ${before.label}`,
+      oldValue: before.stage,
+      newValue: updates.stage,
+      actorId: requestingUserId,
+      actorName: actorResult.rows[0]?.name ?? null,
+    });
+  }
+
   return toPublicOpportunity(result.rows[0]);
+}
+
+// Powers the opportunity detail drawer's "History" section - every real
+// stage move, newest first. Read-only, same visibility rule as viewing the
+// opportunity itself (not owner-scope - anyone who can see this opportunity
+// can see how it got here).
+export async function listOpportunityHistory(id: string, requestingUserId: string) {
+  const visible = await isOpportunityVisibleToUser(id, requestingUserId);
+  if (!visible) {
+    throw new ApiError(403, "You do not have access to this opportunity");
+  }
+  return listAuditLogForEntity("opportunity", id);
 }
 
 export async function deleteOpportunity(id: string, requestingUserId: string): Promise<void> {

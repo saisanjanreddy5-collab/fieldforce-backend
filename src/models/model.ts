@@ -738,7 +738,7 @@ export async function createTables(): Promise<void> {
     `ALTER TABLE levels ADD COLUMN IF NOT EXISTS approval_label_override VARCHAR(50)`,
     `ALTER TABLE levels ADD COLUMN IF NOT EXISTS can_edit_label VARCHAR(60)`,
     `INSERT INTO levels (name, sort_order, description, headcount_limit, approval_ceiling, security_tier, is_cross_cutting, record_scope, sees_label_override, approval_label_override, can_edit_label) VALUES
-      ('Administrator', -1, 'System', NULL, NULL, 'admin', true, 'everything', NULL, 'Config only', 'All records + config'),
+      ('Admin', -1, 'System', NULL, NULL, 'admin', true, 'everything', NULL, 'Config only', 'All records + config'),
       ('Chief Executive Officer', 1, 'Top of the tree - sees everything', NULL, NULL, 'manager', false, 'own_and_below', NULL, NULL, 'Read-only'),
       ('Business Head', 2, 'Division owner - sets targets', 2, 10000000, 'manager', false, 'own_and_below', NULL, NULL, 'Own division'),
       ('National Sales Head', 3, 'All zones for a division', 2, 5000000, 'manager', false, 'own_and_below', NULL, NULL, 'Own tree'),

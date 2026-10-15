@@ -27,5 +27,6 @@ router.post(
 );
 
 router.get("/:id/quotes", requirePermission("quotes.view"), quoteController.listForOpportunity);
+router.get("/:id/history", requirePermission("opportunities.view"), opportunityController.getHistory);
 
 export default router;
