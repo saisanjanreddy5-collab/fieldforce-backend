@@ -7,6 +7,9 @@ export const sendLeadEmailSchema = z.object({
   // contact who isn't the lead itself) - when absent, sendMailForLead falls
   // back to the lead's own email on file exactly as before.
   toEmail: z.string().email().optional(),
+  // Comma-separated list, not a real array - see sendMailForLead's own
+  // comment for why (this request is multipart/form-data for attachments).
+  ccEmails: z.string().optional(),
 });
 
 export const createTeamsMeetingSchema = z.object({

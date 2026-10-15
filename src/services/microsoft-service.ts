@@ -294,13 +294,16 @@ async function getValidAccessToken(userId: string): Promise<string> {
   return tokens.access_token;
 }
 
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export async function sendMailForLead(
   leadId: string,
   subject: string,
   body: string,
   requestingUserId: string,
   attachments: EmailAttachmentInput[] = [],
-  overrideEmail?: string
+  overrideEmail?: string,
+  ccEmailsRaw?: string
 ): Promise<void> {
   const lead = await getLeadById(leadId, requestingUserId);
   // overrideEmail lets a caller target a specific person (e.g. one of a
@@ -309,6 +312,21 @@ export async function sendMailForLead(
   const recipient = overrideEmail ?? lead.email;
   if (!recipient) {
     throw new ApiError(422, "This lead has no email address on file");
+  }
+
+  // Comma-separated, not a real array - this request is multipart/form-data
+  // (file attachments), and FormData has no native array field, so the
+  // frontend joins its CC chips into one string the same way a normal "cc@a,
+  // cc@b" paste into a mail client's CC box would look. Validated here, not
+  // silently dropped - a typo'd CC address should fail loudly, not just
+  // never receive the email with no indication why.
+  const ccRecipients = (ccEmailsRaw ?? "")
+    .split(",")
+    .map((e) => e.trim())
+    .filter((e) => e.length > 0);
+  const invalidCc = ccRecipients.find((e) => !EMAIL_SHAPE.test(e));
+  if (invalidCc) {
+    throw new ApiError(422, `"${invalidCc}" doesn't look like a valid email address`);
   }
 
   const accessToken = await getValidAccessToken(requestingUserId);
@@ -321,6 +339,9 @@ export async function sendMailForLead(
         subject,
         body: { contentType: "Text", content: body },
         toRecipients: [{ emailAddress: { address: recipient } }],
+        ...(ccRecipients.length > 0 && {
+          ccRecipients: ccRecipients.map((address) => ({ emailAddress: { address } })),
+        }),
         ...(attachments.length > 0 && {
           attachments: attachments.map((a) => ({
             "@odata.type": "#microsoft.graph.fileAttachment",
@@ -340,7 +361,7 @@ export async function sendMailForLead(
 
   await createActivityForLead(
     leadId,
-    { type: "email", subject, status: "completed", details: { body } },
+    { type: "email", subject, status: "completed", details: { body, cc: ccRecipients.length > 0 ? ccRecipients : undefined } },
     requestingUserId
   );
 }
