@@ -1,0 +1,414 @@
+{
+  "info": {
+    "_postman_id": "a3f2e9c0-6b1d-4b2e-9f3a-1d2c3b4a5e6f",
+    "name": "FieldForce CRM - Login & Leads APIs",
+    "description": "Scope: Auth (login/session) + Leads, generated directly from the live backend route/validator source on 2026-10-16. Every endpoint below is real and currently deployed - nothing here is guessed.\n\n- Base URL points at production: https://devcrm.nextechltd.in/api\n- All endpoints (except Login/Refresh/Logout) require `Authorization: Bearer <accessToken>`. This collection handles that for you via the `accessToken` collection variable - just run \"Login\" first and every other request will auto-use the token.\n- Every response is wrapped as `{ success: boolean, data: ..., message?: string }`. On error: `{ success: false, message: string, errors?: ... }` with a 4xx/5xx status code.\n- Some endpoints are gated by a permission string (shown in each request's description, e.g. `leads.view`). If a user's role doesn't have that permission, the API returns 403.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "https://devcrm.nextechltd.in/api", "type": "string" },
+    { "key": "accessToken", "value": "", "type": "string" },
+    { "key": "refreshToken", "value": "", "type": "string" },
+    { "key": "leadId", "value": "", "type": "string", "description": "Auto-filled after running 'Create Lead', or paste an existing lead's id here." },
+    { "key": "userId", "value": "", "type": "string", "description": "Target user id for the lead-sharing endpoints." }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"your-email@example.com\",\n  \"password\": \"your-password\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth", "login"] },
+            "description": "No auth required. Rate-limited. On success, response is:\n```\n{\n  success: true,\n  data: {\n    user: { id, name, email, role, designation, managerId, salesTeamId, zoneId, stateId, districtId, areaId, mobile, territory, employeeCode, status, isActive, permissions: string[], ... },\n    accessToken: string,   // short-lived JWT, send as 'Authorization: Bearer <accessToken>'\n    refreshToken: string   // long-lived, use with /auth/refresh\n  },\n  message: \"Login successful\"\n}\n```\nThis request's Tests script auto-saves `accessToken`/`refreshToken` into the collection variables, so every other request in this collection authenticates automatically."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.success && json.data) {",
+                  "    pm.collectionVariables.set('accessToken', json.data.accessToken);",
+                  "    pm.collectionVariables.set('refreshToken', json.data.refreshToken);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Access Token",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/refresh", "host": ["{{baseUrl}}"], "path": ["auth", "refresh"] },
+            "description": "No auth header required - the refresh token itself is the credential. Call this when the access token expires instead of logging in again. Response: `{ success: true, data: { accessToken: string }, message: \"Token refreshed\" }`. Auto-updates the `accessToken` collection variable."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const json = pm.response.json();",
+                  "if (json && json.success && json.data) {",
+                  "    pm.collectionVariables.set('accessToken', json.data.accessToken);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/logout", "host": ["{{baseUrl}}"], "path": ["auth", "logout"] },
+            "description": "Revokes the given refresh token server-side. Always returns success even if the token was already invalid/expired - the client should discard its local tokens regardless. Response: `{ success: true, data: null, message: \"Logged out\" }`."
+          }
+        },
+        {
+          "name": "Get Current User (Me)",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/auth/me", "host": ["{{baseUrl}}"], "path": ["auth", "me"] },
+            "description": "Requires: valid access token (no specific permission). Returns the logged-in user's full profile plus their resolved `permissions` array - use this to decide what to show/hide in the mobile app. Response: `{ success: true, data: { id, name, email, role, ..., permissions: string[] } }`."
+          }
+        },
+        {
+          "name": "Register User (Admin only - not a mobile login flow)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"New Employee\",\n  \"email\": \"new.employee@example.com\",\n  \"password\": \"MinEightChars1\",\n  \"role\": \"agent\",\n  \"designation\": \"Sales Executive\",\n  \"managerId\": \"\",\n  \"salesTeamId\": \"\",\n  \"mobile\": \"\",\n  \"territory\": \"\"\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/auth/register", "host": ["{{baseUrl}}"], "path": ["auth", "register"] },
+            "description": "Requires permission: `users.create`, called with an ADMIN's own access token (not public self-signup - there's no public registration in this API). Included here for completeness since it lives on the auth router, but the mobile app's own login screen will only ever call Login/Refresh/Logout/Me above.\n\nEither `role` (admin/manager/agent) or `levelId` must be provided. Response: `{ success: true, data: <new user object>, message: \"User created\" }`, 201."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Leads",
+      "item": [
+        {
+          "name": "Core",
+          "item": [
+            {
+              "name": "List Leads",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/leads?page=1&limit=20",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["leads"],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "limit", "value": "20", "description": "max 100" },
+                    { "key": "status", "value": "", "disabled": true },
+                    { "key": "ownerId", "value": "", "disabled": true, "description": "uuid" },
+                    { "key": "zoneId", "value": "", "disabled": true, "description": "uuid" },
+                    { "key": "stateId", "value": "", "disabled": true, "description": "uuid" },
+                    { "key": "districtId", "value": "", "disabled": true, "description": "uuid" },
+                    { "key": "areaId", "value": "", "disabled": true, "description": "uuid" },
+                    { "key": "search", "value": "", "disabled": true },
+                    { "key": "category", "value": "", "disabled": true },
+                    { "key": "overdueOnly", "value": "true", "disabled": true, "description": "\"true\" or \"false\"" },
+                    { "key": "highScoreOnly", "value": "true", "disabled": true, "description": "\"true\" or \"false\"" },
+                    { "key": "consentPending", "value": "true", "disabled": true, "description": "\"true\" or \"false\"" },
+                    { "key": "unassignedOnly", "value": "true", "disabled": true, "description": "\"true\" or \"false\"" }
+                  ]
+                },
+                "description": "Requires permission: `leads.view`. All query params are optional except none are required - `page`/`limit` default to 1/20 if omitted. Returns the caller's visible leads (scoped server-side by role/ownership), paginated."
+              }
+            },
+            {
+              "name": "Create Lead",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"fullName\": \"Test Lead\",\n  \"phone\": \"9876543210\",\n  \"email\": \"lead@example.com\",\n  \"companyName\": \"Example Pvt Ltd\",\n  \"category\": \"Retail\",\n  \"source\": \"Website\",\n  \"territory\": \"\",\n  \"status\": \"new\",\n  \"expectedValue\": 50000\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/leads", "host": ["{{baseUrl}}"], "path": ["leads"] },
+                "description": "Requires permission: `leads.create`. Only `fullName` is required - every other field is optional (there are ~50 optional fields across Customer/Contact/Inquiry/Store/FOFO/Consent tabs; the body above shows commonly-used ones). Response 201: `{ success: true, data: <new lead>, message: \"Lead created\" }`."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const json = pm.response.json();",
+                      "if (json && json.success && json.data && json.data.id) {",
+                      "    pm.collectionVariables.set('leadId', json.data.id);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Bulk Import Leads",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"rows\": [\n    { \"fullName\": \"Lead One\", \"phone\": \"9876543210\", \"email\": \"one@example.com\" },\n    { \"fullName\": \"Lead Two\", \"phone\": \"9876500000\", \"email\": \"two@example.com\" }\n  ]\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/leads/bulk-import", "host": ["{{baseUrl}}"], "path": ["leads", "bulk-import"] },
+                "description": "Requires permission: `leads.create`. `rows`: 1-5000 row objects. Deliberately lenient/loose validation per-row (unlike Create Lead) so one bad row doesn't block the other hundreds - bad rows are reported individually in the response instead of 400ing the whole request. Response: `{ success: true, data: { <per-row import results/summary> }, message: \"Import complete\" }`."
+              }
+            },
+            {
+              "name": "List Territories",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/leads/territories", "host": ["{{baseUrl}}"], "path": ["leads", "territories"] },
+                "description": "Requires permission: `leads.view`. Returns the distinct list of territory strings already in use across leads - useful for populating a picker. Response: `{ success: true, data: string[] }`."
+              }
+            },
+            {
+              "name": "Quick Filter Counts",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/leads/quick-filter-counts", "host": ["{{baseUrl}}"], "path": ["leads", "quick-filter-counts"] },
+                "description": "Requires permission: `leads.view`. Returns badge counts for the standard quick filters, scoped to the caller. Response: `{ success: true, data: { all, myLeads, unassigned, overdue, fofo, highScore } }` (all numbers)."
+              }
+            },
+            {
+              "name": "Get Lead by ID",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}"] },
+                "description": "Requires permission: `leads.view`. Response: `{ success: true, data: <full lead record> }`."
+              }
+            },
+            {
+              "name": "Update Lead",
+              "request": {
+                "method": "PATCH",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"status\": \"contacted\",\n  \"internalNotes\": \"Called, follow up next week\"\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}"] },
+                "description": "Requires permission: `leads.update`. Body is a partial version of Create Lead's body - send only the fields you want to change. Response: `{ success: true, data: <updated lead>, message: \"Lead updated\" }`."
+              }
+            },
+            {
+              "name": "Delete Lead",
+              "request": {
+                "method": "DELETE",
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}"] },
+                "description": "Requires permission: `leads.delete`. Response: `{ success: true, data: null, message: \"Lead deleted\" }`."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sharing",
+          "item": [
+            {
+              "name": "List Shares",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}/shares", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}", "shares"] },
+                "description": "Requires permission: `leads.view`. Lists which users (besides the owner) this lead is currently shared with. Response: `{ success: true, data: [...] }`."
+              }
+            },
+            {
+              "name": "Share Lead",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"userId\": \"{{userId}}\"\n}" },
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}/share", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}", "share"] },
+                "description": "Requires permission: `leads.share`. `userId` must be a real user's uuid. Response 201: `{ success: true, data: null, message: \"Lead shared\" }`."
+              }
+            },
+            {
+              "name": "Unshare Lead",
+              "request": {
+                "method": "DELETE",
+                "url": {
+                  "raw": "{{baseUrl}}/leads/{{leadId}}/share/{{userId}}",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["leads", "{{leadId}}", "share", "{{userId}}"]
+                },
+                "description": "Requires permission: `leads.share`. Response: `{ success: true, data: null, message: \"Share removed\" }`."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cross-References",
+          "item": [
+            {
+              "name": "List Opportunities for Lead",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}/opportunities", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}", "opportunities"] },
+                "description": "Requires permission: `opportunities.view`. Response: `{ success: true, data: [...] }`."
+              }
+            },
+            {
+              "name": "Convert Lead to Opportunity",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Example Pvt Ltd - New Store\",\n  \"value\": 500000,\n  \"stage\": \"qualification\",\n  \"closeDate\": \"2026-12-31\",\n  \"probability\": 50\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}/convert", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}", "convert"] },
+                "description": "Requires permission: `opportunities.create`. Every field in the body is optional. Response: `{ success: true, data: <new opportunity> }`."
+              }
+            },
+            {
+              "name": "List Activities for Lead",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}/activities", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}", "activities"] },
+                "description": "Requires permission: `activities.view`. Response: `{ success: true, data: [...] }`."
+              }
+            },
+            {
+              "name": "Create Activity for Lead",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"type\": \"call\",\n  \"subject\": \"Follow-up call\",\n  \"dueDate\": \"2026-10-20\",\n  \"status\": \"pending\"\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}/activities", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}", "activities"] },
+                "description": "Requires permission: `activities.create`. `type` is required - one of: call, email, teams_meeting, site_visit, whatsapp, internal, support_ticket. Everything else is optional. Response 201: `{ success: true, data: <new activity> }`."
+              }
+            },
+            {
+              "name": "Get Lead Consent",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}/consent", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}", "consent"] },
+                "description": "Requires permission: `leads.view`. Response: `{ success: true, data: <consent record or null> }`."
+              }
+            },
+            {
+              "name": "List Quotes for Lead",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}/quotes", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}", "quotes"] },
+                "description": "Requires permission: `quotes.view`. Response: `{ success: true, data: [...] }`."
+              }
+            },
+            {
+              "name": "List Support Tickets for Lead",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}/support-tickets", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}", "support-tickets"] },
+                "description": "Requires permission: `support_tickets.view`. Response: `{ success: true, data: [...] }`."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Communications",
+          "item": [
+            {
+              "name": "Send Email for Lead",
+              "request": {
+                "method": "POST",
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    { "key": "subject", "value": "Following up", "type": "text" },
+                    { "key": "body", "value": "Hi, following up on our conversation...", "type": "text" },
+                    { "key": "toEmail", "value": "", "type": "text", "description": "optional override, defaults to the lead's own email" },
+                    { "key": "ccEmails", "value": "", "type": "text", "description": "optional, comma-separated e.g. a@x.com,b@x.com" },
+                    { "key": "attachments", "type": "file", "src": [], "description": "optional, up to 5 files" }
+                  ]
+                },
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}/microsoft/email", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}", "microsoft", "email"] },
+                "description": "Requires permission: `activities.create`. IMPORTANT: this is `multipart/form-data`, not JSON, because of the optional file attachments (max 5) - do not switch the body mode to raw JSON. `subject` and `body` are required text fields. Sends via the connected Microsoft (Outlook) account. Response: `{ success: true, data: <sent-mail/activity info> }`."
+              }
+            },
+            {
+              "name": "Create Teams Meeting for Lead",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"subject\": \"Discovery call\",\n  \"startTime\": \"2026-10-20T10:00:00.000Z\",\n  \"endTime\": \"2026-10-20T10:30:00.000Z\"\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}/microsoft/teams-meeting", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}", "microsoft", "teams-meeting"] },
+                "description": "Requires permission: `activities.create`. All three fields (`subject`, `startTime`, `endTime`) are required ISO-ish strings. Response: `{ success: true, data: <created Teams meeting info> }`."
+              }
+            },
+            {
+              "name": "Call Lead (Click-to-Call)",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"phone\": \"\",\n  \"contactName\": \"\"\n}"
+                },
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}/call", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}", "call"] },
+                "description": "Requires permission: `activities.create`. Both fields optional - with neither, dials the lead's own registered phone number via Smartflo (click-to-call). `contactName` is display-only, shown on the logged call activity. Response: `{ success: true, data: <call session info> }`."
+              }
+            },
+            {
+              "name": "List WhatsApp Messages for Lead",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}/whatsapp-messages", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}", "whatsapp-messages"] },
+                "description": "Requires permission: `whatsapp.view`. Response: `{ success: true, data: [...] }`."
+              }
+            },
+            {
+              "name": "Send WhatsApp Message for Lead",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": { "mode": "raw", "raw": "{\n  \"body\": \"Hi! Just checking in.\"\n}" },
+                "url": { "raw": "{{baseUrl}}/leads/{{leadId}}/whatsapp-messages", "host": ["{{baseUrl}}"], "path": ["leads", "{{leadId}}", "whatsapp-messages"] },
+                "description": "Requires permission: `whatsapp.send`. `body`: 1-4096 chars. Response 201: `{ success: true, data: <sent message> }`."
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -12,6 +12,7 @@ import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
 import { bulkImportLeadsSchema, createLeadSchema, listLeadsQuerySchema, shareLeadSchema, updateLeadSchema } from "../../validators/lead-validator";
+import { logCallDispositionSchema, reassignLeadSchema, sendToFieldSchema } from "../../validators/call-qualification-validator";
 import { convertLeadSchema } from "../../validators/opportunity-validator";
 import { createActivitySchema } from "../../validators/activity-validator";
 import { createTeamsMeetingSchema, sendLeadEmailSchema } from "../../validators/microsoft-validator";
@@ -47,6 +48,13 @@ router.post(
 );
 
 router.get("/:id/consent", requirePermission("leads.view"), leadController.getConsent);
+router.get("/:id/history", requirePermission("leads.view"), leadController.getHistory);
+
+router.post("/:id/call-dispositions", requirePermission("leads.call_log"), validateBody(logCallDispositionSchema), leadController.logCallDisposition);
+router.post("/:id/qualify", requirePermission("leads.qualify"), leadController.qualify);
+router.get("/:id/swap-candidates", requirePermission("leads.reassign"), leadController.getSwapCandidates);
+router.post("/:id/send-to-field", requirePermission("leads.send_to_field"), validateBody(sendToFieldSchema), leadController.sendToField);
+router.post("/:id/reassign", requirePermission("leads.reassign"), validateBody(reassignLeadSchema), leadController.reassign);
 
 router.get("/:id/quotes", requirePermission("quotes.view"), quoteController.listForLead);
 

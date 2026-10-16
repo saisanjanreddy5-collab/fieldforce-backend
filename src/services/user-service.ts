@@ -48,6 +48,8 @@ export interface UpdateUserInput {
   divisionChannelId?: string;
   customerCategoryId?: string;
   isActive?: boolean;
+  operationType?: string;
+  pincodes?: string[];
 }
 
 interface UserRow {
@@ -71,6 +73,8 @@ interface UserRow {
   office_id: string | null;
   division_channel_id: string | null;
   customer_category_id: string | null;
+  operation_type: string | null;
+  pincodes: string[] | null;
   is_active: boolean;
   created_at: string;
 }
@@ -97,10 +101,22 @@ function toPublicUser(row: UserRow) {
     officeId: row.office_id,
     divisionChannelId: row.division_channel_id,
     customerCategoryId: row.customer_category_id,
+    operationType: row.operation_type,
+    pincodes: row.pincodes ?? [],
     isActive: row.is_active,
     createdAt: row.created_at,
   };
 }
+
+// users.* alone has no pincodes column (employee_pincodes is a separate
+// many-to-many table) - this aggregates them into the same row shape
+// toPublicUser expects, same LATERAL-join pattern level-service.ts's own
+// currentHeadcount uses for a different one-to-many rollup.
+const PINCODES_JOIN = `
+  LEFT JOIN LATERAL (
+    SELECT array_agg(pincode ORDER BY pincode) AS pincodes FROM employee_pincodes WHERE user_id = u.id
+  ) ep ON true
+`;
 
 export interface ListUsersFilters {
   page: number;
@@ -120,7 +136,7 @@ export async function listUsers(requestingUserId: string, requestingRole: Role, 
     // disappear with no way back to re-enable it.
     const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM users");
     const result = await pool.query<UserRow>(
-      "SELECT * FROM users ORDER BY name ASC LIMIT $1 OFFSET $2",
+      `SELECT u.*, ep.pincodes FROM users u ${PINCODES_JOIN} ORDER BY u.name ASC LIMIT $1 OFFSET $2`,
       [limit, offset]
     );
     return { users: result.rows.map(toPublicUser), total: Number(countResult.rows[0].count) };
@@ -144,8 +160,9 @@ export async function listUsers(requestingUserId: string, requestingRole: Role, 
        UNION ALL
        SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
      )
-     SELECT u.* FROM users u
+     SELECT u.*, ep.pincodes FROM users u
      INNER JOIN subtree s ON u.id = s.id
+     ${PINCODES_JOIN}
      WHERE u.is_active = true
      ORDER BY u.name ASC
      LIMIT $2 OFFSET $3`,
@@ -240,6 +257,7 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
     office_id: normalize(updates.officeId),
     division_channel_id: normalize(updates.divisionChannelId),
     customer_category_id: normalize(updates.customerCategoryId),
+    operation_type: normalize(updates.operationType),
     is_active: updates.isActive,
     role,
   };
@@ -253,8 +271,24 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
     }
   }
 
+  // A full replace, not a diff - pincodes isn't a users column (it's the
+  // separate employee_pincodes table), so it's handled here regardless of
+  // whether any other field changed, and submitting [] deliberately clears
+  // every pincode this person covers.
+  if (updates.pincodes !== undefined) {
+    await pool.query("DELETE FROM employee_pincodes WHERE user_id = $1", [id]);
+    if (updates.pincodes.length > 0) {
+      await pool.query(
+        `INSERT INTO employee_pincodes (user_id, pincode)
+         SELECT $1, * FROM unnest($2::varchar[])
+         ON CONFLICT (user_id, pincode) DO NOTHING`,
+        [id, updates.pincodes]
+      );
+    }
+  }
+
   if (setClauses.length === 0) {
-    const existing = await pool.query<UserRow>("SELECT * FROM users WHERE id = $1", [id]);
+    const existing = await pool.query<UserRow>(`SELECT u.*, ep.pincodes FROM users u ${PINCODES_JOIN} WHERE u.id = $1`, [id]);
     if (existing.rows.length === 0) {
       throw new ApiError(404, "User not found");
     }
@@ -282,5 +316,6 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
     }
   }
 
-  return toPublicUser(result.rows[0]);
+  const final = await pool.query<UserRow>(`SELECT u.*, ep.pincodes FROM users u ${PINCODES_JOIN} WHERE u.id = $1`, [id]);
+  return toPublicUser(final.rows[0]);
 }

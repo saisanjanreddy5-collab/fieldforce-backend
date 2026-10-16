@@ -109,6 +109,13 @@ export const bulkImportRowSchema = z.object({
   companyName: z.string().optional(),
   category: z.string().optional(),
   territory: z.string().optional(),
+  // Needed for the Call Center -> Field Sales pincode-matching engine
+  // (lead-call-center-service.ts) to have anything to match a marketing
+  // lead against - without it the row still imports, it just can't ever be
+  // sent to a field employee automatically. Not yet required at the schema
+  // level; the mandatory-on-import UX is a frontend-side decision (the
+  // import template/column-mapping step).
+  pincode: z.string().optional(),
   source: z.string().optional(),
   expectedValue: z.coerce.number().optional(),
   website: z.string().optional(),

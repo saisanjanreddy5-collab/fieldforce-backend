@@ -1898,6 +1898,85 @@ Regards,', 'active', 4)
       ('manager','payments.view'), ('manager','payments.create'), ('manager','payments.update'), ('manager','payments.delete'),
       ('agent','payments.view'), ('agent','payments.create'), ('agent','payments.update'), ('agent','payments.delete')
     ON CONFLICT (role, permission) DO NOTHING`,
+
+    // --- Call Center -> Field Sales lead qualification & pincode assignment, Phase 1 ---
+    // A 4th security tier, alongside admin/manager/agent - Call Center people
+    // need their own real accounts with a genuinely restricted permission set
+    // (their own call queue only), and this app's permission model keys
+    // strictly off `role` (see permission-service.ts's getPermissionsForRole),
+    // not off Sales Team - so Sales Team alone (used below just to group
+    // Field vs Call Center people for display) can't gate access by itself.
+    `INSERT INTO roles (name) VALUES ('call_center') ON CONFLICT (name) DO NOTHING`,
+    `ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check`,
+    `ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('admin','manager','agent','call_center'))`,
+    // security_tier was VARCHAR(10) - too narrow for 'call_center' (11 chars).
+    `ALTER TABLE levels ALTER COLUMN security_tier TYPE VARCHAR(20)`,
+    `ALTER TABLE levels DROP CONSTRAINT IF EXISTS levels_security_tier_check`,
+    `ALTER TABLE levels ADD CONSTRAINT levels_security_tier_check CHECK (security_tier IN ('admin','manager','agent','call_center'))`,
+
+    // A field employee's serviceable pincodes - many-to-many on purpose: one
+    // employee can cover several pincodes, and more than one employee can
+    // cover the same pincode (so a lead can later be swapped between them).
+    // Deliberately not a reuse of the existing unique users.territory column,
+    // which models exactly one territory per person and can't express
+    // either of those - territory is left untouched for whatever still
+    // reads it today.
+    `CREATE TABLE IF NOT EXISTS employee_pincodes (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      pincode VARCHAR(10) NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (user_id, pincode)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_employee_pincodes_pincode ON employee_pincodes(pincode)`,
+    `CREATE INDEX IF NOT EXISTS idx_employee_pincodes_user_id ON employee_pincodes(user_id)`,
+
+    // Only meaningful for field employees - matched against a lead's own
+    // category (COCO/FOFO) when auto-assigning by pincode. 'Both' matches
+    // either.
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS operation_type VARCHAR(10) CHECK (operation_type IN ('COCO','FOFO','Both'))`,
+
+    // Cached call-qualification summary on the lead itself, for fast queue
+    // display - the real per-attempt history lives on the activities table
+    // (type='call', one row per attempt), exactly like every other call
+    // already logged in this app; these three columns are just a denormalized
+    // snapshot kept in sync inline wherever a disposition is logged.
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS call_attempt_count INT NOT NULL DEFAULT 0`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_call_outcome VARCHAR(50)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS last_call_at TIMESTAMPTZ`,
+
+    // A marketing-sourced lead now starts in its own stage ahead of the
+    // existing pipeline, instead of starting at 'New' like a lead a field
+    // rep enters by hand - it moves to the existing 'Qualified' stage once a
+    // call center agent confirms real interest, then continues through the
+    // same Site visit/Proposal/... stages as any other lead once handed to a
+    // field person. The UPDATE is guarded by NOT EXISTS so re-running this
+    // on every boot doesn't keep incrementing sort_order after the first run.
+    `UPDATE pipeline_stages SET sort_order = sort_order + 1
+     WHERE sort_order >= 2 AND NOT EXISTS (SELECT 1 FROM pipeline_stages WHERE key = 'Call Center')`,
+    `INSERT INTO pipeline_stages (key, label, description, probability, sort_order) VALUES
+      ('Call Center', 'Call Center', 'Marketing lead awaiting phone qualification', 10, 2)
+    ON CONFLICT (key) DO NOTHING`,
+
+    // Groups people for display/reporting (Field vs Call Center) - the role
+    // tier above is what actually gates access; this is just the existing
+    // sales_teams table, which already has full admin CRUD. sales_teams.name
+    // has no unique constraint, so this guards itself with NOT EXISTS
+    // instead of ON CONFLICT.
+    `INSERT INTO sales_teams (name)
+     SELECT v.name FROM (VALUES ('SKIA Field Team'), ('SKIA Call Center Team')) AS v(name)
+     WHERE NOT EXISTS (SELECT 1 FROM sales_teams st WHERE st.name = v.name)`,
+
+    // New fine-grained actions for this workflow. Call Center gets only
+    // enough to work their own queue (view/update their own leads, log a
+    // call, mark Qualified) - not the full Leads module, and specifically
+    // not reassign/send-to-field, which stay Admin/Manager only per the
+    // approved design.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','leads.call_log'), ('admin','leads.qualify'), ('admin','leads.send_to_field'), ('admin','leads.reassign'),
+      ('manager','leads.call_log'), ('manager','leads.qualify'), ('manager','leads.send_to_field'), ('manager','leads.reassign'),
+      ('call_center','leads.view'), ('call_center','leads.update'), ('call_center','leads.call_log'), ('call_center','leads.qualify'), ('call_center','activities.view'), ('call_center','call_center.view'), ('call_center','dashboard.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {

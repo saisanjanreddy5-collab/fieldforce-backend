@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { asyncHandler } from "../utils/asyncHandler";
 import { sendSuccess } from "../utils/response";
 import * as leadService from "../services/lead-service";
+import * as leadCallCenterService from "../services/lead-call-center-service";
 
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const lead = await leadService.createLead(req.body, req.user!.id, req.ip);
@@ -78,4 +79,34 @@ export const listShares = asyncHandler(async (req: Request, res: Response) => {
 export const getConsent = asyncHandler(async (req: Request, res: Response) => {
   const consent = await leadService.getLeadConsent(String(req.params.id), req.user!.id);
   sendSuccess(res, consent);
+});
+
+export const getHistory = asyncHandler(async (req: Request, res: Response) => {
+  const history = await leadService.listLeadHistory(String(req.params.id), req.user!.id);
+  sendSuccess(res, history);
+});
+
+export const logCallDisposition = asyncHandler(async (req: Request, res: Response) => {
+  const lead = await leadCallCenterService.logCallDisposition(String(req.params.id), req.body, req.user!.id);
+  sendSuccess(res, lead, "Call logged", 201);
+});
+
+export const qualify = asyncHandler(async (req: Request, res: Response) => {
+  const lead = await leadCallCenterService.qualifyLead(String(req.params.id), req.user!.id, req.ip);
+  sendSuccess(res, lead, "Lead marked Qualified");
+});
+
+export const getSwapCandidates = asyncHandler(async (req: Request, res: Response) => {
+  const candidates = await leadCallCenterService.getSwapCandidates(String(req.params.id), req.user!.id);
+  sendSuccess(res, candidates);
+});
+
+export const sendToField = asyncHandler(async (req: Request, res: Response) => {
+  const lead = await leadCallCenterService.sendToField(String(req.params.id), req.user!.id, req.body.ownerId, req.ip);
+  sendSuccess(res, lead, "Sent to Field Sales");
+});
+
+export const reassign = asyncHandler(async (req: Request, res: Response) => {
+  const lead = await leadCallCenterService.reassignLead(String(req.params.id), req.body.ownerId, req.user!.id, req.ip);
+  sendSuccess(res, lead, "Lead reassigned");
 });
