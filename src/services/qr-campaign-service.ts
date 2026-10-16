@@ -343,7 +343,8 @@ export async function submitPublicCapture(
       },
     },
     creatorId,
-    ipAddress
+    ipAddress,
+    { requiresQualification: true }
   );
 
   if (fieldConfig.photo && photo?.file) {

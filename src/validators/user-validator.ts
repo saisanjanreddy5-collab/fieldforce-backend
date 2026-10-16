@@ -32,6 +32,11 @@ export const updateUserSchema = z.object({
   // every other field here). true/false, not a tri-state - there's no
   // separate "deleted" state in the app itself, only this.
   isActive: z.boolean().optional(),
+  // Same pair as registerSchema - field employees only. pincodes is a full
+  // replace, not a diff: submitting [] clears every pincode this person
+  // covers.
+  operationType: z.enum(["COCO", "FOFO", "Both"]).or(z.literal("")).optional(),
+  pincodes: z.array(z.string().trim().min(1)).optional(),
 });
 
 export const listUsersQuerySchema = paginationQuerySchema;

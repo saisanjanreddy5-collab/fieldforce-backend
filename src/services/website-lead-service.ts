@@ -213,7 +213,8 @@ export async function submitWebsiteLead(apiKey: string, input: PublicWebsiteSubm
       },
     },
     row.created_by,
-    ipAddress
+    ipAddress,
+    { requiresQualification: true }
   );
 
   return { leadNumber: lead.leadNumber };

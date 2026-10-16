@@ -1,6 +1,6 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
-import { recordAuditEvent } from "./audit-log-service";
+import { recordAuditEvent, listAuditLogForEntity } from "./audit-log-service";
 import { bulkImportRowSchema } from "../validators/lead-validator";
 import { createCustomerFromLead, syncCustomerOwnerFromLead } from "./customer-service";
 
@@ -90,6 +90,9 @@ interface LeadRow {
   push_status: string;
   onboarding_app_id: string | null;
   pushed_at: string | null;
+  call_attempt_count: number;
+  last_call_outcome: string | null;
+  last_call_at: string | null;
   is_deleted: boolean;
   created_by: string | null;
   updated_by: string | null;
@@ -283,6 +286,9 @@ function toPublicLead(row: LeadRow) {
     pushStatus: row.push_status,
     onboardingAppId: row.onboarding_app_id,
     pushedAt: row.pushed_at,
+    callAttemptCount: row.call_attempt_count,
+    lastCallOutcome: row.last_call_outcome,
+    lastCallAt: row.last_call_at,
     createdBy: row.created_by,
     updatedBy: row.updated_by,
     createdAt: row.created_at,
@@ -394,6 +400,27 @@ async function resolveAutoAssignee(input: CreateLeadInput, creatorId: string): P
   return creatorId;
 }
 
+// Least-loaded round robin among active Call Center employees - picks
+// whoever currently has the fewest leads still sitting in the "Call Center"
+// stage, so volume self-balances instead of a strict rotation that can't
+// tell a fast agent from a slow one apart. Returns null when there's no
+// active Call Center employee yet (e.g. before the first account is
+// created) - the lead is left unassigned rather than thrown away, same as
+// every other "nobody matched" case in this file; it's still reachable
+// afterward via the existing admin-sees-unassigned-leads rule.
+async function resolveCallCenterAssignee(): Promise<string | null> {
+  const result = await pool.query<{ id: string }>(
+    `SELECT u.id
+     FROM users u
+     WHERE u.role = 'call_center' AND u.is_active = true
+     ORDER BY (
+       SELECT COUNT(*) FROM leads l WHERE l.owner_id = u.id AND l.status = 'Call Center' AND l.is_deleted = false
+     ) ASC, random()
+     LIMIT 1`
+  );
+  return result.rows[0]?.id ?? null;
+}
+
 // Distinct territory values actually in use across leads, for the
 // Territory filter dropdown - territory is free text, not a managed list,
 // so this is the closest thing to "the territories that exist" today.
@@ -472,7 +499,24 @@ export async function findLeadIdByPhone(phone: string): Promise<string | null> {
   return result.rows[0]?.id ?? null;
 }
 
-export async function createLead(input: CreateLeadInput, creatorId: string, ipAddress?: string | null) {
+export interface CreateLeadOptions {
+  // Set only by the marketing-sourced entry points (bulk import, public
+  // website form, QR campaign) - never by the manual "Create Lead" form a
+  // field rep fills in themselves, which keeps today's instant-assign
+  // behavior unchanged. A caller-supplied ownerId (e.g. a website source's
+  // configured default owner) still wins over this, same as it already
+  // bypasses resolveAutoAssignee below - an admin wiring a specific owner
+  // into a campaign is a deliberate fast lane, not something this should
+  // override.
+  requiresQualification?: boolean;
+}
+
+export async function createLead(
+  input: CreateLeadInput,
+  creatorId: string,
+  ipAddress?: string | null,
+  options?: CreateLeadOptions
+) {
   if (input.phone) {
     const existing = await findActiveLeadByPhone(input.phone);
     if (existing) {
@@ -480,7 +524,14 @@ export async function createLead(input: CreateLeadInput, creatorId: string, ipAd
     }
   }
 
-  const ownerId = input.ownerId ?? (await resolveAutoAssignee(input, creatorId));
+  let ownerId: string | null;
+  let status = input.status;
+  if (options?.requiresQualification && input.ownerId === undefined) {
+    ownerId = await resolveCallCenterAssignee();
+    status = status ?? "Call Center";
+  } else {
+    ownerId = input.ownerId ?? (await resolveAutoAssignee(input, creatorId));
+  }
 
   const { columns, placeholders, values } = buildInsert({
     full_name: input.fullName,
@@ -494,8 +545,9 @@ export async function createLead(input: CreateLeadInput, creatorId: string, ipAd
     // same reasoning as 'Converted' on the createCustomerFromLead path
     // below. Used to default to lowercase 'new' here, silently diverging
     // from the Title-Case value the Leads list's own Stage filter and the
-    // Dashboard's status breakdown actually group/filter by.
-    status: input.status ?? "New",
+    // Dashboard's status breakdown actually group/filter by. A marketing lead
+    // defaults to 'Call Center' instead (set above), not 'New'.
+    status: status ?? "New",
     prospect_status: input.prospectStatus,
     category: input.category,
     owner_id: ownerId,
@@ -655,7 +707,7 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
         if (normalized.length === 10) seenPhones.add(normalized);
       }
 
-      await createLead(row, creatorId);
+      await createLead(row, creatorId, undefined, { requiresQualification: true });
       result.created++;
     } catch (err) {
       if (err instanceof ApiError && err.statusCode === 409) {
@@ -1118,6 +1170,19 @@ export async function listLeadShares(leadId: string, requestingUserId: string) {
   );
 
   return result.rows;
+}
+
+// Powers the lead detail page's assignment/stage history - every real
+// owner/status/category change, newest first. Read-only, same visibility
+// rule as viewing the lead itself (not owner-scope - anyone who can see
+// this lead can see how it got here), matching listOpportunityHistory's own
+// reasoning.
+export async function listLeadHistory(leadId: string, requestingUserId: string) {
+  const visible = await isLeadVisibleToUser(leadId, requestingUserId);
+  if (!visible) {
+    throw new ApiError(403, "You do not have access to this lead");
+  }
+  return listAuditLogForEntity("lead", leadId);
 }
 
 export async function getLeadConsent(leadId: string, requestingUserId: string) {

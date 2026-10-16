@@ -10,7 +10,7 @@ export const registerSchema = z
     // side (see auth-service.ts's registerUser) - only a fallback for an
     // account with no Level, so at least one of the two must be present
     // (enforced by the refine below).
-    role: z.enum([ROLES.ADMIN, ROLES.MANAGER, ROLES.AGENT]).optional(),
+    role: z.enum([ROLES.ADMIN, ROLES.MANAGER, ROLES.AGENT, ROLES.CALL_CENTER]).optional(),
     designation: z.string().optional(),
     managerId: z.string().uuid().optional(),
     dottedLineManagerId: z.string().uuid().optional(),
@@ -29,6 +29,13 @@ export const registerSchema = z
     officeId: z.string().uuid().optional(),
     divisionChannelId: z.string().uuid().optional(),
     customerCategoryId: z.string().uuid().optional(),
+    // Field employees only - which store type(s) they cover, matched against
+    // a lead's own category (COCO/FOFO) when auto-assigning by pincode.
+    operationType: z.enum(["COCO", "FOFO", "Both"]).optional(),
+    // The pincodes this field employee personally covers - many-to-many on
+    // purpose (see employee_pincodes), so more than one person can list the
+    // same pincode.
+    pincodes: z.array(z.string().trim().min(1)).optional(),
   })
   .refine((data) => Boolean(data.role) || Boolean(data.levelId), {
     message: "Either a role or a level is required",

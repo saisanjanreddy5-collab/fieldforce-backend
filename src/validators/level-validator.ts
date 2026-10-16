@@ -3,7 +3,7 @@ import { RECORD_SCOPES } from "../services/level-service";
 import { ROLES } from "../utils/roles";
 import { paginationQuerySchema } from "./pagination";
 
-const securityTier = z.enum([ROLES.ADMIN, ROLES.MANAGER, ROLES.AGENT]);
+const securityTier = z.enum([ROLES.ADMIN, ROLES.MANAGER, ROLES.AGENT, ROLES.CALL_CENTER]);
 const recordScope = z.enum(RECORD_SCOPES);
 
 export const createLevelSchema = z.object({

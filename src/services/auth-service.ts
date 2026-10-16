@@ -33,6 +33,7 @@ interface UserRow {
   office_id: string | null;
   division_channel_id: string | null;
   customer_category_id: string | null;
+  operation_type: string | null;
   is_active: boolean;
   created_at: string;
   // Only present on the joined query getUserById runs (for /auth/me) -
@@ -70,6 +71,8 @@ export interface RegisterInput {
   officeId?: string;
   divisionChannelId?: string;
   customerCategoryId?: string;
+  operationType?: "COCO" | "FOFO" | "Both";
+  pincodes?: string[];
 }
 
 function toPublicUser(row: UserRow) {
@@ -96,6 +99,7 @@ function toPublicUser(row: UserRow) {
     officeId: row.office_id,
     divisionChannelId: row.division_channel_id,
     customerCategoryId: row.customer_category_id,
+    operationType: row.operation_type,
     isActive: row.is_active,
     managerName: row.manager_name ?? null,
     salesTeamName: row.sales_team_name ?? null,
@@ -175,9 +179,9 @@ export async function registerUser(input: RegisterInput) {
   const result = await pool.query<UserRow>(
     `INSERT INTO users (
        name, email, password_hash, role, designation, manager_id, dotted_line_manager_id, sales_team_id, zone_id, state_id, district_id, area_id,
-       smartflo_agent_number, mobile, territory, employee_code, date_of_joining, status, level_id, office_id, division_channel_id, customer_category_id
+       smartflo_agent_number, mobile, territory, employee_code, date_of_joining, status, level_id, office_id, division_channel_id, customer_category_id, operation_type
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, COALESCE($18, 'active'), $19, $20, $21, $22)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, COALESCE($18, 'active'), $19, $20, $21, $22, $23)
      RETURNING *`,
     [
       input.name,
@@ -202,8 +206,18 @@ export async function registerUser(input: RegisterInput) {
       input.officeId ?? null,
       input.divisionChannelId ?? null,
       input.customerCategoryId ?? null,
+      input.operationType ?? null,
     ]
   );
+
+  if (input.pincodes && input.pincodes.length > 0) {
+    await pool.query(
+      `INSERT INTO employee_pincodes (user_id, pincode)
+       SELECT $1, * FROM unnest($2::varchar[])
+       ON CONFLICT (user_id, pincode) DO NOTHING`,
+      [result.rows[0].id, input.pincodes]
+    );
+  }
 
   return toPublicUser(result.rows[0]);
 }
