@@ -7,7 +7,7 @@ import { ApiError } from "../utils/ApiError";
 import { getPermissionsForRole } from "./permission-service";
 import { getLevelSecurityTier } from "./level-service";
 import { getNextEmployeeCode } from "./user-service";
-import { Role } from "../utils/roles";
+import { Role, ROLES } from "../utils/roles";
 
 interface UserRow {
   id: string;
@@ -175,6 +175,14 @@ export async function registerUser(input: RegisterInput) {
   // (seedAdmin.ts, and anyone marked Administrator/Finance with no ladder
   // position) still pass role directly.
   const role = input.levelId ? await getLevelSecurityTier(input.levelId) : input.role;
+
+  // A field employee with no pincode can never be matched to a lead by the
+  // Call Center -> Field Sales engine (lead-call-center-service.ts) - this
+  // mirrors the frontend's own required-field rule as a defense-in-depth
+  // check, since this service is reachable directly via the API too.
+  if (role === ROLES.AGENT && (!input.pincodes || input.pincodes.length === 0)) {
+    throw new ApiError(422, "At least one pincode is required for a field employee");
+  }
 
   const result = await pool.query<UserRow>(
     `INSERT INTO users (

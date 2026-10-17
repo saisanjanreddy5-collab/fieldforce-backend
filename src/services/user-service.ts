@@ -238,6 +238,17 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
   // derive from "no level".
   const role = updates.levelId ? await getLevelSecurityTier(updates.levelId) : undefined;
 
+  // Same defense-in-depth check as registerUser - a field employee can never
+  // be left with zero pincodes, whether that's this update's new role or
+  // their existing one (levelId not being touched this time).
+  if (updates.pincodes !== undefined && updates.pincodes.length === 0) {
+    const effectiveRole =
+      role ?? (await pool.query<{ role: string }>("SELECT role FROM users WHERE id = $1", [id])).rows[0]?.role;
+    if (effectiveRole === ROLES.AGENT) {
+      throw new ApiError(422, "At least one pincode is required for a field employee");
+    }
+  }
+
   const normalize = (value: string | undefined) => (value === "" ? null : value);
   const fieldMap: Record<string, unknown> = {
     name: updates.name,
