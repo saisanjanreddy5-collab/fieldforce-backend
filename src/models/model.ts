@@ -737,16 +737,14 @@ export async function createTables(): Promise<void> {
     `ALTER TABLE levels ADD COLUMN IF NOT EXISTS sees_label_override VARCHAR(60)`,
     `ALTER TABLE levels ADD COLUMN IF NOT EXISTS approval_label_override VARCHAR(50)`,
     `ALTER TABLE levels ADD COLUMN IF NOT EXISTS can_edit_label VARCHAR(60)`,
-    `INSERT INTO levels (name, sort_order, description, headcount_limit, approval_ceiling, security_tier, is_cross_cutting, record_scope, sees_label_override, approval_label_override, can_edit_label) VALUES
-      ('Admin', -1, 'System', NULL, NULL, 'admin', true, 'everything', NULL, 'Config only', 'All records + config'),
-      ('Chief Executive Officer', 1, 'Top of the tree - sees everything', NULL, NULL, 'manager', false, 'own_and_below', NULL, NULL, 'Read-only'),
-      ('Business Head', 2, 'Division owner - sets targets', 2, 10000000, 'manager', false, 'own_and_below', NULL, NULL, 'Own division'),
-      ('National Sales Head', 3, 'All zones for a division', 2, 5000000, 'manager', false, 'own_and_below', NULL, NULL, 'Own tree'),
-      ('Regional Sales Manager', 4, 'Zone owner - approves for the region', 4, 2500000, 'manager', false, 'own_and_below', NULL, NULL, 'Own tree'),
-      ('Area Sales Manager', 5, 'Area owner - first-line approver', 4, 1000000, 'manager', false, 'own_and_below', NULL, NULL, 'Own tree'),
-      ('Sales Officer', 6, 'Owns leads and customers', 4, NULL, 'agent', false, 'own_only', NULL, 'raises only', 'Own records'),
-      ('Finance', 99, 'Cross-cutting', NULL, NULL, 'manager', true, 'own_and_below', 'Credit and billing', 'credit only', 'Credit fields')
-    ON CONFLICT (name) DO NOTHING`,
+    // Deliberately no longer seeded here - this was a one-time starter
+    // ladder (Admin/CEO/Business Head/.../Finance) for a demo org chart,
+    // not real permanent reference data like pipeline_stages or
+    // lead_categories. Unlike those, it was meant to be fully replaced by
+    // the real org's own Levels, and re-inserting it on every boot fought
+    // that - deleting it in the UI never stuck, since the next restart
+    // silently brought it back. Levels are now created entirely through the
+    // Levels & axes screen, with nothing assumed here.
 
     // Real lookup data for the Product division / Customer category axes
     // (Phase 3 left these as toggle-only with nothing behind them). The
