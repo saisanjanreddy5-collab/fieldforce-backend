@@ -9,7 +9,7 @@ import * as whatsappController from "../../controllers/whatsapp-controller";
 import * as quoteController from "../../controllers/quote-controller";
 import * as supportTicketController from "../../controllers/support-ticket-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
-import { requirePermission } from "../../middleware/permission-middleware";
+import { requirePermission, requireAnyPermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
 import { bulkImportLeadsSchema, createLeadSchema, listLeadsQuerySchema, shareLeadSchema, updateLeadSchema } from "../../validators/lead-validator";
 import { logCallDispositionSchema, reassignLeadSchema, sendToFieldSchema } from "../../validators/call-qualification-validator";
@@ -23,7 +23,12 @@ const router = Router();
 
 router.use(requireAuth);
 
-router.get("/", requirePermission("leads.view"), validateQuery(listLeadsQuerySchema), leadController.list);
+// leads.queue_view is the Call Center "My Queue" tab's own narrow permission
+// (its own leads, Call Center/Qualified stage only - see lead-service.ts's
+// subtree visibility, unaffected by which permission got them in the door)
+// - deliberately independent of leads.view, so hiding the full Leads module
+// from a role never breaks their own queue, and vice versa.
+router.get("/", requireAnyPermission("leads.view", "leads.queue_view"), validateQuery(listLeadsQuerySchema), leadController.list);
 router.post("/", requirePermission("leads.create"), validateBody(createLeadSchema), leadController.create);
 router.post("/bulk-import", requirePermission("leads.create"), validateBody(bulkImportLeadsSchema), leadController.bulkImport);
 router.get("/territories", requirePermission("leads.view"), leadController.listTerritories);
