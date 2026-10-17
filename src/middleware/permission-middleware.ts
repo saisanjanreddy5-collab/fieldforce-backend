@@ -32,3 +32,31 @@ export function requirePermission(permission: string) {
     }
   };
 }
+
+// For a route that two genuinely different roles reach for two genuinely
+// different reasons - e.g. GET /leads is both "the full Leads module"
+// (leads.view) and "my own Call Center queue" (leads.queue_view), and
+// granting one shouldn't require granting the other. Passes as soon as any
+// one of the listed permissions is held; same shape as requireRole's own
+// variadic allowedRoles.
+export function requireAnyPermission(...permissions: string[]) {
+  return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
+    const user = req.user as AuthenticatedUser | undefined;
+    if (!user) {
+      next(new ApiError(401, "Authentication required"));
+      return;
+    }
+
+    try {
+      const granted = await getPermissionsForRole(user.role);
+      if (!permissions.some((p) => granted.includes(p))) {
+        next(new ApiError(403, "You do not have permission to perform this action"));
+        return;
+      }
+      next();
+    } catch (err) {
+      console.error("requireAnyPermission: failed to resolve permissions", err);
+      next(new ApiError(403, "You do not have permission to perform this action"));
+    }
+  };
+}

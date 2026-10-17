@@ -129,14 +129,18 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   ],
   // A real, separate account for Call Center employees - their own queue
   // only (view/update the leads assigned to them, log a call, mark
-  // Qualified), never the full Leads module and never reassign/send-to-field
-  // (those stay Admin/Manager only, matched in both arrays above).
+  // Qualified, and push a Qualified lead to Field Sales themselves), never
+  // the full Leads module (leads.queue_view is deliberately its own
+  // permission, not leads.view - see lead-routes.ts's GET / route) and never
+  // the general Reassign/Swap action (that stays Admin/Manager only).
   [ROLES.CALL_CENTER]: [
-    "leads.view",
+    "leads.queue_view",
     "leads.update",
     "leads.call_log",
     "leads.qualify",
+    "leads.send_to_field",
     "activities.view",
+    "activities.create",
     "call_center.view",
     "dashboard.view",
   ],

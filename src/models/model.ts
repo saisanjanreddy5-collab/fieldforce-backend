@@ -1973,7 +1973,23 @@ Regards,', 'active', 4)
     `INSERT INTO role_permissions (role, permission) VALUES
       ('admin','leads.call_log'), ('admin','leads.qualify'), ('admin','leads.send_to_field'), ('admin','leads.reassign'),
       ('manager','leads.call_log'), ('manager','leads.qualify'), ('manager','leads.send_to_field'), ('manager','leads.reassign'),
-      ('call_center','leads.view'), ('call_center','leads.update'), ('call_center','leads.call_log'), ('call_center','leads.qualify'), ('call_center','activities.view'), ('call_center','call_center.view'), ('call_center','dashboard.view')
+      ('call_center','leads.update'), ('call_center','leads.call_log'), ('call_center','leads.qualify'), ('call_center','activities.view'), ('call_center','call_center.view'), ('call_center','dashboard.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Revised: Call Center gets its own narrow leads.queue_view instead of
+    // the full leads.view - letting an admin hide the generic Leads module
+    // from them (nav-config.tsx gates that link on leads.view alone) without
+    // also breaking their own Call Center queue, which is now a completely
+    // self-contained workflow (list their own leads, call, log, qualify,
+    // and now also push to Field Sales themselves - see leads.send_to_field
+    // below) that never touches the generic Leads module's pages at all.
+    // The DELETE un-does the original leads.view grant on any database that
+    // already ran the INSERT above before this revision.
+    `DELETE FROM role_permissions WHERE role = 'call_center' AND permission = 'leads.view'`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('call_center','leads.queue_view'),
+      ('call_center','activities.create'),
+      ('call_center','leads.send_to_field')
     ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
