@@ -9,6 +9,15 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, lead, "Lead created", 201);
 });
 
+// Call Center's own "Add lead" action - a contact who called in directly,
+// not from a marketing import. Always lands in the creator's own Call
+// Center queue (see createOwnQueueLead's own comment) - deliberately not
+// the same createLead path the generic "+ New Lead" form uses above.
+export const createOwnQueueLead = asyncHandler(async (req: Request, res: Response) => {
+  const lead = await leadCallCenterService.createOwnQueueLead(req.body, req.user!.id, req.ip);
+  sendSuccess(res, lead, "Lead added to your queue", 201);
+});
+
 export const bulkImport = asyncHandler(async (req: Request, res: Response) => {
   const { rows } = req.body as { rows: Record<string, unknown>[] };
   const result = await leadService.bulkImportLeads(rows, req.user!.id);

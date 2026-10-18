@@ -31,6 +31,12 @@ router.use(requireAuth);
 router.get("/", requireAnyPermission("leads.view", "leads.queue_view"), validateQuery(listLeadsQuerySchema), leadController.list);
 router.post("/", requirePermission("leads.create"), validateBody(createLeadSchema), leadController.create);
 router.post("/bulk-import", requirePermission("leads.create"), validateBody(bulkImportLeadsSchema), leadController.bulkImport);
+// Call Center's own "Add lead" action (a contact who called in directly, not
+// from a marketing import) - a separate, narrower permission from the full
+// leads.create above, since Call Center never gets that one (see
+// role-permission-service.ts). Always lands in the creator's own queue - see
+// createOwnQueueLead's own comment for why this isn't just POST / with a flag.
+router.post("/queue", requirePermission("leads.queue_create"), validateBody(createLeadSchema), leadController.createOwnQueueLead);
 router.get("/territories", requirePermission("leads.view"), leadController.listTerritories);
 router.get("/quick-filter-counts", requirePermission("leads.view"), leadController.quickFilterCounts);
 router.get("/:id", requirePermission("leads.view"), leadController.getById);

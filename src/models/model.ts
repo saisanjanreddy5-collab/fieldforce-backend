@@ -2002,6 +2002,18 @@ Regards,', 'active', 4)
       ('call_center','whatsapp.send')
     ON CONFLICT (role, permission) DO NOTHING`,
 
+    // The one gap left once Call Center could only ever work leads that
+    // landed in their queue automatically: no way to log a contact who
+    // called in directly. A separate permission from leads.create (which
+    // Call Center never gets - see the retrofit above) - admin/manager get
+    // it too since they can already do everything Call Center can
+    // throughout this workflow.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','leads.queue_create'),
+      ('manager','leads.queue_create'),
+      ('call_center','leads.queue_create')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
     // Email inbound sync (microsoft-mail-sync-service.ts): Microsoft Graph's
     // delta query returns a deltaLink after the last page of a sync - stored
     // per connected mailbox so the next poll asks "what changed since this

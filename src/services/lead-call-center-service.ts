@@ -1,7 +1,7 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { recordAuditEvent } from "./audit-log-service";
-import { getLeadById, isLeadInOwnerScope, updateLead } from "./lead-service";
+import { createLead, getLeadById, isLeadInOwnerScope, updateLead, type CreateLeadInput } from "./lead-service";
 
 const CALL_CENTER_STAGE = "Call Center";
 const QUALIFIED_STAGE = "Qualified";
@@ -282,4 +282,22 @@ export async function reassignLead(
   }
 
   return updateLead(leadId, { ownerId: newOwnerId }, requestingUserId, ipAddress);
+}
+
+// The one gap left once a Call Center agent could only ever work leads that
+// landed in their queue automatically (bulk import, website form, QR
+// campaign) - there was no way to log a contact who just called in directly.
+// ownerId/status are stripped and never taken from the request: this path
+// only ever means "I'm on the phone with this person right now, put them in
+// my own queue" - never a way to create a lead for, or as, someone else.
+// Reuses createLead's own duplicate-phone guard and every other validation
+// as-is; the only thing special here is who ends up owning it and which
+// stage it starts at.
+export async function createOwnQueueLead(
+  input: CreateLeadInput,
+  requestingUserId: string,
+  ipAddress?: string | null
+) {
+  const { ownerId: _ignoredOwnerId, status: _ignoredStatus, ...rest } = input;
+  return createLead(rest, requestingUserId, ipAddress, { requiresQualification: true, assignToCreator: true });
 }
