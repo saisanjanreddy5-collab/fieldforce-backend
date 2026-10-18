@@ -141,6 +141,8 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "leads.send_to_field",
     "activities.view",
     "activities.create",
+    "whatsapp.view",
+    "whatsapp.send",
     "call_center.view",
     "dashboard.view",
   ],

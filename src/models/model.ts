@@ -1991,6 +1991,25 @@ Regards,', 'active', 4)
       ('call_center','activities.create'),
       ('call_center','leads.send_to_field')
     ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Call Center's workspace now reuses the same real LeadDetail used
+    // everywhere else (Call/Email/Teams/WhatsApp actions, Overview, Activity,
+    // Logs, WhatsApp tabs - see CallCenterPage.tsx), instead of a separate
+    // bare-bones card - WhatsApp was the one communication channel they
+    // still had no permission for at all.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('call_center','whatsapp.view'),
+      ('call_center','whatsapp.send')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Email inbound sync (microsoft-mail-sync-service.ts): Microsoft Graph's
+    // delta query returns a deltaLink after the last page of a sync - stored
+    // per connected mailbox so the next poll asks "what changed since this
+    // checkpoint" instead of re-reading the whole inbox. Null means this
+    // mailbox has never completed an initial sync yet (or just reconnected
+    // and needs one) - same "null until it happens once" meaning everywhere
+    // else in this file.
+    `ALTER TABLE microsoft_connections ADD COLUMN IF NOT EXISTS mail_delta_link TEXT`,
   ];
 
   try {
