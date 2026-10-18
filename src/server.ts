@@ -5,6 +5,7 @@ import { pool } from "./config/db";
 import { createTables } from "./models/model";
 import routes from "./routes/routes";
 import { errorHandler, notFoundHandler } from "./middleware/error-middleware";
+import { startMailSyncScheduler } from "./services/microsoft-mail-sync-service";
 
 async function start(): Promise<void> {
   await pool.query("SELECT 1");
@@ -54,6 +55,8 @@ async function start(): Promise<void> {
   app.listen(env.PORT, () => {
     console.log(`FieldForce API listening on port ${env.PORT} (${env.NODE_ENV})`);
   });
+
+  startMailSyncScheduler();
 }
 
 start().catch((err) => {

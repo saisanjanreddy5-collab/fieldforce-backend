@@ -1,5 +1,6 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
+import { recordAuditEvent } from "./audit-log-service";
 import { getLeadById, isLeadInOwnerScope, updateLead } from "./lead-service";
 
 const CALL_CENTER_STAGE = "Call Center";
@@ -15,11 +16,20 @@ interface LeadAssignmentFacts {
   status: string;
   pincode: string | null;
   category: string | null;
+  // Current owner's security tier - the only reliable way to tell "already
+  // handed to Field Sales" apart from "still with Call Center", since
+  // sendToField deliberately never changes status (a handed-off lead keeps
+  // showing "Qualified" while the field rep works it, same as any other
+  // lead at that stage) - owner_id is the one thing that actually changes.
+  ownerRole: string | null;
 }
 
 async function getLeadAssignmentFacts(leadId: string): Promise<LeadAssignmentFacts> {
   const result = await pool.query<LeadAssignmentFacts>(
-    "SELECT status, pincode, category FROM leads WHERE id = $1",
+    `SELECT l.status, l.pincode, l.category, u.role AS "ownerRole"
+     FROM leads l
+     LEFT JOIN users u ON u.id = l.owner_id
+     WHERE l.id = $1`,
     [leadId]
   );
   if (result.rows.length === 0) {
@@ -54,6 +64,33 @@ async function getFieldCandidates(pincode: string | null, category: string | nul
     [pincode, operationFilter]
   );
   return result.rows;
+}
+
+// Least-loaded round-robin among EVERY active field employee, regardless of
+// pincode - used only when zero employees actually cover this lead's
+// pincode/category. Mirrors resolveCallCenterAssignee's own round-robin
+// exactly (see lead-service.ts), just scoped to role='agent' instead.
+//
+// Why fall back instead of refusing (the original design): real routing
+// tools converge on the same answer for an unmatched record - Salesforce/
+// HubSpot lead-routing guidance is explicit that "a blank owner is the
+// worst outcome" and every lead must land on a *named* owner, typically a
+// governed exceptions queue, rather than sitting invisible waiting to be
+// lost. sendToField's caller (see below) always pairs this with its own
+// distinct audit-trail entry, so the fallback is loud and reversible - not
+// a silent guess - the moment real pincode coverage is configured for that
+// area, an admin/manager can Reassign it properly via the existing swap tool.
+async function resolveFieldFallbackAssignee(): Promise<{ id: string; name: string } | null> {
+  const result = await pool.query<{ id: string; name: string }>(
+    `SELECT u.id, u.name
+     FROM users u
+     WHERE u.role = 'agent' AND u.is_active = true
+     ORDER BY (
+       SELECT COUNT(*) FROM leads l WHERE l.owner_id = u.id AND l.is_deleted = false
+     ) ASC, random()
+     LIMIT 1`
+  );
+  return result.rows[0] ?? null;
 }
 
 async function getCallCenterCandidates(): Promise<SwapCandidate[]> {
@@ -136,11 +173,12 @@ export async function getSwapCandidates(leadId: string, requestingUserId: string
 
 // Requires Qualified first - this is the one deliberate manual checkpoint
 // before a lead leaves Call Center, not an automatic side effect of marking
-// it Qualified. Zero coverage is reported clearly instead of silently
-// leaving the lead with its Call Center owner or guessing a field person;
-// more than one match requires the caller to pick (ownerId), since multiple
-// field people covering the same pincode is intentional, not something to
-// resolve by picking the first one arbitrarily.
+// it Qualified. More than one match requires the caller to pick (ownerId),
+// since multiple field people covering the same pincode is intentional, not
+// something to resolve by picking the first one arbitrarily. Zero coverage
+// no longer blocks the handoff outright - see resolveFieldFallbackAssignee's
+// own comment for why - it falls back to a flagged, audited assignment
+// instead of leaving the customer stuck in Call Center indefinitely.
 export async function sendToField(
   leadId: string,
   requestingUserId: string,
@@ -156,15 +194,46 @@ export async function sendToField(
   if (facts.status !== QUALIFIED_STAGE) {
     throw new ApiError(422, `Only a "${QUALIFIED_STAGE}" lead can be sent to Field Sales`);
   }
+  // sendToField never changes status (see LeadAssignmentFacts' own comment),
+  // so a lead already with Field Sales still reads as "Qualified" - owner
+  // role is the one real signal available here. Phrased as "already with a
+  // field employee" rather than "already sent" since that's true regardless
+  // of *how* it got there (this flow, or a lead a field rep created
+  // themselves that reached Qualified on its own) - either way, sending it
+  // to field again makes no sense, and without this guard a second click
+  // here could silently re-route it out from under whoever's working it.
+  // Reassign (admin/manager, same-pincode swap) is the correct tool for
+  // "move it to someone else" after this point - deliberately untouched.
+  if (facts.ownerRole === "agent") {
+    throw new ApiError(422, "This lead is already with a field employee. Use Reassign to move it to someone else.");
+  }
 
   const candidates = await getFieldCandidates(facts.pincode, facts.category);
+
   if (candidates.length === 0) {
-    throw new ApiError(
-      422,
-      facts.pincode
-        ? `Not serviceable - no field employee covers pincode ${facts.pincode}. Configure employee data for this pincode.`
-        : "This lead has no pincode on file - add one before sending to Field Sales."
-    );
+    const fallback = await resolveFieldFallbackAssignee();
+    if (!fallback) {
+      // The one case that still has to come back as a real error: there is
+      // no active field employee anywhere to fall back to, not even an
+      // imperfect one.
+      throw new ApiError(422, "No active field employee exists yet to receive this lead.");
+    }
+
+    const updated = await updateLead(leadId, { ownerId: fallback.id }, requestingUserId, ipAddress);
+    const actor = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
+    await recordAuditEvent({
+      entityType: "lead",
+      entityId: leadId,
+      entityLabel: updated.fullName,
+      action: "field_fallback_assignment",
+      summary: `Sent to Field Sales as a fallback - no one covers pincode ${facts.pincode ?? "(none on file)"} - ${updated.fullName}`,
+      oldValue: facts.pincode ? `No coverage for pincode ${facts.pincode}` : "No pincode on file",
+      newValue: fallback.name,
+      actorId: requestingUserId,
+      actorName: actor.rows[0]?.name ?? null,
+      ipAddress,
+    });
+    return updated;
   }
 
   let ownerId = chosenOwnerId;

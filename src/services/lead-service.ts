@@ -99,6 +99,12 @@ interface LeadRow {
   created_at: string;
   updated_at: string;
   owner_name: string | null;
+  // Which security tier currently owns this lead - the only reliable way
+  // the frontend can tell "already with Field Sales" apart from "still with
+  // Call Center" (sendToField deliberately never changes status - see
+  // lead-call-center-service.ts), so it can hide an action that would
+  // otherwise just 422.
+  owner_role: string | null;
   has_overdue_activity?: boolean;
   next_activity_due_at?: string | null;
   consent_pending?: boolean;
@@ -294,6 +300,7 @@ function toPublicLead(row: LeadRow) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     ownerName: row.owner_name,
+    ownerRole: row.owner_role,
     hasOverdueActivity: row.has_overdue_activity ?? undefined,
     nextActivityDueAt: row.next_activity_due_at ?? null,
     consentPending: row.consent_pending ?? undefined,
@@ -728,7 +735,7 @@ export async function getLeadById(leadId: string, requestingUserId: string) {
   }
 
   const result = await pool.query<LeadRow>(
-    `SELECT l.*, u.name AS owner_name FROM leads l
+    `SELECT l.*, u.name AS owner_name, u.role AS owner_role FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
      WHERE l.id = $1 AND l.is_deleted = false`,
     [leadId]
@@ -816,7 +823,7 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
 
   const result = await pool.query<LeadRow>(
     `${SUBTREE_CTE}
-     SELECT l.*, u.name AS owner_name,
+     SELECT l.*, u.name AS owner_name, u.role AS owner_role,
        EXISTS (
          SELECT 1 FROM activities a
          WHERE a.lead_id = l.id AND a.due_date < now() AND a.status <> 'completed'

@@ -269,7 +269,9 @@ export async function listUserConnections() {
 
 // Refreshes eagerly once the stored token is within 2 minutes of expiry,
 // rather than waiting for a live Graph call to fail with a 401 first.
-async function getValidAccessToken(userId: string): Promise<string> {
+// Exported for microsoft-mail-sync-service.ts's background job - same
+// per-user token, same refresh-on-demand behavior, no reason to duplicate it.
+export async function getValidAccessToken(userId: string): Promise<string> {
   assertConfigured();
 
   const result = await pool.query<ConnectionRow>("SELECT * FROM microsoft_connections WHERE user_id = $1", [userId]);
