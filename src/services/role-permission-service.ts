@@ -56,7 +56,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "customers.view", "customers.create", "customers.update", "customers.delete",
     "call_center.view",
     "support_tickets.view", "support_tickets.create", "support_tickets.update", "support_tickets.delete",
-    "leads.call_log", "leads.qualify", "leads.send_to_field", "leads.reassign",
+    "leads.call_log", "leads.qualify", "leads.send_to_field", "leads.reassign", "leads.queue_create",
   ],
   [ROLES.MANAGER]: [
     "users.view",
@@ -100,7 +100,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "customers.view", "customers.create", "customers.update", "customers.delete",
     "call_center.view",
     "support_tickets.view", "support_tickets.create", "support_tickets.update",
-    "leads.call_log", "leads.qualify", "leads.send_to_field", "leads.reassign",
+    "leads.call_log", "leads.qualify", "leads.send_to_field", "leads.reassign", "leads.queue_create",
   ],
   [ROLES.AGENT]: [
     "leads.view", "leads.create", "leads.update", "leads.delete", "leads.share",
@@ -128,13 +128,16 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "support_tickets.view", "support_tickets.create", "support_tickets.update",
   ],
   // A real, separate account for Call Center employees - their own queue
-  // only (view/update the leads assigned to them, log a call, mark
-  // Qualified, and push a Qualified lead to Field Sales themselves), never
-  // the full Leads module (leads.queue_view is deliberately its own
-  // permission, not leads.view - see lead-routes.ts's GET / route) and never
-  // the general Reassign/Swap action (that stays Admin/Manager only).
+  // only (add a contact who called in directly via leads.queue_create, view/
+  // update the leads assigned to them, log a call, mark Qualified, and push
+  // a Qualified lead to Field Sales themselves), never the full Leads module
+  // (leads.queue_view/leads.queue_create are deliberately their own
+  // permissions, not leads.view/leads.create - see lead-routes.ts's GET / and
+  // POST /queue routes) and never the general Reassign/Swap action (that
+  // stays Admin/Manager only).
   [ROLES.CALL_CENTER]: [
     "leads.queue_view",
+    "leads.queue_create",
     "leads.update",
     "leads.call_log",
     "leads.qualify",

@@ -516,6 +516,13 @@ export interface CreateLeadOptions {
   // into a campaign is a deliberate fast lane, not something this should
   // override.
   requiresQualification?: boolean;
+  // Only meaningful alongside requiresQualification - used by the Call
+  // Center workspace's own "Add lead" action (lead-call-center-service.ts's
+  // createOwnQueueLead), where the agent logging this contact mid-call is
+  // who should work it next, not whoever round-robin would hand it to.
+  // Every other requiresQualification caller (bulk import, website form, QR
+  // campaign) leaves this unset and keeps the round-robin behavior.
+  assignToCreator?: boolean;
 }
 
 export async function createLead(
@@ -534,7 +541,7 @@ export async function createLead(
   let ownerId: string | null;
   let status = input.status;
   if (options?.requiresQualification && input.ownerId === undefined) {
-    ownerId = await resolveCallCenterAssignee();
+    ownerId = options.assignToCreator ? creatorId : await resolveCallCenterAssignee();
     status = status ?? "Call Center";
   } else {
     ownerId = input.ownerId ?? (await resolveAutoAssignee(input, creatorId));
