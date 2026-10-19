@@ -30,3 +30,9 @@ export const me = asyncHandler(async (req: Request, res: Response) => {
   const user = await authService.getUserById(req.user!.id);
   sendSuccess(res, user);
 });
+
+export const changePassword = asyncHandler(async (req: Request, res: Response) => {
+  const { currentPassword, newPassword } = req.body;
+  await authService.changeOwnPassword(req.user!.id, currentPassword, newPassword);
+  sendSuccess(res, null, "Password changed - please log in again");
+});

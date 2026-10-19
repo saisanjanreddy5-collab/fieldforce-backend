@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { asyncHandler } from "../utils/asyncHandler";
 import { sendSuccess } from "../utils/response";
 import * as userService from "../services/user-service";
+import * as authService from "../services/auth-service";
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const query = req.validatedQuery as unknown as { page: number; limit: number };
@@ -12,6 +13,11 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 export const update = asyncHandler(async (req: Request, res: Response) => {
   const user = await userService.updateUser(String(req.params.id), req.body, req.user!.id);
   sendSuccess(res, user, "User updated");
+});
+
+export const resetPassword = asyncHandler(async (req: Request, res: Response) => {
+  await authService.adminResetPassword(String(req.params.id), req.body.newPassword, req.user!.id, req.ip);
+  sendSuccess(res, null, "Password reset");
 });
 
 // Preview only - registerUser assigns the real one itself at creation time
