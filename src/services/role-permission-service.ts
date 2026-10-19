@@ -14,7 +14,7 @@ interface RolePermissionRow {
 // toggled since.
 const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   [ROLES.ADMIN]: [
-    "users.view", "users.create", "users.update",
+    "users.view", "users.create", "users.update", "users.reset_password",
     "leads.view", "leads.create", "leads.update", "leads.delete", "leads.share",
     "opportunities.view", "opportunities.create", "opportunities.update", "opportunities.delete",
     "activities.view", "activities.create", "activities.update", "activities.delete",

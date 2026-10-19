@@ -40,3 +40,11 @@ export const updateUserSchema = z.object({
 });
 
 export const listUsersQuerySchema = paginationQuerySchema;
+
+// Admin-initiated - no currentPassword proof needed here (unlike
+// changePasswordSchema in auth-validator.ts): the admin is proving their
+// own identity via their own session/permission, not standing in for the
+// target user.
+export const adminResetPasswordSchema = z.object({
+  newPassword: z.string().min(8, "New password must be at least 8 characters"),
+});

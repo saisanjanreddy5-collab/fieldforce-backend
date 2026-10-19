@@ -2022,6 +2022,13 @@ Regards,', 'active', 4)
     // and needs one) - same "null until it happens once" meaning everywhere
     // else in this file.
     `ALTER TABLE microsoft_connections ADD COLUMN IF NOT EXISTS mail_delta_link TEXT`,
+
+    // Admin-only, deliberately not bundled into users.update (see
+    // user-routes.ts's own comment) - a locked-out employee otherwise has no
+    // way back in except a developer running raw SQL, which is exactly what
+    // happened before this existed.
+    `INSERT INTO role_permissions (role, permission) VALUES ('admin','users.reset_password')
+     ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {

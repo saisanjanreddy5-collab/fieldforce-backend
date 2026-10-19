@@ -7,6 +7,7 @@ import { ApiError } from "../utils/ApiError";
 import { getPermissionsForRole } from "./permission-service";
 import { getLevelSecurityTier } from "./level-service";
 import { getNextEmployeeCode } from "./user-service";
+import { recordAuditEvent } from "./audit-log-service";
 import { Role, ROLES } from "../utils/roles";
 
 interface UserRow {
@@ -296,6 +297,69 @@ export async function logoutUser(refreshToken: string): Promise<void> {
   if (payload.jti) {
     await pool.query("UPDATE refresh_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL", [payload.jti]);
   }
+}
+
+// Self-service: proves identity via the CURRENT password (being logged in
+// alone isn't enough - this is the same bar every "change my password" flow
+// in any real app uses), then revokes every refresh token this user
+// currently holds - the same revocation logoutUser already does for one
+// token, just for all of them. That includes the very session making this
+// request: the simpler, more conservative of the two real-world patterns
+// (some tools keep the calling session alive and only kill the others) -
+// one clear rule, nothing to special-case. The frontend is expected to
+// treat a successful call here as an immediate logout.
+export async function changeOwnPassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
+  const result = await pool.query<{ password_hash: string }>("SELECT password_hash FROM users WHERE id = $1", [userId]);
+  const user = result.rows[0];
+  if (!user) {
+    throw new ApiError(404, "User not found");
+  }
+
+  const matches = await bcrypt.compare(currentPassword, user.password_hash);
+  if (!matches) {
+    throw new ApiError(401, "Current password is incorrect");
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+  await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [passwordHash, userId]);
+  await pool.query("UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [userId]);
+}
+
+// Admin-initiated - no currentPassword proof from the target user (the
+// admin's own session/permission is the proof here instead). Unlike
+// changeOwnPassword there's no "calling session" to weigh keeping alive -
+// the admin and the target are two different people - so every one of the
+// target's sessions is unconditionally revoked. Audited (who reset whose
+// password, when) since this is a sensitive, other-person-affecting action;
+// the password itself is never logged anywhere.
+export async function adminResetPassword(
+  targetUserId: string,
+  newPassword: string,
+  actorId: string,
+  ipAddress?: string | null
+): Promise<void> {
+  const target = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [targetUserId]);
+  if (target.rows.length === 0) {
+    throw new ApiError(404, "User not found");
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+  await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [passwordHash, targetUserId]);
+  await pool.query("UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [targetUserId]);
+
+  const actor = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [actorId]);
+  await recordAuditEvent({
+    entityType: "user",
+    entityId: targetUserId,
+    entityLabel: target.rows[0].name,
+    action: "password_reset",
+    summary: `Password reset by admin - ${target.rows[0].name}`,
+    oldValue: null,
+    newValue: null,
+    actorId,
+    actorName: actor.rows[0]?.name ?? null,
+    ipAddress,
+  });
 }
 
 export async function getUserById(id: string) {
