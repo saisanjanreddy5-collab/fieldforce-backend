@@ -29,6 +29,11 @@ export const listTerritories = asyncHandler(async (_req: Request, res: Response)
   sendSuccess(res, territories);
 });
 
+export const listSources = asyncHandler(async (_req: Request, res: Response) => {
+  const sources = await leadService.getDistinctLeadSources();
+  sendSuccess(res, sources);
+});
+
 export const quickFilterCounts = asyncHandler(async (req: Request, res: Response) => {
   const counts = await leadService.getQuickFilterCounts(req.user!.id);
   sendSuccess(res, counts);
@@ -44,6 +49,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     areaId?: string;
     search?: string;
     category?: string;
+    source?: string;
     overdueOnly?: boolean;
     highScoreOnly?: boolean;
     consentPending?: boolean;

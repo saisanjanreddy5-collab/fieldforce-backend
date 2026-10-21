@@ -155,6 +155,7 @@ export const listLeadsQuerySchema = z.object({
   areaId: uuid.optional(),
   search: z.string().optional(),
   category: z.string().optional(),
+  source: z.string().optional(),
   overdueOnly: queryBoolean,
   highScoreOnly: queryBoolean,
   consentPending: queryBoolean,
