@@ -20,3 +20,9 @@ export const resetToDefault = asyncHandler(async (req: Request, res: Response) =
   const matrix = await rolePermissionService.listRolePermissionMatrix();
   sendSuccess(res, matrix, "Role reset to default");
 });
+
+export const grantAdminAccess = asyncHandler(async (req: Request, res: Response) => {
+  await rolePermissionService.grantAdminAccessToRole(req.body.role, req.user!.id, req.ip);
+  const matrix = await rolePermissionService.listRolePermissionMatrix();
+  sendSuccess(res, matrix, "Full Administrator access granted");
+});
