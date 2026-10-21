@@ -2,7 +2,11 @@ import { pool } from "../config/db";
 
 export interface AuditEventInput {
   entityType: string;
-  entityId: string;
+  // Null for an event with no single database row to point at - e.g.
+  // "Admin access granted to the whole call_center tier" describes a role,
+  // not one record. entityLabel still carries the real identifying text in
+  // that case. Every other caller keeps passing a real id as before.
+  entityId: string | null;
   entityLabel?: string | null;
   action: string;
   summary: string;
@@ -39,7 +43,7 @@ export async function recordAuditEvent(input: AuditEventInput): Promise<void> {
 interface AuditLogRow {
   id: string;
   entity_type: string;
-  entity_id: string;
+  entity_id: string | null;
   entity_label: string | null;
   action: string;
   summary: string;

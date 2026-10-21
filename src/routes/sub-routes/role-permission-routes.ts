@@ -3,7 +3,7 @@ import * as rolePermissionController from "../../controllers/role-permission-con
 import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody } from "../../middleware/validate-middleware";
-import { resetRoleToDefaultSchema, setRolePermissionSchema } from "../../validators/role-permission-validator";
+import { grantAdminAccessSchema, resetRoleToDefaultSchema, setRolePermissionSchema } from "../../validators/role-permission-validator";
 
 const router = Router();
 
@@ -22,6 +22,12 @@ router.post(
   requirePermission("role_permissions.update"),
   validateBody(resetRoleToDefaultSchema),
   rolePermissionController.resetToDefault
+);
+router.post(
+  "/grant-admin-access",
+  requirePermission("role_permissions.update"),
+  validateBody(grantAdminAccessSchema),
+  rolePermissionController.grantAdminAccess
 );
 
 export default router;

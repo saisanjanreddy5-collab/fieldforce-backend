@@ -1,5 +1,6 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
+import { recordAuditEvent } from "./audit-log-service";
 import { ROLES } from "../utils/roles";
 
 interface RolePermissionRow {
@@ -235,4 +236,57 @@ export async function resetRoleToDefault(role: string): Promise<void> {
   } finally {
     client.release();
   }
+}
+
+// A temporary, reversible elevation - lets an admin give a whole tier (e.g.
+// every Call Center Executive) full Administrator access with one click,
+// instead of visiting each real employee's account individually, for a
+// team review/demo that needs to see every module. Copies whatever Admin's
+// LIVE permission set actually is right now (not DEFAULT_ROLE_PERMISSIONS'
+// hardcoded admin list above), so it stays correct even as Admin's own
+// grants drift from that baseline over time. Meant to be paired with
+// "Reset role to default" right next to it in the UI, to put the role back
+// exactly where it was once the review is done - this function itself has
+// no "undo", it's a one-way copy, same as resetRoleToDefault above.
+export async function grantAdminAccessToRole(targetRole: string, actorId: string, ipAddress?: string | null): Promise<void> {
+  if (targetRole === ROLES.ADMIN) {
+    throw new ApiError(422, "This role already has Administrator access");
+  }
+
+  const adminPermissions = await pool.query<{ permission: string }>(
+    "SELECT permission FROM role_permissions WHERE role = $1",
+    [ROLES.ADMIN]
+  );
+  const permissions = adminPermissions.rows.map((r) => r.permission);
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM role_permissions WHERE role = $1", [targetRole]);
+    for (const permission of permissions) {
+      await client.query("INSERT INTO role_permissions (role, permission) VALUES ($1, $2)", [targetRole, permission]);
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  // Audited - this is a significant, powerful access change affecting every
+  // employee who holds this role tier, not a routine toggle.
+  const actor = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [actorId]);
+  await recordAuditEvent({
+    entityType: "role_permissions",
+    entityId: null,
+    entityLabel: targetRole,
+    action: "admin_access_granted",
+    summary: `Full Administrator access granted to the "${targetRole}" role`,
+    oldValue: null,
+    newValue: `${permissions.length} permissions (mirrors Admin)`,
+    actorId,
+    actorName: actor.rows[0]?.name ?? null,
+    ipAddress,
+  });
 }

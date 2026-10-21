@@ -2029,6 +2029,13 @@ Regards,', 'active', 4)
     // happened before this existed.
     `INSERT INTO role_permissions (role, permission) VALUES ('admin','users.reset_password')
      ON CONFLICT (role, permission) DO NOTHING`,
+
+    // "Grant full Administrator access to a role" (role-permission-service.ts's
+    // grantAdminAccessToRole) describes a whole tier, not one database row -
+    // there's no real entity id to point this audit event at, unlike every
+    // other caller of recordAuditEvent. entity_label still carries the real
+    // identifying text (the role name) for this one.
+    `ALTER TABLE audit_log ALTER COLUMN entity_id DROP NOT NULL`,
   ];
 
   try {
