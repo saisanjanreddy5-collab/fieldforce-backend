@@ -38,6 +38,7 @@ router.post("/bulk-import", requirePermission("leads.create"), validateBody(bulk
 // createOwnQueueLead's own comment for why this isn't just POST / with a flag.
 router.post("/queue", requirePermission("leads.queue_create"), validateBody(createLeadSchema), leadController.createOwnQueueLead);
 router.get("/territories", requirePermission("leads.view"), leadController.listTerritories);
+router.get("/sources", requirePermission("leads.view"), leadController.listSources);
 router.get("/quick-filter-counts", requirePermission("leads.view"), leadController.quickFilterCounts);
 router.get("/:id", requirePermission("leads.view"), leadController.getById);
 router.patch("/:id", requirePermission("leads.update"), validateBody(updateLeadSchema), leadController.update);

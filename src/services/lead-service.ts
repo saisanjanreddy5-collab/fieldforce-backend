@@ -207,6 +207,7 @@ export interface ListLeadsFilters {
   areaId?: string;
   search?: string;
   category?: string;
+  source?: string;
   overdueOnly?: boolean;
   highScoreOnly?: boolean;
   consentPending?: boolean;
@@ -735,6 +736,27 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
   return result;
 }
 
+// Backs the Source filter dropdown - real distinct values actually sitting
+// on leads today, not a hardcoded guess list that'd drift from whatever's
+// really been imported/typed. Unions two separate columns on purpose: a
+// lead's source lives in `source` if it came through bulk import, or in
+// `inquiry_source` if it came from the manual New Lead form / website / QR
+// (see the matching comment on the filter condition above and
+// getLeadSourceROI's own note on this same split) - so every real value,
+// whichever column it landed in, shows up as one option here. Alphabetical,
+// not by frequency - a filter list should be easy to scan, not reordering
+// itself as counts change.
+export async function getDistinctLeadSources(): Promise<string[]> {
+  const result = await pool.query<{ value: string }>(
+    `SELECT DISTINCT value FROM (
+       SELECT source AS value FROM leads WHERE source IS NOT NULL AND source <> '' AND is_deleted = false
+       UNION
+       SELECT inquiry_source AS value FROM leads WHERE inquiry_source IS NOT NULL AND inquiry_source <> '' AND is_deleted = false
+     ) t ORDER BY value ASC`
+  );
+  return result.rows.map((r) => r.value);
+}
+
 export async function getLeadById(leadId: string, requestingUserId: string) {
   const visible = await isLeadVisibleToUser(leadId, requestingUserId);
   if (!visible) {
@@ -796,6 +818,16 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
   if (filters.category) {
     params.push(filters.category);
     conditions.push(`l.category = $${params.length}`);
+  }
+  if (filters.source) {
+    // Two separate columns hold "where did this lead come from" depending
+    // on how it was created - `source` (bulk import only) and
+    // `inquiry_source` (the manual New Lead form, website, QR - see
+    // getLeadSourceROI's own comment on this same split). A value picked
+    // from the filter dropdown can legitimately live in either one
+    // depending on the lead, so both are checked rather than just one.
+    params.push(filters.source);
+    conditions.push(`(l.source = $${params.length} OR l.inquiry_source = $${params.length})`);
   }
   if (filters.overdueOnly) {
     conditions.push(
