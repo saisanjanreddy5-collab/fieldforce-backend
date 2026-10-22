@@ -2044,6 +2044,18 @@ Regards,', 'active', 4)
     // that's already there on an existing database - this DELETE is that
     // retroactive fix. Harmless no-op everywhere this was never seeded.
     `DELETE FROM role_permissions WHERE role = 'agent' AND permission = 'call_center.view'`,
+
+    // Call Center never got the same self-service Leave/Expenses access
+    // every other role (admin/manager/agent) already has - an oversight
+    // from when this role was first built around the lead-qualification
+    // workflow only. They're real employees too.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('call_center','leave_types.view'),
+      ('call_center','leave_requests.view'), ('call_center','leave_requests.create'), ('call_center','leave_requests.update'),
+      ('call_center','comp_off_credits.view'),
+      ('call_center','expense_types.view'),
+      ('call_center','expense_claims.view'), ('call_center','expense_claims.create'), ('call_center','expense_claims.update')
+    ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {

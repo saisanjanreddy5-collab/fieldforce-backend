@@ -148,6 +148,15 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "whatsapp.send",
     "call_center.view",
     "dashboard.view",
+    // Same self-service HR set every other role already has - unrelated to
+    // the lead-qualification scope restriction above. A Call Center
+    // employee is still a real employee who needs to apply for leave and
+    // submit expense claims like anyone else.
+    "leave_types.view",
+    "leave_requests.view", "leave_requests.create", "leave_requests.update",
+    "comp_off_credits.view",
+    "expense_types.view",
+    "expense_claims.view", "expense_claims.create", "expense_claims.update",
   ],
 };
 
