@@ -40,7 +40,13 @@ router.post("/queue", requirePermission("leads.queue_create"), validateBody(crea
 router.get("/territories", requirePermission("leads.view"), leadController.listTerritories);
 router.get("/sources", requirePermission("leads.view"), leadController.listSources);
 router.get("/quick-filter-counts", requirePermission("leads.view"), leadController.quickFilterCounts);
-router.get("/:id", requirePermission("leads.view"), leadController.getById);
+// Call Center holds leads.queue_view, not leads.view (same reasoning as the
+// GET / list route and GET /:id/history above) - EmailComposeDrawer.tsx
+// fetches a lead fresh on its own rather than reusing the queue list's
+// already-loaded copy, so this single-lead GET needs the same widened
+// check. getLeadById still does its own real isLeadVisibleToUser check
+// underneath.
+router.get("/:id", requireAnyPermission("leads.view", "leads.queue_view"), leadController.getById);
 router.patch("/:id", requirePermission("leads.update"), validateBody(updateLeadSchema), leadController.update);
 router.delete("/:id", requirePermission("leads.delete"), leadController.remove);
 
