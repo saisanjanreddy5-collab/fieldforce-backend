@@ -2056,6 +2056,16 @@ Regards,', 'active', 4)
       ('call_center','expense_types.view'),
       ('call_center','expense_claims.view'), ('call_center','expense_claims.create'), ('call_center','expense_claims.update')
     ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Needed to populate the template picker in EmailComposeDrawer.tsx when
+    // a Call Center employee emails a lead - was missing entirely, which
+    // broke the whole compose panel (not just the template list) because
+    // the frontend fetched lead details, Microsoft status, and templates
+    // together in one Promise.all - one 403 failed all three. Granting the
+    // permission is the real fix; the frontend was also hardened
+    // separately so a future missing permission here can't repeat that.
+    `INSERT INTO role_permissions (role, permission) VALUES ('call_center','message_templates.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {

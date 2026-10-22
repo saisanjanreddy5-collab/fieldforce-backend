@@ -60,7 +60,13 @@ router.post(
 );
 
 router.get("/:id/consent", requirePermission("leads.view"), leadController.getConsent);
-router.get("/:id/history", requirePermission("leads.view"), leadController.getHistory);
+// Call Center holds leads.queue_view, not leads.view (see the GET / route's
+// own comment on why those stay separate permissions) - the History button
+// is visible to them on their own queue's leads, so the route has to accept
+// either. listLeadHistory still does its own real isLeadVisibleToUser check
+// underneath, so this only widens who can attempt the call, never who can
+// actually see another person's lead.
+router.get("/:id/history", requireAnyPermission("leads.view", "leads.queue_view"), leadController.getHistory);
 
 router.post("/:id/call-dispositions", requirePermission("leads.call_log"), validateBody(logCallDispositionSchema), leadController.logCallDisposition);
 router.post("/:id/qualify", requirePermission("leads.qualify"), leadController.qualify);

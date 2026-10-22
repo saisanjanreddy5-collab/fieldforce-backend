@@ -148,6 +148,12 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "whatsapp.send",
     "call_center.view",
     "dashboard.view",
+    // Needed to actually populate the template picker when emailing a lead
+    // (EmailComposeDrawer.tsx) - same reason Agent already holds this. Safe
+    // to grant now that Settings' own nav visibility no longer keys off
+    // this permission (see nav-config.tsx's own fix for why that used to
+    // matter).
+    "message_templates.view",
     // Same self-service HR set every other role already has - unrelated to
     // the lead-qualification scope restriction above. A Call Center
     // employee is still a real employee who needs to apply for leave and
