@@ -125,7 +125,6 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "lead_categories.view",
     "quotes.view", "quotes.create", "quotes.update",
     "customers.view", "customers.create", "customers.update", "customers.delete",
-    "call_center.view",
     "support_tickets.view", "support_tickets.create", "support_tickets.update",
   ],
   // A real, separate account for Call Center employees - their own queue

@@ -1639,7 +1639,7 @@ Regards,', 'active', 4)
       ('admin','customers.view'), ('admin','customers.create'), ('admin','customers.update'), ('admin','customers.delete'),
       ('manager','customers.view'), ('manager','customers.create'), ('manager','customers.update'), ('manager','customers.delete'),
       ('agent','customers.view'), ('agent','customers.create'), ('agent','customers.update'), ('agent','customers.delete'),
-      ('admin','call_center.view'), ('manager','call_center.view'), ('agent','call_center.view'),
+      ('admin','call_center.view'), ('manager','call_center.view'),
       ('admin','support_tickets.view'), ('admin','support_tickets.create'), ('admin','support_tickets.update'), ('admin','support_tickets.delete'),
       ('manager','support_tickets.view'), ('manager','support_tickets.create'), ('manager','support_tickets.update'),
       ('agent','support_tickets.view'), ('agent','support_tickets.create'), ('agent','support_tickets.update')
@@ -2036,6 +2036,14 @@ Regards,', 'active', 4)
     // other caller of recordAuditEvent. entity_label still carries the real
     // identifying text (the role name) for this one.
     `ALTER TABLE audit_log ALTER COLUMN entity_id DROP NOT NULL`,
+    // 'agent' (Field Sales Executive) was wrongly seeded with call_center.view
+    // early in the Call Center feature's build-out - it's what put the Call
+    // center nav item in front of field employees, who have no business in
+    // that module at all. The INSERT above now excludes 'agent' for any fresh
+    // install, but ON CONFLICT DO NOTHING can't retroactively undo a row
+    // that's already there on an existing database - this DELETE is that
+    // retroactive fix. Harmless no-op everywhere this was never seeded.
+    `DELETE FROM role_permissions WHERE role = 'agent' AND permission = 'call_center.view'`,
   ];
 
   try {
