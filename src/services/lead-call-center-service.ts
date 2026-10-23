@@ -2,9 +2,33 @@ import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { recordAuditEvent } from "./audit-log-service";
 import { createLead, getLeadById, isLeadInOwnerScope, updateLead, type CreateLeadInput } from "./lead-service";
+import { createActivityForLead } from "./activity-service";
 
 const CALL_CENTER_STAGE = "Call Center";
 const QUALIFIED_STAGE = "Qualified";
+
+// Ownership-based visibility (isLeadVisibleToUser/isLeadInOwnerScope) means
+// the Call Center rep who qualified and sent this lead would otherwise lose
+// every trace of it the instant ownership moves to Field Sales - not just
+// the ability to edit it (correct), but the ability to even see their own
+// call history and recordings on it (not correct - they did real work here,
+// a clean handoff shouldn't erase it from their view). A lead_shares row is
+// exactly the read-only grant this app already has for this: included in
+// isLeadVisibleToUser, deliberately excluded from isLeadInOwnerScope (see
+// that function's own comment), so this never reopens any ability to edit,
+// qualify, or re-send the lead - only to look at it. No requirePermission
+// check here (unlike shareLead in lead-service.ts) because this runs as a
+// side effect of an action sendToField already authorized at its own entry
+// point, after ownership has already moved on - the normal share flow's own
+// isLeadInOwnerScope check would wrongly reject it at that point.
+async function shareLeadBackToSender(leadId: string, senderId: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO lead_shares (lead_id, shared_with_user_id, shared_by_user_id)
+     VALUES ($1, $2, $2)
+     ON CONFLICT (lead_id, shared_with_user_id) DO NOTHING`,
+    [leadId, senderId]
+  );
+}
 
 export interface SwapCandidate {
   id: string;
@@ -103,6 +127,9 @@ async function getCallCenterCandidates(): Promise<SwapCandidate[]> {
 export interface LogCallDispositionInput {
   disposition: string;
   notes?: string;
+  // Only set (and only meaningful) when disposition is "Call Back" - see
+  // the real second Activity this creates below.
+  callbackAt?: string;
 }
 
 // One activities row per attempt (type='call'), same durable per-call
@@ -123,6 +150,25 @@ export async function logCallDisposition(leadId: string, input: LogCallDispositi
      VALUES ('call', $1, $2, 'completed', $3::jsonb, $2)`,
     [leadId, requestingUserId, JSON.stringify({ disposition: input.disposition, notes: input.notes ?? null })]
   );
+
+  // A second, separate Activity - this one's still pending, not a record of
+  // what just happened but a real commitment for what happens next. This is
+  // the actual fix for "Call Back" being a dead end: before this, picking
+  // it just saved text saying "call back" with nothing anywhere tracking
+  // when, so the Call Center Dashboard's "Call queue" (which reads real
+  // pending call Activities - see listUpcomingCalls) could never show
+  // anything. Reuses createActivityForLead rather than a raw INSERT here,
+  // so it's identical in every way to a call scheduled by hand from the
+  // Activity Calendar's own "+ Add action" - same table, same status
+  // convention ('pending', createActivityForLead's own default), same
+  // overdue/due-today logic, no separate code path to keep in sync.
+  if (input.disposition === "Call Back" && input.callbackAt) {
+    await createActivityForLead(
+      leadId,
+      { type: "call", subject: "Call back", dueDate: input.callbackAt, assignedTo: requestingUserId },
+      requestingUserId
+    );
+  }
 
   await pool.query(
     `UPDATE leads SET call_attempt_count = call_attempt_count + 1, last_call_outcome = $1, last_call_at = now()
@@ -220,6 +266,7 @@ export async function sendToField(
     }
 
     const updated = await updateLead(leadId, { ownerId: fallback.id }, requestingUserId, ipAddress);
+    await shareLeadBackToSender(leadId, requestingUserId);
     const actor = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
     await recordAuditEvent({
       entityType: "lead",
@@ -246,7 +293,9 @@ export async function sendToField(
     throw new ApiError(422, "That employee does not cover this lead's pincode");
   }
 
-  return updateLead(leadId, { ownerId }, requestingUserId, ipAddress);
+  const updated = await updateLead(leadId, { ownerId }, requestingUserId, ipAddress);
+  await shareLeadBackToSender(leadId, requestingUserId);
+  return updated;
 }
 
 // The general-purpose swap, usable any time (not just the initial Field

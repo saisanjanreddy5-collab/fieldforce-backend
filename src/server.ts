@@ -6,6 +6,7 @@ import { createTables } from "./models/model";
 import routes from "./routes/routes";
 import { errorHandler, notFoundHandler } from "./middleware/error-middleware";
 import { startMailSyncScheduler } from "./services/microsoft-mail-sync-service";
+import { startCallReminderScheduler } from "./services/call-reminder-service";
 
 async function start(): Promise<void> {
   await pool.query("SELECT 1");
@@ -57,6 +58,7 @@ async function start(): Promise<void> {
   });
 
   startMailSyncScheduler();
+  startCallReminderScheduler();
 }
 
 start().catch((err) => {
