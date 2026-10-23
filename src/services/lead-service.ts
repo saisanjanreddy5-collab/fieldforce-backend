@@ -765,6 +765,32 @@ export async function getDistinctLeadSources(): Promise<string[]> {
   return result.rows.map((r) => r.value);
 }
 
+// Backs "My queue"'s own second section in CallCenterPage.tsx - without
+// this, the moment a Call Center rep sends their last lead to Field Sales,
+// their queue goes completely blank with no trace of what they'd actually
+// handled, which read as the work having vanished rather than finished.
+// lead_shares rows created by shareLeadBackToSender (lead-call-center-
+// service.ts) are exactly "leads this person used to own and has since
+// handed off" - nothing else writes that table for that reason today, so
+// querying it directly needs no new column or flag. Each row still comes
+// back with in_owner_scope: false (real, not assumed - computed the same
+// way getLeadById does), since a rep can revisit these but never act on
+// them again.
+export async function listLeadsHandedOffByUser(requestingUserId: string) {
+  const result = await pool.query<LeadRow>(
+    `${SUBTREE_CTE}
+     SELECT l.*, u.name AS owner_name, u.role AS owner_role,
+       (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE}) AS in_owner_scope
+     FROM leads l
+     JOIN lead_shares ls ON ls.lead_id = l.id AND ls.shared_with_user_id = $1
+     LEFT JOIN users u ON u.id = l.owner_id
+     WHERE l.is_deleted = false
+     ORDER BY ls.created_at DESC`,
+    [requestingUserId]
+  );
+  return result.rows.map(toPublicLead);
+}
+
 export async function getLeadById(leadId: string, requestingUserId: string) {
   const visible = await isLeadVisibleToUser(leadId, requestingUserId);
   if (!visible) {
