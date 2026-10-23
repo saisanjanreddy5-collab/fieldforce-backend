@@ -2075,6 +2075,12 @@ Regards,', 'active', 4)
       ('call_center','lead_categories.view'),
       ('call_center','pipeline_stages.view')
     ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Tracks whether a scheduled call's email reminder has already gone out
+    // (call-reminder-service.ts) - null until sent, so the poller never
+    // double-sends the same reminder on its next pass. Not reused for
+    // anything else - a reminder genuinely is a one-time event per Activity.
+    `ALTER TABLE activities ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ`,
   ];
 
   try {
