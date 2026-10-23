@@ -40,6 +40,11 @@ router.post("/queue", requirePermission("leads.queue_create"), validateBody(crea
 router.get("/territories", requirePermission("leads.view"), leadController.listTerritories);
 router.get("/sources", requirePermission("leads.view"), leadController.listSources);
 router.get("/quick-filter-counts", requirePermission("leads.view"), leadController.quickFilterCounts);
+// "My queue"'s own second section (CallCenterPage.tsx) - leads this person
+// used to own and has since handed off via Send to Field. Same widened
+// check as the main GET / list route, for the same reason (Call Center
+// holds leads.queue_view, not leads.view).
+router.get("/handed-off", requireAnyPermission("leads.view", "leads.queue_view"), leadController.listHandedOff);
 // Call Center holds leads.queue_view, not leads.view (same reasoning as the
 // GET / list route and GET /:id/history above) - EmailComposeDrawer.tsx
 // fetches a lead fresh on its own rather than reusing the queue list's

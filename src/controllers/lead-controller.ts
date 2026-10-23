@@ -29,6 +29,11 @@ export const listTerritories = asyncHandler(async (_req: Request, res: Response)
   sendSuccess(res, territories);
 });
 
+export const listHandedOff = asyncHandler(async (req: Request, res: Response) => {
+  const leads = await leadService.listLeadsHandedOffByUser(req.user!.id);
+  sendSuccess(res, leads);
+});
+
 export const listSources = asyncHandler(async (_req: Request, res: Response) => {
   const sources = await leadService.getDistinctLeadSources();
   sendSuccess(res, sources);
