@@ -3,7 +3,7 @@ import { ApiError } from "../utils/ApiError";
 import { SMARTFLO_BASE_URL, isSmartfloConfigured } from "../config/smartflo";
 import { env } from "../config/env";
 import { createActivityForLead, mergeActivityDetailsByExternalRefId } from "./activity-service";
-import { getLeadById } from "./lead-service";
+import { getLeadById, isLeadInOwnerScope } from "./lead-service";
 
 interface ClickToCallResponse {
   success: boolean;
@@ -52,6 +52,18 @@ export async function initiateCallForLead(
   contactName?: string
 ): Promise<{ refId: string }> {
   assertConfigured();
+
+  // Deliberately the strict owner-scope check, not getLeadById's own
+  // broader visibility one - a lead merely shared with this person (e.g.
+  // the Call Center rep who handed it to Field Sales - see
+  // shareLeadBackToSender in lead-call-center-service.ts) should still be
+  // visible to look back on, but placing a real phone call is an action,
+  // not a view. Two people calling the same customer after a handoff is a
+  // real business problem, not just a technicality.
+  const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
+  if (!inScope) {
+    throw new ApiError(403, "You do not have access to this lead");
+  }
 
   const agentNumber = await getAgentNumber(requestingUserId);
   if (!agentNumber) {

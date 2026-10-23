@@ -3,7 +3,7 @@ import { ApiError } from "../utils/ApiError";
 import { WHATSAPP_BASE_URL, isWhatsappConfigured } from "../config/whatsapp";
 import { env } from "../config/env";
 import { createActivityForLead } from "./activity-service";
-import { getLeadById, findLeadIdByPhone } from "./lead-service";
+import { getLeadById, findLeadIdByPhone, isLeadInOwnerScope } from "./lead-service";
 
 interface SendMessageApiResponse {
   messages?: { id: string }[];
@@ -52,6 +52,15 @@ function requestHeaders(): Record<string, string> {
 
 export async function sendTextMessage(leadId: string, body: string, requestingUserId: string) {
   assertConfigured();
+
+  // Strict owner-scope, not getLeadById's own broader visibility check - see
+  // smartflo-service.ts's initiateCallForLead for the full reasoning.
+  // listMessagesForLead below deliberately keeps the broader check (reading
+  // past messages is a view, not an action).
+  const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
+  if (!inScope) {
+    throw new ApiError(403, "You do not have access to this lead");
+  }
 
   const lead = await getLeadById(leadId, requestingUserId);
   if (!lead.phone) {
