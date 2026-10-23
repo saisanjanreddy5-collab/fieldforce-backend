@@ -111,8 +111,23 @@ export interface ListCallsFilters {
 // see smartflo-service.ts). Scheduled-but-not-yet-made calls deliberately
 // don't show up here, only in listUpcomingCalls below - same "scheduled vs
 // history" split leads/tabs/ActivityTab.tsx and LogsTab.tsx already use.
+//
+// external_ref_id IS NOT NULL is the real discriminator, not just
+// type='call' AND status='completed' - logCallDisposition
+// (lead-call-center-service.ts) inserts that exact same type/status
+// combination for a manually-logged disposition (Ringing/Not Interested/
+// etc.), which has no Smartflo ref_id at all. Without this check, every
+// manual disposition showed up here as a phantom Smartflo call stuck
+// forever at "In progress" (no outcome ever arrives for it, since no real
+// call was ever placed and no webhook is coming).
 export async function listCalls(requestingUserId: string, filters: ListCallsFilters) {
-  const conditions: string[] = ["a.type = 'call'", "a.status = 'completed'", "l.is_deleted = false", VISIBILITY_CLAUSE];
+  const conditions: string[] = [
+    "a.type = 'call'",
+    "a.status = 'completed'",
+    "a.external_ref_id IS NOT NULL",
+    "l.is_deleted = false",
+    VISIBILITY_CLAUSE,
+  ];
   const params: unknown[] = [requestingUserId];
 
   if (filters.assignedTo) {
@@ -189,6 +204,15 @@ interface CallCenterStatsRow {
 // see - not a page of them - so they stay correct regardless of volume.
 // "Today" is anchored to Asia/Kolkata, matching activity-service.ts's own
 // getCalendarStats, not the viewer's browser clock.
+// external_ref_id IS NOT NULL on every "completed" subquery below is the
+// same fix as listCalls above - without it, a manually-logged disposition
+// (logCallDisposition also writes type='call', status='completed') gets
+// counted as a real Smartflo call with no outcome, inflating "Calls today"
+// and dragging down Connected%/Recorded% with phantom entries that were
+// never actually phone calls. Not applied to the two "not completed"
+// subqueries below (in_queue/overdue) - those are genuinely different,
+// scheduled-but-not-yet-made calls from the Activity Calendar, which have
+// no ref_id yet by definition and aren't part of this bug.
 export async function getCallCenterStats(requestingUserId: string) {
   const result = await pool.query<CallCenterStatsRow>(
     `${SUBTREE_CTE},
@@ -199,18 +223,18 @@ export async function getCallCenterStats(requestingUserId: string) {
      )
      SELECT
        (SELECT COUNT(*) FROM activities a ${JOIN_CLAUSE}, bounds b
-        WHERE a.type = 'call' AND a.status = 'completed' AND l.is_deleted = false AND ${VISIBILITY_CLAUSE}
+        WHERE a.type = 'call' AND a.status = 'completed' AND a.external_ref_id IS NOT NULL AND l.is_deleted = false AND ${VISIBILITY_CLAUSE}
           AND a.created_at >= b.day_start AND a.created_at < b.day_end) AS calls_today,
        (SELECT COUNT(*) FROM activities a ${JOIN_CLAUSE}
-        WHERE a.type = 'call' AND a.status = 'completed' AND l.is_deleted = false AND ${VISIBILITY_CLAUSE}) AS total_calls,
+        WHERE a.type = 'call' AND a.status = 'completed' AND a.external_ref_id IS NOT NULL AND l.is_deleted = false AND ${VISIBILITY_CLAUSE}) AS total_calls,
        (SELECT COUNT(*) FROM activities a ${JOIN_CLAUSE}
-        WHERE a.type = 'call' AND a.status = 'completed' AND l.is_deleted = false AND ${VISIBILITY_CLAUSE}
+        WHERE a.type = 'call' AND a.status = 'completed' AND a.external_ref_id IS NOT NULL AND l.is_deleted = false AND ${VISIBILITY_CLAUSE}
           AND a.details->>'outcome' LIKE 'Connected%') AS connected_count,
        (SELECT COUNT(*) FROM activities a ${JOIN_CLAUSE}
-        WHERE a.type = 'call' AND a.status = 'completed' AND l.is_deleted = false AND ${VISIBILITY_CLAUSE}
+        WHERE a.type = 'call' AND a.status = 'completed' AND a.external_ref_id IS NOT NULL AND l.is_deleted = false AND ${VISIBILITY_CLAUSE}
           AND a.details->>'recordingUrl' IS NOT NULL) AS recorded_count,
        (SELECT AVG((a.details->>'durationSeconds')::numeric) FROM activities a ${JOIN_CLAUSE}
-        WHERE a.type = 'call' AND a.status = 'completed' AND l.is_deleted = false AND ${VISIBILITY_CLAUSE}
+        WHERE a.type = 'call' AND a.status = 'completed' AND a.external_ref_id IS NOT NULL AND l.is_deleted = false AND ${VISIBILITY_CLAUSE}
           AND a.details->>'durationSeconds' IS NOT NULL) AS avg_handle_seconds,
        (SELECT COUNT(*) FROM activities a ${JOIN_CLAUSE}
         WHERE a.type = 'call' AND a.status <> 'completed' AND l.is_deleted = false AND ${VISIBILITY_CLAUSE}) AS in_queue_count,
