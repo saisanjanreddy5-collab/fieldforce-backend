@@ -5,7 +5,7 @@ import { env } from "../config/env";
 import { ApiError } from "../utils/ApiError";
 import { GRAPH_BASE_URL, MS_SCOPES, isMicrosoftConfigured, msAuthorizeUrl, msTokenUrl } from "../config/microsoft";
 import { createActivityForLead } from "./activity-service";
-import { getLeadById } from "./lead-service";
+import { getLeadById, isLeadInOwnerScope } from "./lead-service";
 
 // Graph's sendMail action accepts attachments inline, base64-encoded, in
 // the same JSON payload as the message - no separate upload/storage service
@@ -307,6 +307,15 @@ export async function sendMailForLead(
   overrideEmail?: string,
   ccEmailsRaw?: string
 ): Promise<void> {
+  // Strict owner-scope, not getLeadById's own broader visibility check - see
+  // smartflo-service.ts's initiateCallForLead for the full reasoning. A
+  // lead merely shared with this person can still be looked back on, but
+  // sending a real email on it is an action, not a view.
+  const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
+  if (!inScope) {
+    throw new ApiError(403, "You do not have access to this lead");
+  }
+
   const lead = await getLeadById(leadId, requestingUserId);
   // overrideEmail lets a caller target a specific person (e.g. one of a
   // customer's own contacts) instead of the lead/customer's own default
@@ -375,6 +384,12 @@ export async function createTeamsMeetingForLead(
   endTime: string,
   requestingUserId: string
 ): Promise<{ joinUrl: string }> {
+  // Same strict owner-scope reasoning as sendMailForLead above.
+  const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
+  if (!inScope) {
+    throw new ApiError(403, "You do not have access to this lead");
+  }
+
   const lead = await getLeadById(leadId, requestingUserId);
   if (!lead.email) {
     throw new ApiError(422, "This lead has no email address on file");

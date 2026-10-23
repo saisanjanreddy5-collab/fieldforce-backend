@@ -105,6 +105,13 @@ interface LeadRow {
   // lead-call-center-service.ts), so it can hide an action that would
   // otherwise just 422.
   owner_role: string | null;
+  // Mirrors isLeadInOwnerScope - true when this user can actually act on the
+  // lead (Call/Email/Teams/WhatsApp/Edit/Qualify/etc.), false when they can
+  // only look at it (e.g. a Call Center rep's read-only lead_shares grant
+  // after handing it to Field Sales - see shareLeadBackToSender). Always
+  // present (both getLeadById and listLeadsForUser select it), never
+  // optional like the two below.
+  in_owner_scope: boolean;
   has_overdue_activity?: boolean;
   next_activity_due_at?: string | null;
   consent_pending?: boolean;
@@ -302,6 +309,7 @@ function toPublicLead(row: LeadRow) {
     updatedAt: row.updated_at,
     ownerName: row.owner_name,
     ownerRole: row.owner_role,
+    inOwnerScope: row.in_owner_scope,
     hasOverdueActivity: row.has_overdue_activity ?? undefined,
     nextActivityDueAt: row.next_activity_due_at ?? null,
     consentPending: row.consent_pending ?? undefined,
@@ -764,10 +772,19 @@ export async function getLeadById(leadId: string, requestingUserId: string) {
   }
 
   const result = await pool.query<LeadRow>(
-    `SELECT l.*, u.name AS owner_name, u.role AS owner_role FROM leads l
+    `${SUBTREE_CTE}
+     SELECT l.*, u.name AS owner_name, u.role AS owner_role,
+       -- Mirrors isLeadInOwnerScope exactly (same subtree membership +
+       -- unassigned-admin clause) - the frontend's signal for "can I
+       -- actually act on this lead" (Call/Email/Teams/WhatsApp/Edit), as
+       -- opposed to merely being able to see it via a lead_shares grant.
+       -- See smartflo-service.ts's initiateCallForLead for why that
+       -- distinction exists at all.
+       (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE}) AS in_owner_scope
+     FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
-     WHERE l.id = $1 AND l.is_deleted = false`,
-    [leadId]
+     WHERE l.id = $2 AND l.is_deleted = false`,
+    [requestingUserId, leadId]
   );
   if (result.rows.length === 0) {
     throw new ApiError(404, "Lead not found");
@@ -873,7 +890,8 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
        ) AS next_activity_due_at,
        NOT EXISTS (
          SELECT 1 FROM consents c WHERE c.lead_id = l.id AND c.captured = true
-       ) AS consent_pending
+       ) AS consent_pending,
+       (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE}) AS in_owner_scope
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
      WHERE ${whereClause}
@@ -1057,10 +1075,34 @@ export async function updateLead(
   params.push(new Date());
   setClauses.push(`updated_at = $${params.length}`);
 
-  params.push(leadId);
+  // Own placeholder (not reusing updated_by's) purely for readability - this
+  // one feeds the in_owner_scope computation below, a different purpose
+  // than attributing the edit.
+  params.push(requestingUserId);
+  const scopeUserIdx = params.length;
 
+  params.push(leadId);
+  const leadIdIdx = params.length;
+
+  // Computing in_owner_scope here (not just leaving it to the next
+  // getLeadById/listLeadsForUser read) matters specifically for sendToField/
+  // reassignLead - both return this exact object straight to the frontend,
+  // and an ownership-changing update is exactly the moment the caller's own
+  // in_owner_scope can flip from true to false (e.g. a Call Center rep
+  // handing a lead to Field Sales loses owner-scope on their own very next
+  // action). Same mirror of isLeadInOwnerScope as getLeadById/
+  // listLeadsForUser use.
   const result = await pool.query<LeadRow>(
-    `UPDATE leads SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING *`,
+    `WITH RECURSIVE subtree AS (
+       SELECT id FROM users WHERE id = $${scopeUserIdx}
+       UNION ALL
+       SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
+     )
+     UPDATE leads SET ${setClauses.join(", ")} WHERE id = $${leadIdIdx}
+     RETURNING *, (
+       COALESCE(owner_id IN (SELECT id FROM subtree), false)
+       OR (owner_id IS NULL AND EXISTS (SELECT 1 FROM users ru WHERE ru.id = $${scopeUserIdx} AND ru.role = 'admin'))
+     ) AS in_owner_scope`,
     params
   );
   const after = result.rows[0];
