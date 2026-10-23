@@ -2066,6 +2066,15 @@ Regards,', 'active', 4)
     // separately so a future missing permission here can't repeat that.
     `INSERT INTO role_permissions (role, permission) VALUES ('call_center','message_templates.view')
     ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Same reason as message_templates.view above - the Edit lead form's
+    // Category and Status dropdowns both fetch from endpoints gated on
+    // these, and Call Center held neither, so both dropdowns silently had
+    // zero options.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('call_center','lead_categories.view'),
+      ('call_center','pipeline_stages.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {

@@ -154,6 +154,13 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     // this permission (see nav-config.tsx's own fix for why that used to
     // matter).
     "message_templates.view",
+    // Same reason as message_templates.view above, same fix: without these,
+    // the "Category" and "Status" dropdowns on the Edit lead form had
+    // nothing to show (both fetch from endpoints gated on these exact
+    // permissions), which is what made Category's "No data" dropdown
+    // unfillable even though it was marked required.
+    "lead_categories.view",
+    "pipeline_stages.view",
     // Same self-service HR set every other role already has - unrelated to
     // the lead-qualification scope restriction above. A Call Center
     // employee is still a real employee who needs to apply for leave and
