@@ -791,10 +791,24 @@ export async function listLeadsHandedOffByUser(requestingUserId: string) {
   return result.rows.map(toPublicLead);
 }
 
-export async function getLeadById(leadId: string, requestingUserId: string) {
-  const visible = await isLeadVisibleToUser(leadId, requestingUserId);
-  if (!visible) {
-    throw new ApiError(403, "You do not have access to this lead");
+// skipVisibilityCheck is a narrow, opt-in escape hatch for callers that have
+// already made their own admin-trusts-admin decision (see
+// fofo-onboarding-service.ts's getHandoff) - a FOFO approval step's
+// approver_user_id is frozen at the lead's manager chain when the chain was
+// first derived, so a later manager reassignment can leave a step correctly
+// decidable by any admin (decideStep already allows this) but blocked from
+// even loading, since this lead no longer falls in that admin's subtree.
+// Every other caller is unaffected - the option defaults to off.
+export async function getLeadById(
+  leadId: string,
+  requestingUserId: string,
+  options?: { skipVisibilityCheck?: boolean }
+) {
+  if (!options?.skipVisibilityCheck) {
+    const visible = await isLeadVisibleToUser(leadId, requestingUserId);
+    if (!visible) {
+      throw new ApiError(403, "You do not have access to this lead");
+    }
   }
 
   const result = await pool.query<LeadRow>(

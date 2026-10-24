@@ -203,8 +203,12 @@ export async function decideStep(
   return step.lead_id;
 }
 
-export async function getHandoff(leadId: string, requestingUserId: string) {
-  const lead = await leadService.getLeadById(leadId, requestingUserId);
+// requestingRole mirrors decideStep's own admin bypass (below) - an admin
+// who can already decide a step regardless of subtree/approver match needs
+// to be able to open the page that leads to that decision in the first
+// place, or the bypass there is unreachable in practice.
+export async function getHandoff(leadId: string, requestingUserId: string, requestingRole: string) {
+  const lead = await leadService.getLeadById(leadId, requestingUserId, { skipVisibilityCheck: requestingRole === "admin" });
   const steps = await listApprovalSteps(leadId, lead.ownerId!, lead.expectedValue);
   const documents = await leadDocumentService.listDocuments(leadId);
   return { lead, approvalSteps: steps, documents };
@@ -215,7 +219,7 @@ export async function getHandoff(leadId: string, requestingUserId: string) {
 // resolved (approved or not_applicable), then records a real timestamp and
 // a generated reference code so the "pushed" state is genuine, persisted
 // data rather than a UI-only toggle.
-export async function pushToOnboardingApp(leadId: string, requestingUserId: string) {
+export async function pushToOnboardingApp(leadId: string, requestingUserId: string, requestingRole: string) {
   const inScope = await leadService.isLeadInOwnerScope(leadId, requestingUserId);
   if (!inScope) {
     throw new ApiError(403, "You do not have access to this lead");
@@ -235,7 +239,7 @@ export async function pushToOnboardingApp(leadId: string, requestingUserId: stri
     [onboardingAppId, leadId]
   );
 
-  return getHandoff(leadId, requestingUserId);
+  return getHandoff(leadId, requestingUserId, requestingRole);
 }
 
 const LIST_COLUMNS = `
@@ -245,17 +249,17 @@ const LIST_COLUMNS = `
   l.created_at AS "createdAt"
 `;
 
-// Deliberately no admin bypass here. lead-service.ts's isLeadVisibleToUser/
-// isLeadInOwnerScope (which getHandoff and pushToOnboardingApp both go
-// through) do now carry one narrow, deliberate admin exception - unassigned
-// leads (owner_id IS NULL), which are otherwise unreachable for anyone.
-// That doesn't apply here: a FOFO handoff only exists for leads with a real
-// owner (deriveApprovalChain needs an owner to walk the manager chain
-// from), so it isn't relevant to this list. Beyond that one case, admin
-// still sees everyone else's leads only because the real org chart happens
-// to roll up to the one real admin account - this file adds no broader
-// bypass, since that would show admin leads in the list that getHandoff
-// then refuses to open.
+// Deliberately no admin bypass here, unlike getHandoff/decideStep. This is
+// the "FOFO Onboarding" list page's own subtree-scoped view, separate from
+// the Approvals inbox's queue (sourced from lead_approval_steps.approver_
+// user_id, not this query) - an admin who isn't in a lead's current subtree
+// simply won't see it listed here, which is fine; they only need to reach a
+// specific handoff via a real pending approval step (the Approvals inbox),
+// and getHandoff/decideStep already let any admin open and decide one of
+// those regardless of subtree - see getHandoff's own comment for why
+// (a FOFO approval step's approver_user_id is frozen at the lead's manager
+// chain when the chain was first derived, so a later manager reassignment
+// can leave the right approver unable to act without that bypass).
 export async function listFofoOnboardings(requestingUserId: string, page: number, limit: number) {
   const countResult = await pool.query<{ count: string }>(
     `${SUBTREE_CTE}
