@@ -8,7 +8,7 @@ import * as leadDocumentService from "../services/lead-document-service";
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const { page, limit } = req.validatedQuery as unknown as { page: number; limit: number };
-  const leads = await fofoOnboardingService.listFofoOnboardings(req.user!.id, page, limit);
+  const leads = await fofoOnboardingService.listFofoOnboardings(req.user!.id, req.user!.role, page, limit);
   sendSuccess(res, leads);
 });
 

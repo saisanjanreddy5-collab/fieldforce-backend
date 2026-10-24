@@ -249,22 +249,18 @@ const LIST_COLUMNS = `
   l.created_at AS "createdAt"
 `;
 
-// Deliberately no admin bypass here, unlike getHandoff/decideStep. This is
-// the "FOFO Onboarding" list page's own subtree-scoped view, separate from
-// the Approvals inbox's queue (sourced from lead_approval_steps.approver_
-// user_id, not this query) - an admin who isn't in a lead's current subtree
-// simply won't see it listed here, which is fine; they only need to reach a
-// specific handoff via a real pending approval step (the Approvals inbox),
-// and getHandoff/decideStep already let any admin open and decide one of
-// those regardless of subtree - see getHandoff's own comment for why
-// (a FOFO approval step's approver_user_id is frozen at the lead's manager
-// chain when the chain was first derived, so a later manager reassignment
-// can leave the right approver unable to act without that bypass).
-export async function listFofoOnboardings(requestingUserId: string, page: number, limit: number) {
+// Same admin-sees-everything rule as getHandoff/decideStep, for the same
+// reason: an admin who can already open and decide any FOFO approval
+// regardless of subtree (see getHandoff's own comment) should see that same
+// lead listed here too - the two screens disagreeing which admin "owns" a
+// handoff is exactly the confusing state this is meant to avoid.
+export async function listFofoOnboardings(requestingUserId: string, requestingRole: string, page: number, limit: number) {
+  const scopeClause = requestingRole === "admin" ? "true" : "l.owner_id IN (SELECT id FROM subtree)";
+
   const countResult = await pool.query<{ count: string }>(
     `${SUBTREE_CTE}
      SELECT COUNT(*) FROM leads l
-     WHERE l.is_deleted = false AND l.category = 'FOFO' AND l.owner_id IN (SELECT id FROM subtree)`,
+     WHERE l.is_deleted = false AND l.category = 'FOFO' AND ${scopeClause}`,
     [requestingUserId]
   );
 
@@ -273,7 +269,7 @@ export async function listFofoOnboardings(requestingUserId: string, page: number
     `${SUBTREE_CTE}
      SELECT ${LIST_COLUMNS}
      FROM leads l LEFT JOIN users u ON u.id = l.owner_id
-     WHERE l.is_deleted = false AND l.category = 'FOFO' AND l.owner_id IN (SELECT id FROM subtree)
+     WHERE l.is_deleted = false AND l.category = 'FOFO' AND ${scopeClause}
      ORDER BY l.created_at DESC
      LIMIT $2 OFFSET $3`,
     [requestingUserId, limit, offset]
