@@ -120,6 +120,11 @@ export const bulkImportRowSchema = z.object({
   expectedValue: z.coerce.number().optional(),
   website: z.string().optional(),
   internalNotes: z.string().optional(),
+  // Optional - the Call Center executive this row should land directly
+  // with (bypassing FLC round-robin), matched by email or employee code at
+  // import time (see resolveCallCenterExecutiveByIdentifier). Not a lead
+  // field itself, so it never reaches buildInsert's column map.
+  assigneeIdentifier: z.string().optional(),
 });
 
 // The only schema actually passed to validateBody for this route - just

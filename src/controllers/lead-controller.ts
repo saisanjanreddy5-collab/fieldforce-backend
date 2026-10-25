@@ -116,6 +116,16 @@ export const qualify = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, lead, "Lead marked Qualified");
 });
 
+export const escalateToSlc = asyncHandler(async (req: Request, res: Response) => {
+  const lead = await leadCallCenterService.escalateToSlc(String(req.params.id), req.user!.id, req.ip);
+  sendSuccess(res, lead, "Escalated to SLC");
+});
+
+export const escalateToTlc = asyncHandler(async (req: Request, res: Response) => {
+  const lead = await leadCallCenterService.escalateToTlc(String(req.params.id), req.user!.id, req.ip);
+  sendSuccess(res, lead, "Escalated to TLC");
+});
+
 export const getSwapCandidates = asyncHandler(async (req: Request, res: Response) => {
   const candidates = await leadCallCenterService.getSwapCandidates(String(req.params.id), req.user!.id);
   sendSuccess(res, candidates);

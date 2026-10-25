@@ -2081,6 +2081,49 @@ Regards,', 'active', 4)
     // double-sends the same reminder on its next pass. Not reused for
     // anything else - a reminder genuinely is a one-time event per Activity.
     `ALTER TABLE activities ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ`,
+
+    // The flat 'Call Center' stage above is now the first of three calling
+    // tiers (FLC/SLC/TLC) each worked by a different team pool, escalating
+    // in sequence before reaching the existing 'Qualified' stage unchanged.
+    // Renaming 'Call Center' -> 'FLC' in place (same slot/sort_order) rather
+    // than adding a parallel stage keeps the lead funnel's vocabulary
+    // genuinely consistent instead of carrying two names for one concept.
+    // Shift guarded by NOT EXISTS 'SLC' so this only ever runs once, and the
+    // rename/insert/status-migration below are all naturally idempotent
+    // (nothing matches 'Call Center' on any later boot).
+    `UPDATE pipeline_stages SET sort_order = sort_order + 2
+     WHERE sort_order >= 3 AND NOT EXISTS (SELECT 1 FROM pipeline_stages WHERE key = 'SLC')`,
+    `UPDATE pipeline_stages SET key = 'FLC', label = 'FLC', description = 'First line of calling - initial contact and screening'
+     WHERE key = 'Call Center'`,
+    `INSERT INTO pipeline_stages (key, label, description, probability, sort_order) VALUES
+      ('SLC', 'SLC', 'Second line of calling - deeper qualification', 15, 3),
+      ('TLC', 'TLC', 'Third line of calling - final verification before handoff to Field Sales', 20, 4)
+    ON CONFLICT (key) DO NOTHING`,
+    `UPDATE leads SET status = 'FLC' WHERE status = 'Call Center'`,
+
+    // Three team pools backing the FLC/SLC/TLC tiers, same existing
+    // sales_teams mechanism already used for Field/Call Center grouping -
+    // round-robin assignment within a tier is scoped by sales_team_id, not
+    // role alone, since all three tiers share the same 'call_center' role.
+    `INSERT INTO sales_teams (name)
+     SELECT v.name FROM (VALUES ('FLC Team'), ('SLC Team'), ('TLC Team')) AS v(name)
+     WHERE NOT EXISTS (SELECT 1 FROM sales_teams st WHERE st.name = v.name)`,
+
+    // Self-referencing, nullable - set once at creation (createLead) when an
+    // incoming lead's phone matches an already-active lead, collapsing to
+    // the original if that match is itself already flagged, so this is
+    // always at most one hop away from the true original. Created, not
+    // rejected, per the client's own requirement to track and surface
+    // duplicates rather than silently block them.
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS duplicate_of_lead_id UUID REFERENCES leads(id)`,
+
+    // Shared by both new hand-off actions (FLC->SLC, SLC->TLC) - one
+    // permission, not two, since they're the same kind of action applied
+    // twice. admin/manager get it too, matching every other lead-workflow
+    // permission's existing admin/manager-also-gets-it precedent above.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','leads.escalate'), ('manager','leads.escalate'), ('call_center','leads.escalate')
+    ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {

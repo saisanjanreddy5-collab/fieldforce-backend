@@ -105,6 +105,15 @@ interface LeadRow {
   // lead-call-center-service.ts), so it can hide an action that would
   // otherwise just 422.
   owner_role: string | null;
+  // Set once at creation/edit time when this lead's phone matched an
+  // already-active lead (see resolveDuplicateOfLeadId) - the name/number are
+  // only joined by the handful of call sites that already bother joining
+  // owner_name/owner_role (getLeadById, listLeadsForUser,
+  // listLeadsHandedOffByUser), same precedent updateLead's plain
+  // `RETURNING *` already follows for owner_name itself.
+  duplicate_of_lead_id: string | null;
+  duplicate_of_full_name?: string | null;
+  duplicate_of_lead_number?: number | null;
   // Mirrors isLeadInOwnerScope - true when this user can actually act on the
   // lead (Call/Email/Teams/WhatsApp/Edit/Qualify/etc.), false when they can
   // only look at it (e.g. a Call Center rep's read-only lead_shares grant
@@ -309,6 +318,9 @@ function toPublicLead(row: LeadRow) {
     updatedAt: row.updated_at,
     ownerName: row.owner_name,
     ownerRole: row.owner_role,
+    duplicateOfLeadId: row.duplicate_of_lead_id,
+    duplicateOfFullName: row.duplicate_of_full_name ?? undefined,
+    duplicateOfLeadNumber: row.duplicate_of_lead_number ?? undefined,
     inOwnerScope: row.in_owner_scope,
     hasOverdueActivity: row.has_overdue_activity ?? undefined,
     nextActivityDueAt: row.next_activity_due_at ?? null,
@@ -416,25 +428,64 @@ async function resolveAutoAssignee(input: CreateLeadInput, creatorId: string): P
   return creatorId;
 }
 
-// Least-loaded round robin among active Call Center employees - picks
-// whoever currently has the fewest leads still sitting in the "Call Center"
+// The three calling-tier stages a marketing lead walks through before
+// reaching the existing Qualified stage, each worked by its own team pool
+// (see resolveTierAssignee/getSalesTeamIdByName below). Exported so
+// lead-call-center-service.ts's escalation actions and the bulk-import path
+// share one real source of truth instead of each hardcoding these strings.
+export const FLC_STAGE = "FLC";
+export const SLC_STAGE = "SLC";
+export const TLC_STAGE = "TLC";
+
+// Resolves a calling-tier team's id by its exact sales_teams.name (e.g.
+// "FLC Team") - sales_teams.name has no unique constraint at the schema
+// level, so this takes the first match; the three team rows are seeded
+// once in model.ts and never duplicated in practice.
+export async function getSalesTeamIdByName(name: string): Promise<string | null> {
+  const result = await pool.query<{ id: string }>("SELECT id FROM sales_teams WHERE name = $1 LIMIT 1", [name]);
+  return result.rows[0]?.id ?? null;
+}
+
+// Least-loaded round robin within one calling-tier team - picks whoever on
+// that team currently has the fewest leads still sitting in that tier's own
 // stage, so volume self-balances instead of a strict rotation that can't
-// tell a fast agent from a slow one apart. Returns null when there's no
-// active Call Center employee yet (e.g. before the first account is
-// created) - the lead is left unassigned rather than thrown away, same as
-// every other "nobody matched" case in this file; it's still reachable
-// afterward via the existing admin-sees-unassigned-leads rule.
-async function resolveCallCenterAssignee(): Promise<string | null> {
+// tell a fast agent from a slow one apart. Returns null when the team has
+// no active member yet - the lead is left unassigned rather than thrown
+// away, same as every other "nobody matched" case in this file; it's still
+// reachable afterward via the existing admin-sees-unassigned-leads rule.
+export async function resolveTierAssignee(teamId: string, stage: string): Promise<string | null> {
   const result = await pool.query<{ id: string }>(
     `SELECT u.id
      FROM users u
-     WHERE u.role = 'call_center' AND u.is_active = true
+     WHERE u.role = 'call_center' AND u.is_active = true AND u.sales_team_id = $1
      ORDER BY (
-       SELECT COUNT(*) FROM leads l WHERE l.owner_id = u.id AND l.status = 'Call Center' AND l.is_deleted = false
+       SELECT COUNT(*) FROM leads l WHERE l.owner_id = u.id AND l.status = $2 AND l.is_deleted = false
      ) ASC, random()
-     LIMIT 1`
+     LIMIT 1`,
+    [teamId, stage]
   );
   return result.rows[0]?.id ?? null;
+}
+
+// Resolves a bulk-import row's free-text "Call Center Executive" column to
+// a real account - email first (unique, guaranteed on every user), then
+// employee_code (also exists on every user, but nullable/optional) as a
+// fallback for sheets that use codes instead of emails. Case-insensitive on
+// both, since a spreadsheet's casing is never guaranteed to match what's
+// stored. Deliberately does not fall back to a fuzzy name match - a typo'd
+// or ambiguous name silently routing a real customer lead to the wrong
+// person is a worse outcome than reporting the row as unresolved.
+async function resolveCallCenterExecutiveByIdentifier(identifier: string): Promise<{ id: string } | null> {
+  const trimmed = identifier.trim();
+  if (!trimmed) return null;
+  const result = await pool.query<{ id: string }>(
+    `SELECT id FROM users
+     WHERE role = 'call_center' AND is_active = true
+       AND (LOWER(email) = LOWER($1) OR LOWER(employee_code) = LOWER($1))
+     LIMIT 1`,
+    [trimmed]
+  );
+  return result.rows[0] ?? null;
 }
 
 // Distinct territory values actually in use across leads, for the
@@ -488,18 +539,29 @@ async function findActiveLeadByPhone(phone: string, excludeLeadId?: string): Pro
   return { id: row.id, fullName: row.full_name, leadNumber: row.lead_number, ownerName: row.owner_name };
 }
 
-function duplicatePhoneMessage(match: ActiveLeadMatch): string {
-  const label = match.leadNumber ? `#${match.leadNumber} - ${match.fullName}` : match.fullName;
-  const owner = match.ownerName ?? "Unassigned";
-  return `This phone number already belongs to an active lead (${label}, owned by ${owner}) - it can't be captured as a separate lead while that one is still open.`;
+// What a new/edited lead's own duplicate_of_lead_id should be set to, given
+// it now shares a phone number with an existing active lead - created and
+// flagged, not rejected, per the client's own requirement to track and
+// surface duplicates rather than block them (createLead/updateLead both use
+// this). Always collapses to that lead's own original if it's itself
+// already flagged, so a duplicate is never more than one hop from the true
+// first lead with that number, no matter how many times it's resurfaced.
+async function resolveDuplicateOfLeadId(phone: string, excludeLeadId?: string): Promise<string | null> {
+  const existing = await findActiveLeadByPhone(phone, excludeLeadId);
+  if (!existing) return null;
+  const existingRow = await pool.query<{ duplicate_of_lead_id: string | null }>(
+    "SELECT duplicate_of_lead_id FROM leads WHERE id = $1",
+    [existing.id]
+  );
+  return existingRow.rows[0]?.duplicate_of_lead_id ?? existing.id;
 }
 
 // Used to route an inbound WhatsApp reply to the right lead. Unlike
 // findActiveLeadByPhone above, this matches a lead regardless of status - a
 // Converted or Closed Lost lead's contact can still text back, and it
 // should still land somewhere. When more than one lead shares the number
-// (the duplicate-phone block only prevents new leads, not old terminal
-// ones), the most recently updated one wins.
+// (duplicate_of_lead_id is only ever set going forward on new/edited leads,
+// not backfilled onto old terminal ones), the most recently updated one wins.
 export async function findLeadIdByPhone(phone: string): Promise<string | null> {
   const normalized = normalizePhone(phone);
   if (normalized.length < 10) return null;
@@ -540,18 +602,14 @@ export async function createLead(
   ipAddress?: string | null,
   options?: CreateLeadOptions
 ) {
-  if (input.phone) {
-    const existing = await findActiveLeadByPhone(input.phone);
-    if (existing) {
-      throw new ApiError(409, duplicatePhoneMessage(existing));
-    }
-  }
+  const duplicateOfLeadId = input.phone ? await resolveDuplicateOfLeadId(input.phone) : null;
 
   let ownerId: string | null;
   let status = input.status;
   if (options?.requiresQualification && input.ownerId === undefined) {
-    ownerId = options.assignToCreator ? creatorId : await resolveCallCenterAssignee();
-    status = status ?? "Call Center";
+    const flcTeamId = await getSalesTeamIdByName("FLC Team");
+    ownerId = options.assignToCreator ? creatorId : flcTeamId ? await resolveTierAssignee(flcTeamId, FLC_STAGE) : null;
+    status = status ?? FLC_STAGE;
   } else {
     ownerId = input.ownerId ?? (await resolveAutoAssignee(input, creatorId));
   }
@@ -569,11 +627,12 @@ export async function createLead(
     // below. Used to default to lowercase 'new' here, silently diverging
     // from the Title-Case value the Leads list's own Stage filter and the
     // Dashboard's status breakdown actually group/filter by. A marketing lead
-    // defaults to 'Call Center' instead (set above), not 'New'.
+    // defaults to the FLC stage instead (set above), not 'New'.
     status: status ?? "New",
     prospect_status: input.prospectStatus,
     category: input.category,
     owner_id: ownerId,
+    duplicate_of_lead_id: duplicateOfLeadId,
     sales_team_id: input.salesTeamId,
     lead_score: input.leadScore,
     phone: input.phone,
@@ -730,7 +789,28 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
         if (normalized.length === 10) seenPhones.add(normalized);
       }
 
-      await createLead(row, creatorId, undefined, { requiresQualification: true });
+      // An explicit executive identifier bypasses FLC round-robin entirely -
+      // the row lands directly in that person's own queue at the FLC stage.
+      // A provided-but-unresolved identifier is never silently round-robin'd
+      // (that would risk a lead landing with the wrong person with no
+      // warning) - it's reported here instead, same as any other bad row,
+      // so the admin can fix just that row and re-run the import.
+      let ownerId: string | undefined;
+      let status: string | undefined;
+      if (row.assigneeIdentifier) {
+        const assignee = await resolveCallCenterExecutiveByIdentifier(row.assigneeIdentifier);
+        if (!assignee) {
+          result.skipped.push({
+            row: rowNumber,
+            reason: `Executive "${row.assigneeIdentifier}" not found or not an active Call Center employee - needs manual assignment`,
+          });
+          continue;
+        }
+        ownerId = assignee.id;
+        status = FLC_STAGE;
+      }
+
+      await createLead({ ...row, ownerId, status }, creatorId, undefined, { requiresQualification: true });
       result.created++;
     } catch (err) {
       if (err instanceof ApiError && err.statusCode === 409) {
@@ -780,10 +860,12 @@ export async function listLeadsHandedOffByUser(requestingUserId: string) {
   const result = await pool.query<LeadRow>(
     `${SUBTREE_CTE}
      SELECT l.*, u.name AS owner_name, u.role AS owner_role,
+       dl.full_name AS duplicate_of_full_name, dl.lead_number AS duplicate_of_lead_number,
        (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE}) AS in_owner_scope
      FROM leads l
      JOIN lead_shares ls ON ls.lead_id = l.id AND ls.shared_with_user_id = $1
      LEFT JOIN users u ON u.id = l.owner_id
+     LEFT JOIN leads dl ON dl.id = l.duplicate_of_lead_id
      WHERE l.is_deleted = false
      ORDER BY ls.created_at DESC`,
     [requestingUserId]
@@ -814,6 +896,7 @@ export async function getLeadById(
   const result = await pool.query<LeadRow>(
     `${SUBTREE_CTE}
      SELECT l.*, u.name AS owner_name, u.role AS owner_role,
+       dl.full_name AS duplicate_of_full_name, dl.lead_number AS duplicate_of_lead_number,
        -- Mirrors isLeadInOwnerScope exactly (same subtree membership +
        -- unassigned-admin clause) - the frontend's signal for "can I
        -- actually act on this lead" (Call/Email/Teams/WhatsApp/Edit), as
@@ -823,6 +906,7 @@ export async function getLeadById(
        (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE}) AS in_owner_scope
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
+     LEFT JOIN leads dl ON dl.id = l.duplicate_of_lead_id
      WHERE l.id = $2 AND l.is_deleted = false`,
     [requestingUserId, leadId]
   );
@@ -920,6 +1004,7 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
   const result = await pool.query<LeadRow>(
     `${SUBTREE_CTE}
      SELECT l.*, u.name AS owner_name, u.role AS owner_role,
+       dl.full_name AS duplicate_of_full_name, dl.lead_number AS duplicate_of_lead_number,
        EXISTS (
          SELECT 1 FROM activities a
          WHERE a.lead_id = l.id AND a.due_date < now() AND a.status <> 'completed'
@@ -934,6 +1019,7 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
        (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE}) AS in_owner_scope
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
+     LEFT JOIN leads dl ON dl.id = l.duplicate_of_lead_id
      WHERE ${whereClause}
      ORDER BY l.created_at DESC
      LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
@@ -1018,15 +1104,11 @@ export async function updateLead(
     before = beforeResult.rows[0] ?? null;
   }
 
-  // Only re-checked when the phone number is actually being changed - this
-  // closes the loophole of creating a lead with a blank/wrong number then
-  // editing it afterward to bypass the create-time check above.
-  if (updates.phone) {
-    const existing = await findActiveLeadByPhone(updates.phone, leadId);
-    if (existing) {
-      throw new ApiError(409, duplicatePhoneMessage(existing));
-    }
-  }
+  // Only re-checked when the phone number is actually being changed - same
+  // flag-not-block behavior as createLead above, so editing a lead's number
+  // to match another active one re-links it instead of silently staying
+  // unflagged.
+  const duplicateOfLeadId = updates.phone ? await resolveDuplicateOfLeadId(updates.phone, leadId) : undefined;
 
   const fieldMap: Record<string, unknown> = {
     full_name: updates.fullName,
@@ -1040,6 +1122,7 @@ export async function updateLead(
     prospect_status: updates.prospectStatus,
     category: updates.category,
     owner_id: updates.ownerId,
+    duplicate_of_lead_id: duplicateOfLeadId,
     sales_team_id: updates.salesTeamId,
     lead_score: updates.leadScore,
     phone: updates.phone,
