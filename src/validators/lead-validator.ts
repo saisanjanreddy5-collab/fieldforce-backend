@@ -32,7 +32,13 @@ export const createLeadSchema = z.object({
   email: z.string().email().optional(),
   website: z.string().optional(),
   preferredLanguage: z.string().optional(),
-  pincode: z.string().optional(),
+  // Trimmed - matches the real-world incident that found this: a stray
+  // trailing space typed into this field (invisible in the UI) made it
+  // compare unequal to a field employee's own exactly-stored pincode in
+  // employee_pincodes (that side already trims - see auth-validator.ts/
+  // user-validator.ts), silently breaking Send to Field Sales's matching
+  // and triggering the fallback-to-random-employee path with no warning.
+  pincode: z.string().trim().optional(),
   zoneId: uuid.optional(),
   stateId: uuid.optional(),
   districtId: uuid.optional(),
@@ -114,8 +120,9 @@ export const bulkImportRowSchema = z.object({
   // lead against - without it the row still imports, it just can't ever be
   // sent to a field employee automatically. Not yet required at the schema
   // level; the mandatory-on-import UX is a frontend-side decision (the
-  // import template/column-mapping step).
-  pincode: z.string().optional(),
+  // import template/column-mapping step). Trimmed for the same reason as
+  // createLeadSchema's own pincode field above.
+  pincode: z.string().trim().optional(),
   source: z.string().optional(),
   expectedValue: z.coerce.number().optional(),
   website: z.string().optional(),
