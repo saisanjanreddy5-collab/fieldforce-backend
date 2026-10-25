@@ -81,6 +81,8 @@ router.get("/:id/history", requireAnyPermission("leads.view", "leads.queue_view"
 
 router.post("/:id/call-dispositions", requirePermission("leads.call_log"), validateBody(logCallDispositionSchema), leadController.logCallDisposition);
 router.post("/:id/qualify", requirePermission("leads.qualify"), leadController.qualify);
+router.post("/:id/escalate-to-slc", requirePermission("leads.escalate"), leadController.escalateToSlc);
+router.post("/:id/escalate-to-tlc", requirePermission("leads.escalate"), leadController.escalateToTlc);
 router.get("/:id/swap-candidates", requirePermission("leads.reassign"), leadController.getSwapCandidates);
 router.post("/:id/send-to-field", requirePermission("leads.send_to_field"), validateBody(sendToFieldSchema), leadController.sendToField);
 router.post("/:id/reassign", requirePermission("leads.reassign"), validateBody(reassignLeadSchema), leadController.reassign);

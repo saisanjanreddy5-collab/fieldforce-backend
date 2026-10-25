@@ -1,11 +1,31 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { recordAuditEvent } from "./audit-log-service";
-import { createLead, getLeadById, isLeadInOwnerScope, updateLead, type CreateLeadInput } from "./lead-service";
+import {
+  createLead,
+  getLeadById,
+  getSalesTeamIdByName,
+  isLeadInOwnerScope,
+  resolveTierAssignee,
+  updateLead,
+  FLC_STAGE,
+  SLC_STAGE,
+  TLC_STAGE,
+  type CreateLeadInput,
+} from "./lead-service";
 import { createActivityForLead } from "./activity-service";
 
-const CALL_CENTER_STAGE = "Call Center";
 const QUALIFIED_STAGE = "Qualified";
+
+// Which team pool backs each calling tier - null for any stage that isn't
+// one of the three (Qualified, Open, etc.), where the Field-side pincode
+// matching below applies instead.
+function tierTeamName(stage: string): string | null {
+  if (stage === FLC_STAGE) return "FLC Team";
+  if (stage === SLC_STAGE) return "SLC Team";
+  if (stage === TLC_STAGE) return "TLC Team";
+  return null;
+}
 
 // Ownership-based visibility (isLeadVisibleToUser/isLeadInOwnerScope) means
 // the Call Center rep who qualified and sent this lead would otherwise lose
@@ -117,9 +137,10 @@ async function resolveFieldFallbackAssignee(): Promise<{ id: string; name: strin
   return result.rows[0] ?? null;
 }
 
-async function getCallCenterCandidates(): Promise<SwapCandidate[]> {
+async function getTierCandidates(teamId: string): Promise<SwapCandidate[]> {
   const result = await pool.query<SwapCandidate>(
-    "SELECT id, name, email FROM users WHERE role = 'call_center' AND is_active = true ORDER BY name ASC"
+    "SELECT id, name, email FROM users WHERE role = 'call_center' AND is_active = true AND sales_team_id = $1 ORDER BY name ASC",
+    [teamId]
   );
   return result.rows;
 }
@@ -180,11 +201,12 @@ export async function logCallDisposition(leadId: string, input: LogCallDispositi
 }
 
 // A deliberate, separate click from logging a disposition - "Call Done And
-// Interested" is just what happened on one call, Qualified is the agent's
-// own judgment call that this lead is worth handing off. Only valid from
-// the Call Center stage itself: a lead that's already Qualified/with Field
-// has nothing left to qualify, and this is not how a "Not Interested" lead
-// is ever revived (it just stays in Call Center, re-callable, by design).
+// Interested" is just what happened on one call, Qualified is the TLC
+// agent's own judgment call that this lead is worth handing off. Only valid
+// from the TLC stage itself - the last of the three calling tiers - a lead
+// that's already Qualified/with Field has nothing left to qualify, and this
+// is not how a "Not Interested" lead is ever revived (it just stays at
+// whichever tier it's currently in, re-callable, by design).
 export async function qualifyLead(leadId: string, requestingUserId: string, ipAddress?: string | null) {
   const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
   if (!inScope) {
@@ -192,18 +214,65 @@ export async function qualifyLead(leadId: string, requestingUserId: string, ipAd
   }
 
   const facts = await getLeadAssignmentFacts(leadId);
-  if (facts.status !== CALL_CENTER_STAGE) {
-    throw new ApiError(422, `Only a lead in the "${CALL_CENTER_STAGE}" stage can be marked Qualified`);
+  if (facts.status !== TLC_STAGE) {
+    throw new ApiError(422, `Only a lead in the "${TLC_STAGE}" stage can be marked Qualified`);
   }
 
   return updateLead(leadId, { status: QUALIFIED_STAGE }, requestingUserId, ipAddress);
 }
 
-// Who this lead could be handed to right now - before Qualified, any active
-// Call Center employee (no pincode concept on that side); at/after
-// Qualified, only field employees who actually cover its pincode. Reused by
-// both the Send to Field Sales flow (to disambiguate multiple matches) and
-// the general Reassign/Swap action.
+// Escalates a lead from one calling tier to the next, reassigning it to the
+// next tier's own least-loaded active member - mirrors sendToField's own
+// shape exactly (owner-scope check, resolve a new owner, updateLead, then
+// shareLeadBackToSender so the escalating caller keeps read-only visibility
+// afterward), since that handoff already solves every sub-problem this
+// needs. No pincode-style coverage gap here - every FLC/SLC/TLC team member
+// is equally eligible, so there's no fallback-when-nobody-covers path like
+// Field Sales has; `resolveTierAssignee` only returns null when the next
+// tier genuinely has zero active members, which is a real setup error, not
+// a routine case to paper over.
+async function escalateTier(
+  leadId: string,
+  requestingUserId: string,
+  fromStage: string,
+  toStage: string,
+  toTeamName: string,
+  ipAddress?: string | null
+) {
+  const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
+  if (!inScope) {
+    throw new ApiError(403, "You do not have access to this lead");
+  }
+
+  const facts = await getLeadAssignmentFacts(leadId);
+  if (facts.status !== fromStage) {
+    throw new ApiError(422, `Only a lead in the "${fromStage}" stage can be escalated to ${toStage}`);
+  }
+
+  const teamId = await getSalesTeamIdByName(toTeamName);
+  const nextOwnerId = teamId ? await resolveTierAssignee(teamId, toStage) : null;
+  if (!nextOwnerId) {
+    throw new ApiError(422, `No active ${toTeamName} employee exists yet to receive this lead.`);
+  }
+
+  const updated = await updateLead(leadId, { status: toStage, ownerId: nextOwnerId }, requestingUserId, ipAddress);
+  await shareLeadBackToSender(leadId, requestingUserId);
+  return updated;
+}
+
+export async function escalateToSlc(leadId: string, requestingUserId: string, ipAddress?: string | null) {
+  return escalateTier(leadId, requestingUserId, FLC_STAGE, SLC_STAGE, "SLC Team", ipAddress);
+}
+
+export async function escalateToTlc(leadId: string, requestingUserId: string, ipAddress?: string | null) {
+  return escalateTier(leadId, requestingUserId, SLC_STAGE, TLC_STAGE, "TLC Team", ipAddress);
+}
+
+// Who this lead could be handed to right now - at an FLC/SLC/TLC stage, any
+// active member of that exact tier's own team (no pincode concept on that
+// side); at/after Qualified, only field employees who actually cover its
+// pincode. Reused by both the Send to Field Sales flow (to disambiguate
+// multiple matches) and the general Reassign/Swap action.
 export async function getSwapCandidates(leadId: string, requestingUserId: string): Promise<SwapCandidate[]> {
   const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
   if (!inScope) {
@@ -211,8 +280,10 @@ export async function getSwapCandidates(leadId: string, requestingUserId: string
   }
 
   const facts = await getLeadAssignmentFacts(leadId);
-  if (facts.status === CALL_CENTER_STAGE) {
-    return getCallCenterCandidates();
+  const teamName = tierTeamName(facts.status);
+  if (teamName) {
+    const teamId = await getSalesTeamIdByName(teamName);
+    return teamId ? getTierCandidates(teamId) : [];
   }
   return getFieldCandidates(facts.pincode, facts.category);
 }
@@ -317,14 +388,15 @@ export async function reassignLead(
   }
 
   const facts = await getLeadAssignmentFacts(leadId);
-  const candidates =
-    facts.status === CALL_CENTER_STAGE ? await getCallCenterCandidates() : await getFieldCandidates(facts.pincode, facts.category);
+  const teamName = tierTeamName(facts.status);
+  const teamId = teamName ? await getSalesTeamIdByName(teamName) : null;
+  const candidates = teamId ? await getTierCandidates(teamId) : await getFieldCandidates(facts.pincode, facts.category);
 
   if (!candidates.some((c) => c.id === newOwnerId)) {
     throw new ApiError(
       422,
-      facts.status === CALL_CENTER_STAGE
-        ? "That person is not an active Call Center employee"
+      teamName
+        ? `That person is not an active ${teamName} employee`
         : "That employee does not cover this lead's pincode - pick someone from the eligible list",
       { candidates }
     );
