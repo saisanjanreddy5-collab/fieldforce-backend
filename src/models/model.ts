@@ -1950,11 +1950,17 @@ Regards,', 'active', 4)
     // same Site visit/Proposal/... stages as any other lead once handed to a
     // field person. The UPDATE is guarded by NOT EXISTS so re-running this
     // on every boot doesn't keep incrementing sort_order after the first run.
+    // Also checks 'FLC' (not just 'Call Center') - a later migration renames
+    // this stage's key to 'FLC' in place, and without that second check this
+    // guard would never see 'Call Center' again after that rename, silently
+    // re-running the shift and recreating a stray 'Call Center' row forever
+    // (a real incident: that stray row then collided with the FLC rename
+    // migration's own UPDATE on every single boot, crash-looping the server).
     `UPDATE pipeline_stages SET sort_order = sort_order + 1
-     WHERE sort_order >= 2 AND NOT EXISTS (SELECT 1 FROM pipeline_stages WHERE key = 'Call Center')`,
-    `INSERT INTO pipeline_stages (key, label, description, probability, sort_order) VALUES
-      ('Call Center', 'Call Center', 'Marketing lead awaiting phone qualification', 10, 2)
-    ON CONFLICT (key) DO NOTHING`,
+     WHERE sort_order >= 2 AND NOT EXISTS (SELECT 1 FROM pipeline_stages WHERE key IN ('Call Center', 'FLC'))`,
+    `INSERT INTO pipeline_stages (key, label, description, probability, sort_order)
+     SELECT 'Call Center', 'Call Center', 'Marketing lead awaiting phone qualification', 10, 2
+     WHERE NOT EXISTS (SELECT 1 FROM pipeline_stages WHERE key IN ('Call Center', 'FLC'))`,
 
     // Groups people for display/reporting (Field vs Call Center) - the role
     // tier above is what actually gates access; this is just the existing
