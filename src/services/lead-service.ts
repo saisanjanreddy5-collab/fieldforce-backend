@@ -475,17 +475,37 @@ export async function resolveTierAssignee(teamId: string, stage: string): Promis
 // stored. Deliberately does not fall back to a fuzzy name match - a typo'd
 // or ambiguous name silently routing a real customer lead to the wrong
 // person is a worse outcome than reporting the row as unresolved.
-async function resolveCallCenterExecutiveByIdentifier(identifier: string): Promise<{ id: string } | null> {
+// Maps a sales_teams.name to the stage a lead assigned to that team's
+// member should actually land at - e.g. naming an SLC Team person's email
+// in the import must land the row at SLC, not FLC, or it would be invisible
+// in that person's own queue (scoped by their own team's stage) despite
+// genuinely being theirs.
+const STAGE_BY_TEAM_NAME: Record<string, string> = {
+  "FLC Team": FLC_STAGE,
+  "SLC Team": SLC_STAGE,
+  "TLC Team": TLC_STAGE,
+};
+
+interface CallCenterExecutiveMatch {
+  id: string;
+  stage: string | null;
+}
+
+async function resolveCallCenterExecutiveByIdentifier(identifier: string): Promise<CallCenterExecutiveMatch | null> {
   const trimmed = identifier.trim();
   if (!trimmed) return null;
-  const result = await pool.query<{ id: string }>(
-    `SELECT id FROM users
-     WHERE role = 'call_center' AND is_active = true
-       AND (LOWER(email) = LOWER($1) OR LOWER(employee_code) = LOWER($1))
+  const result = await pool.query<{ id: string; team_name: string | null }>(
+    `SELECT u.id, st.name AS team_name
+     FROM users u
+     LEFT JOIN sales_teams st ON st.id = u.sales_team_id
+     WHERE u.role = 'call_center' AND u.is_active = true
+       AND (LOWER(u.email) = LOWER($1) OR LOWER(u.employee_code) = LOWER($1))
      LIMIT 1`,
     [trimmed]
   );
-  return result.rows[0] ?? null;
+  const row = result.rows[0];
+  if (!row) return null;
+  return { id: row.id, stage: row.team_name ? STAGE_BY_TEAM_NAME[row.team_name] ?? null : null };
 }
 
 // Distinct territory values actually in use across leads, for the
@@ -789,12 +809,17 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
         if (normalized.length === 10) seenPhones.add(normalized);
       }
 
-      // An explicit executive identifier bypasses FLC round-robin entirely -
-      // the row lands directly in that person's own queue at the FLC stage.
-      // A provided-but-unresolved identifier is never silently round-robin'd
-      // (that would risk a lead landing with the wrong person with no
-      // warning) - it's reported here instead, same as any other bad row,
-      // so the admin can fix just that row and re-run the import.
+      // An explicit executive identifier bypasses round-robin entirely - the
+      // row lands directly in that person's own queue, at whichever tier
+      // their own team actually is (FLC/SLC/TLC Team), not hardcoded to FLC
+      // - naming an SLC Team person here must land the row at SLC, or it'd
+      // be invisible in their own queue (scoped by their own team's stage)
+      // despite genuinely being theirs. A provided-but-unresolved identifier,
+      // or one that resolves to a person not on any of the three calling
+      // teams, is never silently round-robin'd (that would risk a lead
+      // landing with the wrong person with no warning) - it's reported here
+      // instead, same as any other bad row, so the admin can fix just that
+      // row and re-run the import.
       let ownerId: string | undefined;
       let status: string | undefined;
       if (row.assigneeIdentifier) {
@@ -806,8 +831,15 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
           });
           continue;
         }
+        if (!assignee.stage) {
+          result.skipped.push({
+            row: rowNumber,
+            reason: `Executive "${row.assigneeIdentifier}" is not assigned to a calling tier (FLC/SLC/TLC Team) yet - needs manual assignment`,
+          });
+          continue;
+        }
         ownerId = assignee.id;
-        status = FLC_STAGE;
+        status = assignee.stage;
       }
 
       await createLead({ ...row, ownerId, status }, creatorId, undefined, { requiresQualification: true });
@@ -1248,7 +1280,47 @@ export async function updateLead(
         ipAddress,
       });
     }
-    if (updates.status !== undefined && updates.status !== before.status) {
+    const statusChanged = updates.status !== undefined && updates.status !== before.status;
+    const ownerChanged = updates.ownerId !== undefined && updates.ownerId !== before.owner_id;
+
+    // Owner names resolved once, up front, since both the combined entry
+    // below and the owner-only entry further down need them - was
+    // previously only looked up inside the owner block, duplicating this
+    // query if a combined entry needed it too.
+    let oldOwnerName = "Unassigned";
+    let newOwnerName = "Unassigned";
+    if (ownerChanged) {
+      const ownerIds = [before.owner_id, updates.ownerId].filter((id): id is string => id !== null);
+      const namesResult = ownerIds.length
+        ? await pool.query<{ id: string; name: string }>("SELECT id, name FROM users WHERE id = ANY($1)", [ownerIds])
+        : { rows: [] as { id: string; name: string }[] };
+      const nameById = new Map(namesResult.rows.map((r) => [r.id, r.name]));
+      oldOwnerName = before.owner_id ? nameById.get(before.owner_id) ?? "Unassigned" : "Unassigned";
+      newOwnerName = updates.ownerId ? nameById.get(updates.ownerId) ?? "Unassigned" : "Unassigned";
+    }
+
+    // A single action (today, only escalateTier - FLC->SLC, SLC->TLC) that
+    // changes both stage and owner together gets one combined history
+    // entry instead of two separate ones that happened to fire at the same
+    // moment - "Lead stage changed" immediately followed by "Salesperson
+    // reassigned" read like two unrelated events when they were actually
+    // one. Anything that changes only one of the two (a plain status edit,
+    // Send to Field Sales, Reassign) keeps its own existing single entry
+    // below, unaffected.
+    if (statusChanged && ownerChanged) {
+      await recordAuditEvent({
+        entityType: "lead",
+        entityId: leadId,
+        entityLabel: after.full_name,
+        action: "escalated",
+        summary: `Escalated - ${after.full_name}`,
+        oldValue: `${before.status} · ${oldOwnerName}`,
+        newValue: `${after.status} · ${newOwnerName}`,
+        actorId: requestingUserId,
+        actorName,
+        ipAddress,
+      });
+    } else if (statusChanged) {
       await recordAuditEvent({
         entityType: "lead",
         entityId: leadId,
@@ -1261,7 +1333,9 @@ export async function updateLead(
         actorName,
         ipAddress,
       });
+    }
 
+    if (statusChanged) {
       // A customer is never created directly - it's auto-created the moment
       // a lead reaches 'Converted', whether that happens here (a direct
       // status edit) or via opportunity-service.ts's convertLeadToOpportunity
@@ -1284,28 +1358,27 @@ export async function updateLead(
         }
       }
     }
-    if (updates.ownerId !== undefined && updates.ownerId !== before.owner_id) {
-      const ownerIds = [before.owner_id, updates.ownerId].filter((id): id is string => id !== null);
-      const namesResult = ownerIds.length
-        ? await pool.query<{ id: string; name: string }>("SELECT id, name FROM users WHERE id = ANY($1)", [ownerIds])
-        : { rows: [] as { id: string; name: string }[] };
-      const nameById = new Map(namesResult.rows.map((r) => [r.id, r.name]));
-      await recordAuditEvent({
-        entityType: "lead",
-        entityId: leadId,
-        entityLabel: after.full_name,
-        action: "owner_reassigned",
-        summary: `Salesperson reassigned - ${after.full_name}`,
-        oldValue: before.owner_id ? nameById.get(before.owner_id) ?? "Unassigned" : "Unassigned",
-        newValue: updates.ownerId ? nameById.get(updates.ownerId) ?? "Unassigned" : "Unassigned",
-        actorId: requestingUserId,
-        actorName,
-        ipAddress,
-      });
+    if (ownerChanged && updates.ownerId !== undefined) {
+      if (!statusChanged) {
+        await recordAuditEvent({
+          entityType: "lead",
+          entityId: leadId,
+          entityLabel: after.full_name,
+          action: "owner_reassigned",
+          summary: `Salesperson reassigned - ${after.full_name}`,
+          oldValue: oldOwnerName,
+          newValue: newOwnerName,
+          actorId: requestingUserId,
+          actorName,
+          ipAddress,
+        });
+      }
 
       // Keeps an already-converted customer's ownership in step with its
       // lead - see syncCustomerOwnerFromLead's own comment for why this
-      // matters (a no-op when this lead never converted).
+      // matters (a no-op when this lead never converted). Runs regardless
+      // of whether statusChanged too - ownership syncing isn't tied to the
+      // audit-entry combining above.
       await syncCustomerOwnerFromLead(leadId, updates.ownerId);
     }
   }

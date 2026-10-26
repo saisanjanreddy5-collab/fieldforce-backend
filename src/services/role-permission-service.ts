@@ -16,7 +16,7 @@ interface RolePermissionRow {
 const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   [ROLES.ADMIN]: [
     "users.view", "users.create", "users.update", "users.reset_password",
-    "leads.view", "leads.create", "leads.update", "leads.delete", "leads.share",
+    "leads.view", "leads.create", "leads.update", "leads.delete", "leads.share", "leads.bulk_import",
     "opportunities.view", "opportunities.create", "opportunities.update", "opportunities.delete",
     "activities.view", "activities.create", "activities.update", "activities.delete",
     "attendance.view_own", "attendance.view_team",
@@ -61,7 +61,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   ],
   [ROLES.MANAGER]: [
     "users.view",
-    "leads.view", "leads.create", "leads.update", "leads.delete", "leads.share",
+    "leads.view", "leads.create", "leads.update", "leads.delete", "leads.share", "leads.bulk_import",
     "opportunities.view", "opportunities.create", "opportunities.update", "opportunities.delete",
     "activities.view", "activities.create", "activities.update", "activities.delete",
     "attendance.view_own", "attendance.view_team",
@@ -170,6 +170,11 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "comp_off_credits.view",
     "expense_types.view",
     "expense_claims.view", "expense_claims.create", "expense_claims.update",
+    // Its own scoped permission, not the full leads.create - lets Call
+    // Center bulk-import a batch (with the Call Center Executive column
+    // assigning each row directly) without also opening up the main Leads
+    // module's "+ New Lead"/general Import, which stay Admin/Manager only.
+    "leads.bulk_import",
   ],
 };
 

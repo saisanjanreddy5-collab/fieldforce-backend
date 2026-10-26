@@ -2130,6 +2130,16 @@ Regards,', 'active', 4)
     `INSERT INTO role_permissions (role, permission) VALUES
       ('admin','leads.escalate'), ('manager','leads.escalate'), ('call_center','leads.escalate')
     ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Its own scoped permission (not leads.create) so Call Center can bulk-
+    // import a batch of leads - with the executive-matched assignment
+    // column - without gaining the full Leads module's own create/import.
+    // admin/manager already hold leads.create, which the route also
+    // accepts, but granted here too for Permissions-matrix consistency with
+    // every other fine-grained permission this session.
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','leads.bulk_import'), ('manager','leads.bulk_import'), ('call_center','leads.bulk_import')
+    ON CONFLICT (role, permission) DO NOTHING`,
   ];
 
   try {
