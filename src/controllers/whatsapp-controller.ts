@@ -13,6 +13,28 @@ export const listForLead = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, messages);
 });
 
+// The standard Meta/WABA webhook verification handshake - before a WABA
+// number's webhook subscription is considered active, the platform sends a
+// one-time GET with hub.mode=subscribe and a hub.challenge value, which the
+// receiving server must echo back verbatim to prove it controls this URL.
+// Until this route existed, pointing a new number's webhook at this URL had
+// no GET handler to answer that handshake (only POST was wired up) - the
+// subscription attempt would silently fail here with no error surfaced to
+// whoever configured it, and no POST webhook would ever follow, which is
+// indistinguishable from "webhook not configured at all" from our side.
+// Reuses the same shared secret as the POST route's own auth, as the verify
+// token - there is no separate token configured anywhere for this.
+export const verifyWebhook = (req: Request, res: Response): void => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  if (mode === "subscribe" && whatsappService.isWebhookSecretValid(token as string | undefined)) {
+    res.status(200).send(challenge);
+    return;
+  }
+  res.sendStatus(403);
+};
+
 // Public callback from K3/Pinbot's own servers - no CRM user is logged in
 // here, so a shared secret header stands in for auth, same pattern as the
 // Smartflo and Microsoft webhook routes.
