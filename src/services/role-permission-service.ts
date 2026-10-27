@@ -161,15 +161,16 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     // unfillable even though it was marked required.
     "lead_categories.view",
     "pipeline_stages.view",
-    // Same self-service HR set every other role already has - unrelated to
-    // the lead-qualification scope restriction above. A Call Center
-    // employee is still a real employee who needs to apply for leave and
-    // submit expense claims like anyone else.
+    // Same self-service leave set every other role already has - unrelated
+    // to the lead-qualification scope restriction above. A Call Center
+    // employee is still a real employee who needs to apply for leave like
+    // anyone else. Expense claims deliberately NOT included here (unlike
+    // every other role) - Call Center is desk-based and never travels for
+    // work, so there's nothing for them to claim; removed by explicit
+    // request, not an oversight.
     "leave_types.view",
     "leave_requests.view", "leave_requests.create", "leave_requests.update",
     "comp_off_credits.view",
-    "expense_types.view",
-    "expense_claims.view", "expense_claims.create", "expense_claims.update",
     // Its own scoped permission, not the full leads.create - lets Call
     // Center bulk-import a batch (with the Call Center Executive column
     // assigning each row directly) without also opening up the main Leads

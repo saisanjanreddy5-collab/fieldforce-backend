@@ -2140,6 +2140,15 @@ Regards,', 'active', 4)
     `INSERT INTO role_permissions (role, permission) VALUES
       ('admin','leads.bulk_import'), ('manager','leads.bulk_import'), ('call_center','leads.bulk_import')
     ON CONFLICT (role, permission) DO NOTHING`,
+
+    // Call Center is desk-based and never travels for work, so expense
+    // claims never belonged in its default set - removed from
+    // DEFAULT_ROLE_PERMISSIONS (role-permission-service.ts) too, but that
+    // alone only affects a brand-new seed or an explicit "reset to
+    // default" - this actually revokes it from every existing Call Center
+    // employee already granted it in production.
+    `DELETE FROM role_permissions WHERE role = 'call_center' AND permission IN
+      ('expense_types.view', 'expense_claims.view', 'expense_claims.create', 'expense_claims.update')`,
   ];
 
   try {
