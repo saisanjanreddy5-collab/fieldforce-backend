@@ -45,7 +45,14 @@ async function start(): Promise<void> {
   // only applies to these two specific paths.
   app.use("/api/integrations/frappe/webhook", express.raw({ type: () => true, limit: "1mb" }));
 
-  app.use(express.json());
+  // Default express.json() limit is 100kb - fine for every other route, but
+  // the bulk lead import sends its whole sheet as one JSON request (see
+  // bulkImportLeads's own MAX_BULK_IMPORT_ROWS = 5000), and a real multi-
+  // hundred-row sheet routinely exceeds 100kb on its own. That made large
+  // imports fail outright with a generic 500 before a single row was even
+  // read - confirmed by a real failed import, not guessed. 10mb comfortably
+  // covers 5,000 rows even with long free-text fields (notes, addresses).
+  app.use(express.json({ limit: "10mb" }));
   app.use(express.urlencoded({ extended: true }));
 
   app.use("/api", routes);

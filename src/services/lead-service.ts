@@ -759,6 +759,13 @@ export interface BulkImportResult {
   created: number;
   skipped: { row: number; reason: string }[];
   errors: { row: number; message: string }[];
+  // Rows that WERE created (count toward `created`, same as any other
+  // successful row) but not with the executive the sheet named - see the
+  // FLC-only check below. Kept separate from `skipped` on purpose: a
+  // skipped row needs someone to go fix it and re-import, a redirected row
+  // needs nothing further, it's just worth knowing it didn't land with the
+  // specific person the sheet said.
+  redirected: { row: number; reason: string }[];
 }
 
 const MAX_BULK_IMPORT_ROWS = 5000;
@@ -776,7 +783,7 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
     throw new ApiError(422, `This file has ${rows.length} rows - the max is ${MAX_BULK_IMPORT_ROWS} per import`);
   }
 
-  const result: BulkImportResult = { created: 0, skipped: [], errors: [] };
+  const result: BulkImportResult = { created: 0, skipped: [], errors: [], redirected: [] };
   const seenPhones = new Set<string>();
 
   for (let i = 0; i < rows.length; i++) {
@@ -810,36 +817,48 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
       }
 
       // An explicit executive identifier bypasses round-robin entirely - the
-      // row lands directly in that person's own queue, at whichever tier
-      // their own team actually is (FLC/SLC/TLC Team), not hardcoded to FLC
-      // - naming an SLC Team person here must land the row at SLC, or it'd
-      // be invisible in their own queue (scoped by their own team's stage)
-      // despite genuinely being theirs. A provided-but-unresolved identifier,
-      // or one that resolves to a person not on any of the three calling
-      // teams, is never silently round-robin'd (that would risk a lead
-      // landing with the wrong person with no warning) - it's reported here
-      // instead, same as any other bad row, so the admin can fix just that
-      // row and re-run the import.
+      // row lands directly in that person's own queue. Deliberately FLC-only
+      // (not "whichever tier their team actually is") - every row here is a
+      // brand-new, never-called customer, so landing one directly at SLC/TLC
+      // would let it skip real calling at the earlier tiers with nothing to
+      // show it happened, just because a sheet named the wrong person (a
+      // genuinely easy mistake: a data-entry sheet mixing FLC/SLC/TLC staff
+      // in one column has no visual difference between them).
+      //
+      // Naming an SLC/TLC person (or an identifier that doesn't resolve at
+      // all) falls back to the same FLC round-robin a blank column gets,
+      // rather than being skipped outright - confirmed as the wanted
+      // behavior over leaving the row out of the import entirely, which
+      // risks a real customer never making it into the CRM at all if the
+      // skip list goes unnoticed in a large file. ownerId/status are simply
+      // left unset below, which is exactly what a row with no
+      // assigneeIdentifier gets too - createLead's own FLC-entry branch
+      // handles the round-robin assignment either way. Recorded in
+      // `redirected`, not `skipped`, since the row DID get created - there's
+      // nothing to go fix, just something worth knowing about.
       let ownerId: string | undefined;
       let status: string | undefined;
       if (row.assigneeIdentifier) {
         const assignee = await resolveCallCenterExecutiveByIdentifier(row.assigneeIdentifier);
         if (!assignee) {
-          result.skipped.push({
+          result.redirected.push({
             row: rowNumber,
-            reason: `Executive "${row.assigneeIdentifier}" not found or not an active Call Center employee - needs manual assignment`,
+            reason: `Executive "${row.assigneeIdentifier}" not found or not an active Call Center employee - assigned to FLC round-robin instead`,
           });
-          continue;
-        }
-        if (!assignee.stage) {
-          result.skipped.push({
+        } else if (!assignee.stage) {
+          result.redirected.push({
             row: rowNumber,
-            reason: `Executive "${row.assigneeIdentifier}" is not assigned to a calling tier (FLC/SLC/TLC Team) yet - needs manual assignment`,
+            reason: `Executive "${row.assigneeIdentifier}" is not assigned to a calling tier yet - assigned to FLC round-robin instead`,
           });
-          continue;
+        } else if (assignee.stage !== FLC_STAGE) {
+          result.redirected.push({
+            row: rowNumber,
+            reason: `Executive "${row.assigneeIdentifier}" is on the ${assignee.stage} team, not FLC - assigned to FLC round-robin instead, so every lead still goes through calling in order`,
+          });
+        } else {
+          ownerId = assignee.id;
+          status = assignee.stage;
         }
-        ownerId = assignee.id;
-        status = assignee.stage;
       }
 
       await createLead({ ...row, ownerId, status }, creatorId, undefined, { requiresQualification: true });
