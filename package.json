@@ -10,7 +10,8 @@
     "seed:admin": "ts-node src/scripts/seedAdmin.ts",
     "test:hierarchy": "ts-node src/scripts/testHierarchyVisibility.ts",
     "test:permission-middleware": "ts-node src/scripts/testPermissionMiddleware.ts",
-    "test:conversion-comment-auth": "ts-node src/scripts/testConversionAndCommentAuthorization.ts"
+    "test:conversion-comment-auth": "ts-node src/scripts/testConversionAndCommentAuthorization.ts",
+    "test:fofo-consent-visibility": "ts-node src/scripts/testFofoConsentVisibility.ts"
   },
   "keywords": [],
   "author": "",

@@ -70,6 +70,20 @@ const envSchema = z.object({
   // different scheme from WHATSAPP/SMARTFLO_WEBHOOK_SECRET above, which are
   // plain shared-secret headers compared directly, not HMAC signatures.
   FRAPPE_WEBHOOK_SECRET: z.string().optional(),
+
+  // SKIA FOFO's own store-app user registration API (a separate Nextech
+  // product, not part of this CRM) - "Push to onboarding app" on a FOFO
+  // lead calls this to actually create the store owner's app login, instead
+  // of only recording a local reference code as it did before this existed.
+  // Defaults to their test/staging server (everydaycpos) per their own
+  // instructions: verify the user shows up there first, then point this at
+  // their production ("centralskia") URL once confirmed. CMR_TOKEN is the
+  // auth token their side issued for this integration - optional so the app
+  // still boots before it's configured, same as every other integration
+  // above; the call itself fails closed (a clear error, not a silent no-op)
+  // while unset.
+  SKIA_FOFO_REGISTRATION_URL: z.string().default("https://everydaycpos.nextechltd.in/api/cpos/app/user/registration"),
+  SKIA_FOFO_CMR_TOKEN: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

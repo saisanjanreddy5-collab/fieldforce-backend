@@ -5,6 +5,7 @@ import * as leadService from "./lead-service";
 import * as leadDocumentService from "./lead-document-service";
 import { getNumericSetting } from "./app-settings-service";
 import { recordAuditEvent } from "./audit-log-service";
+import { registerFofoUser } from "./skia-fofo-service";
 
 const SUBTREE_CTE = `
   WITH RECURSIVE subtree AS (
@@ -208,17 +209,26 @@ export async function decideStep(
 // to be able to open the page that leads to that decision in the first
 // place, or the bypass there is unreachable in practice.
 export async function getHandoff(leadId: string, requestingUserId: string, requestingRole: string) {
-  const lead = await leadService.getLeadById(leadId, requestingUserId, { skipVisibilityCheck: requestingRole === "admin" });
+  const skipVisibilityCheck = requestingRole === "admin";
+  const lead = await leadService.getLeadById(leadId, requestingUserId, { skipVisibilityCheck });
   const steps = await listApprovalSteps(leadId, lead.ownerId!, lead.expectedValue);
   const documents = await leadDocumentService.listDocuments(leadId);
-  return { lead, approvalSteps: steps, documents };
+  // Fetched here (not left to the frontend's own separate /leads/:id/consent
+  // call) so it shares the exact same admin bypass as the lead above - an
+  // admin viewing a handoff outside their subtree was otherwise getting the
+  // lead fine but a 403 on this one, which the page treated as a total
+  // failure to load (see FofoHandoffDetail.tsx's Promise.all).
+  const consent = await leadService.getLeadConsent(leadId, requestingUserId, { skipVisibilityCheck });
+  return { lead, approvalSteps: steps, documents, consent };
 }
 
-// Real internal action, clearly not a call to any external system - no
-// onboarding app exists to push to. Validates every approval step is
-// resolved (approved or not_applicable), then records a real timestamp and
-// a generated reference code so the "pushed" state is genuine, persisted
-// data rather than a UI-only toggle.
+// Validates every approval step is resolved (approved or not_applicable),
+// registers the store owner's SKIA FOFO app login via skia-fofo-service, then
+// records a real timestamp and a generated reference code so the "pushed"
+// state is genuine, persisted data rather than a UI-only toggle. If the SKIA
+// FOFO call fails, nothing here is marked pushed - the whole point of this
+// step is that "pushed" means a real app account exists over there, not just
+// that someone clicked the button.
 export async function pushToOnboardingApp(leadId: string, requestingUserId: string, requestingRole: string) {
   const inScope = await leadService.isLeadInOwnerScope(leadId, requestingUserId);
   if (!inScope) {
@@ -232,6 +242,17 @@ export async function pushToOnboardingApp(leadId: string, requestingUserId: stri
   if (steps.rows.some((s) => s.status === "pending")) {
     throw new ApiError(422, "All approval steps must be approved before pushing");
   }
+
+  const leadResult = await pool.query<{ full_name: string; phone: string | null }>(
+    "SELECT full_name, phone FROM leads WHERE id = $1",
+    [leadId]
+  );
+  const lead = leadResult.rows[0];
+  if (!lead?.phone) {
+    throw new ApiError(422, "This lead has no phone number on file - required to register the store app user");
+  }
+
+  await registerFofoUser({ userName: lead.full_name, phoneNumber: lead.phone });
 
   const onboardingAppId = `FOFO-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
   await pool.query(

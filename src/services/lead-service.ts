@@ -1488,10 +1488,22 @@ export async function listLeadHistory(leadId: string, requestingUserId: string) 
   return listAuditLogForEntity("lead", leadId);
 }
 
-export async function getLeadConsent(leadId: string, requestingUserId: string) {
-  const visible = await isLeadVisibleToUser(leadId, requestingUserId);
-  if (!visible) {
-    throw new ApiError(403, "You do not have access to this lead");
+// skipVisibilityCheck mirrors getLeadById's own escape hatch, for the exact
+// same reason (see that function's comment): fofo-onboarding-service.ts's
+// getHandoff fetches both the lead and its consent record for an admin
+// viewing a FOFO handoff whose owner may have since left that admin's
+// subtree. The generic /leads/:id/consent controller never passes this -
+// only getHandoff does, so every other caller keeps the normal check.
+export async function getLeadConsent(
+  leadId: string,
+  requestingUserId: string,
+  options?: { skipVisibilityCheck?: boolean }
+) {
+  if (!options?.skipVisibilityCheck) {
+    const visible = await isLeadVisibleToUser(leadId, requestingUserId);
+    if (!visible) {
+      throw new ApiError(403, "You do not have access to this lead");
+    }
   }
 
   const result = await pool.query(
