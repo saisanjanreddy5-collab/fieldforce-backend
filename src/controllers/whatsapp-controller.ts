@@ -41,6 +41,13 @@ export const verifyWebhook = (req: Request, res: Response): void => {
 export const webhook = asyncHandler(async (req: Request, res: Response) => {
   const providedSecret = req.headers["x-webhook-secret"] as string | undefined;
   if (!whatsappService.isWebhookSecretValid(providedSecret)) {
+    // TEMPORARY diagnostic log - K3's real automated webhook delivery is
+    // getting rejected here (confirmed via nginx access log: axios/1.15.2
+    // user-agent, not Postman/curl), but we don't yet know what auth it
+    // actually sends since their manual Postman test used a header that may
+    // not be what their dashboard-configured delivery actually attaches.
+    // Remove once that's confirmed.
+    console.warn("WhatsApp webhook rejected - headers received:", JSON.stringify(req.headers));
     res.status(401).json({ success: false, message: "Unauthorized" });
     return;
   }
