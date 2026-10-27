@@ -36,18 +36,18 @@ export const verifyWebhook = (req: Request, res: Response): void => {
 };
 
 // Public callback from K3/Pinbot's own servers - no CRM user is logged in
-// here, so a shared secret header stands in for auth, same pattern as the
-// Smartflo and Microsoft webhook routes.
+// here, so a shared secret stands in for auth, same pattern as the Smartflo
+// and Microsoft webhook routes. Confirmed via a temporary header-dump (now
+// removed) that K3's real automated delivery engine sends none of the custom
+// headers their own manual Postman test used - just the plain axios
+// defaults (content-type, x-correlation-id, x-retry-attempt, etc), no way to
+// attach one. The one thing we fully control is the callback URL itself, so
+// the secret travels as a query param on that URL instead - accepted here
+// alongside the header so an old Postman-style test (or Smartflo's own
+// header convention) still works too.
 export const webhook = asyncHandler(async (req: Request, res: Response) => {
-  const providedSecret = req.headers["x-webhook-secret"] as string | undefined;
+  const providedSecret = (req.headers["x-webhook-secret"] as string | undefined) ?? (req.query.secret as string | undefined);
   if (!whatsappService.isWebhookSecretValid(providedSecret)) {
-    // TEMPORARY diagnostic log - K3's real automated webhook delivery is
-    // getting rejected here (confirmed via nginx access log: axios/1.15.2
-    // user-agent, not Postman/curl), but we don't yet know what auth it
-    // actually sends since their manual Postman test used a header that may
-    // not be what their dashboard-configured delivery actually attaches.
-    // Remove once that's confirmed.
-    console.warn("WhatsApp webhook rejected - headers received:", JSON.stringify(req.headers));
     res.status(401).json({ success: false, message: "Unauthorized" });
     return;
   }
