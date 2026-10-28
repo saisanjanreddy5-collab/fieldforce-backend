@@ -2149,6 +2149,25 @@ Regards,', 'active', 4)
     // employee already granted it in production.
     `DELETE FROM role_permissions WHERE role = 'call_center' AND permission IN
       ('expense_types.view', 'expense_claims.view', 'expense_claims.create', 'expense_claims.update')`,
+
+    // Client revised the original three-tier plan before any real leads or
+    // employees ever reached TLC (confirmed before building this): drop the
+    // third calling tier entirely. SLC is now the last calling tier -
+    // qualifyLead requires SLC (not TLC), and there is no escalate-to-TLC
+    // action any more (see lead-call-center-service.ts). A plain removal,
+    // not a data migration - nothing to move since nothing was ever in TLC.
+    // The sort_order shift's own WHERE naturally stops matching the instant
+    // the TLC row is gone (its subquery returns no row, so `sort_order >
+    // NULL` is never true) - still spelled out with an explicit EXISTS guard
+    // anyway, same defensive style as the shift above it, given the real
+    // crash-loop incident recorded on that migration from an under-guarded
+    // idempotency check.
+    `UPDATE pipeline_stages SET sort_order = sort_order - 1
+     WHERE sort_order > (SELECT sort_order FROM pipeline_stages WHERE key = 'TLC')
+       AND EXISTS (SELECT 1 FROM pipeline_stages WHERE key = 'TLC')`,
+    `DELETE FROM pipeline_stages WHERE key = 'TLC'`,
+    `DELETE FROM sales_teams WHERE name = 'TLC Team'
+       AND NOT EXISTS (SELECT 1 FROM users WHERE sales_team_id = sales_teams.id)`,
   ];
 
   try {

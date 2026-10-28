@@ -10,7 +10,6 @@ import {
   updateLead,
   FLC_STAGE,
   SLC_STAGE,
-  TLC_STAGE,
   type CreateLeadInput,
 } from "./lead-service";
 import { createActivityForLead } from "./activity-service";
@@ -18,12 +17,11 @@ import { createActivityForLead } from "./activity-service";
 const QUALIFIED_STAGE = "Qualified";
 
 // Which team pool backs each calling tier - null for any stage that isn't
-// one of the three (Qualified, Open, etc.), where the Field-side pincode
+// one of the two (Qualified, Open, etc.), where the Field-side pincode
 // matching below applies instead.
 function tierTeamName(stage: string): string | null {
   if (stage === FLC_STAGE) return "FLC Team";
   if (stage === SLC_STAGE) return "SLC Team";
-  if (stage === TLC_STAGE) return "TLC Team";
   return null;
 }
 
@@ -201,12 +199,15 @@ export async function logCallDisposition(leadId: string, input: LogCallDispositi
 }
 
 // A deliberate, separate click from logging a disposition - "Call Done And
-// Interested" is just what happened on one call, Qualified is the TLC
+// Interested" is just what happened on one call, Qualified is the SLC
 // agent's own judgment call that this lead is worth handing off. Only valid
-// from the TLC stage itself - the last of the three calling tiers - a lead
+// from the SLC stage itself - the last of the two calling tiers - a lead
 // that's already Qualified/with Field has nothing left to qualify, and this
 // is not how a "Not Interested" lead is ever revived (it just stays at
-// whichever tier it's currently in, re-callable, by design).
+// whichever tier it's currently in, re-callable, by design). This is also
+// what keeps Field Sales from ever seeing a lead that was never actually
+// marked interested - qualifyLead is the one deliberate checkpoint a lead
+// must pass through before sendToField becomes possible at all.
 export async function qualifyLead(leadId: string, requestingUserId: string, ipAddress?: string | null) {
   const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
   if (!inScope) {
@@ -214,8 +215,8 @@ export async function qualifyLead(leadId: string, requestingUserId: string, ipAd
   }
 
   const facts = await getLeadAssignmentFacts(leadId);
-  if (facts.status !== TLC_STAGE) {
-    throw new ApiError(422, `Only a lead in the "${TLC_STAGE}" stage can be marked Qualified`);
+  if (facts.status !== SLC_STAGE) {
+    throw new ApiError(422, `Only a lead in the "${SLC_STAGE}" stage can be marked Qualified`);
   }
 
   return updateLead(leadId, { status: QUALIFIED_STAGE }, requestingUserId, ipAddress);
@@ -226,8 +227,8 @@ export async function qualifyLead(leadId: string, requestingUserId: string, ipAd
 // shape exactly (owner-scope check, resolve a new owner, updateLead, then
 // shareLeadBackToSender so the escalating caller keeps read-only visibility
 // afterward), since that handoff already solves every sub-problem this
-// needs. No pincode-style coverage gap here - every FLC/SLC/TLC team member
-// is equally eligible, so there's no fallback-when-nobody-covers path like
+// needs. No pincode-style coverage gap here - every FLC/SLC team member is
+// equally eligible, so there's no fallback-when-nobody-covers path like
 // Field Sales has; `resolveTierAssignee` only returns null when the next
 // tier genuinely has zero active members, which is a real setup error, not
 // a routine case to paper over.
@@ -264,11 +265,7 @@ export async function escalateToSlc(leadId: string, requestingUserId: string, ip
   return escalateTier(leadId, requestingUserId, FLC_STAGE, SLC_STAGE, "SLC Team", ipAddress);
 }
 
-export async function escalateToTlc(leadId: string, requestingUserId: string, ipAddress?: string | null) {
-  return escalateTier(leadId, requestingUserId, SLC_STAGE, TLC_STAGE, "TLC Team", ipAddress);
-}
-
-// Who this lead could be handed to right now - at an FLC/SLC/TLC stage, any
+// Who this lead could be handed to right now - at an FLC/SLC stage, any
 // active member of that exact tier's own team (no pincode concept on that
 // side); at/after Qualified, only field employees who actually cover its
 // pincode. Reused by both the Send to Field Sales flow (to disambiguate
