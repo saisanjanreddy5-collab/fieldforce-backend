@@ -245,7 +245,16 @@ export async function loginUser(email: string, password: string) {
   }
 
   return {
-    user: await toPublicUserWithPermissions(user),
+    // getUserById (not toPublicUserWithPermissions(user) directly) because
+    // this plain `SELECT *` row has no manager_name/sales_team_name - those
+    // only exist on the LEFT JOIN'd query getUserById already does for
+    // GET /auth/me. Skipping that join here used to leave a freshly logged-
+    // in user's salesTeamName null until their next page load silently
+    // re-fetched /auth/me - which, for a Call Center employee, meant
+    // CallCenterPage's tier lookup (TIER_BY_TEAM[user.salesTeamName])
+    // defaulted them to FLC right after login regardless of their real team,
+    // showing the wrong queue until a refresh happened to fix it for free.
+    user: await getUserById(user.id),
     accessToken: signAccessToken(user),
     refreshToken: await signRefreshToken(user),
   };

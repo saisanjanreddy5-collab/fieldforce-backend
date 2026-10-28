@@ -428,14 +428,15 @@ async function resolveAutoAssignee(input: CreateLeadInput, creatorId: string): P
   return creatorId;
 }
 
-// The three calling-tier stages a marketing lead walks through before
+// The two calling-tier stages a marketing lead walks through before
 // reaching the existing Qualified stage, each worked by its own team pool
 // (see resolveTierAssignee/getSalesTeamIdByName below). Exported so
 // lead-call-center-service.ts's escalation actions and the bulk-import path
 // share one real source of truth instead of each hardcoding these strings.
+// A third tier (TLC) was removed before any real lead or employee ever
+// reached it - SLC is now the last calling tier before Qualified.
 export const FLC_STAGE = "FLC";
 export const SLC_STAGE = "SLC";
-export const TLC_STAGE = "TLC";
 
 // Resolves a calling-tier team's id by its exact sales_teams.name (e.g.
 // "FLC Team") - sales_teams.name has no unique constraint at the schema
@@ -483,7 +484,6 @@ export async function resolveTierAssignee(teamId: string, stage: string): Promis
 const STAGE_BY_TEAM_NAME: Record<string, string> = {
   "FLC Team": FLC_STAGE,
   "SLC Team": SLC_STAGE,
-  "TLC Team": TLC_STAGE,
 };
 
 interface CallCenterExecutiveMatch {
@@ -819,14 +819,14 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
       // An explicit executive identifier bypasses round-robin entirely - the
       // row lands directly in that person's own queue. Deliberately FLC-only
       // (not "whichever tier their team actually is") - every row here is a
-      // brand-new, never-called customer, so landing one directly at SLC/TLC
-      // would let it skip real calling at the earlier tiers with nothing to
+      // brand-new, never-called customer, so landing one directly at SLC
+      // would let it skip real calling at the earlier tier with nothing to
       // show it happened, just because a sheet named the wrong person (a
-      // genuinely easy mistake: a data-entry sheet mixing FLC/SLC/TLC staff
-      // in one column has no visual difference between them).
+      // genuinely easy mistake: a data-entry sheet mixing FLC/SLC staff in
+      // one column has no visual difference between them).
       //
-      // Naming an SLC/TLC person (or an identifier that doesn't resolve at
-      // all) falls back to the same FLC round-robin a blank column gets,
+      // Naming an SLC person (or an identifier that doesn't resolve at all)
+      // falls back to the same FLC round-robin a blank column gets,
       // rather than being skipped outright - confirmed as the wanted
       // behavior over leaving the row out of the import entirely, which
       // risks a real customer never making it into the CRM at all if the
@@ -1318,8 +1318,8 @@ export async function updateLead(
       newOwnerName = updates.ownerId ? nameById.get(updates.ownerId) ?? "Unassigned" : "Unassigned";
     }
 
-    // A single action (today, only escalateTier - FLC->SLC, SLC->TLC) that
-    // changes both stage and owner together gets one combined history
+    // A single action (today, only escalateTier - FLC->SLC) that changes
+    // both stage and owner together gets one combined history
     // entry instead of two separate ones that happened to fire at the same
     // moment - "Lead stage changed" immediately followed by "Salesperson
     // reassigned" read like two unrelated events when they were actually
