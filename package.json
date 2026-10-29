@@ -16,7 +16,8 @@
     "test:tier-team-visibility": "ts-node src/scripts/testTierTeamVisibility.ts",
     "test:lead-timeline": "ts-node src/scripts/testLeadTimeline.ts",
     "test:leads-export": "ts-node src/scripts/testLeadsExport.ts",
-    "test:performance-reports": "ts-node src/scripts/testPerformanceReports.ts"
+    "test:performance-reports": "ts-node src/scripts/testPerformanceReports.ts",
+    "test:mail-sync-permanent-error": "ts-node src/scripts/testMailSyncPermanentError.ts"
   },
   "keywords": [],
   "author": "",

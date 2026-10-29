@@ -1,6 +1,6 @@
 import { pool } from "../config/db";
 import { GRAPH_BASE_URL } from "../config/microsoft";
-import { getValidAccessToken } from "./microsoft-service";
+import { getValidAccessToken, disconnect } from "./microsoft-service";
 
 // Mirrors Meta/WhatsApp's own inbound story in this codebase: sending has
 // always worked because it only ever needed Mail.Send; nobody could see a
@@ -27,10 +27,28 @@ interface DeltaPage {
   "@odata.deltaLink"?: string;
 }
 
+// Thrown only for a Graph response that means this mailbox can never sync,
+// ever - as opposed to a transient failure (rate limit, network blip, a
+// token that's expired but still refreshable) worth retrying on the next
+// scheduled pass. Caught separately in syncAllConnectedMailboxes, which
+// disconnects the mailbox instead of re-logging the identical failure every
+// 3 minutes forever.
+class PermanentMailboxError extends Error {}
+
 async function fetchDeltaPage(accessToken: string, url: string): Promise<DeltaPage> {
   const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
   if (!response.ok) {
-    throw new Error(`Graph mail delta query failed: ${response.status} ${await response.text()}`);
+    const body = await response.text();
+    // Microsoft's own permanent signal that a mailbox can't be reached via
+    // REST at all (soft-deleted, deactivated, or hosted on an on-premise
+    // Exchange server Graph has no API access to) - confirmed in production,
+    // where this exact error recurred every 3 minutes indefinitely for one
+    // employee whose mailbox was no longer valid, with no way it would ever
+    // resolve on its own.
+    if (response.status === 404 && body.includes("MailboxNotEnabledForRESTAPI")) {
+      throw new PermanentMailboxError(`Mailbox permanently unavailable: ${body}`);
+    }
+    throw new Error(`Graph mail delta query failed: ${response.status} ${body}`);
   }
   return (await response.json()) as DeltaPage;
 }
@@ -128,7 +146,14 @@ export async function syncAllConnectedMailboxes(): Promise<void> {
         console.log(`Mail sync: logged ${logged} inbound reply(ies) for user ${row.user_id}`);
       }
     } catch (err) {
-      console.error(`Mail sync failed for user ${row.user_id}:`, err);
+      if (err instanceof PermanentMailboxError) {
+        console.warn(`Mail sync: disconnecting user ${row.user_id}'s Microsoft account - ${err.message}`);
+        await disconnect(row.user_id).catch((disconnectErr) =>
+          console.error(`Mail sync: failed to auto-disconnect user ${row.user_id} after a permanent mailbox error:`, disconnectErr)
+        );
+      } else {
+        console.error(`Mail sync failed for user ${row.user_id}:`, err);
+      }
     }
   }
 }
