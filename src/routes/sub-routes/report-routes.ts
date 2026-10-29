@@ -15,6 +15,8 @@ router.get("/state-wise", reportController.stateWise);
 router.get("/b2b-group", reportController.b2bGroup);
 router.get("/lead-source-roi", reportController.leadSourceRoi);
 router.get("/fofo-cohort-retention", reportController.fofoCohortRetention);
+router.get("/call-center-performance", reportController.callCenterPerformance);
+router.get("/field-sales-performance", reportController.fieldSalesPerformance);
 
 router.get("/saved-views", reportController.listSavedViews);
 router.post("/saved-views", requirePermission("reports.save_view"), validateBody(createSavedViewSchema), reportController.createSavedView);

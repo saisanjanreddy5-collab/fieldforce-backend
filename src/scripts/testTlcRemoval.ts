@@ -50,6 +50,13 @@ async function main(): Promise<void> {
 
   console.log(`\n${failures === 0 ? "ALL ASSERTIONS PASSED" : `${failures} ASSERTION(S) FAILED`}`);
 
+  // Was leads-only, leaving every run's own escalated/status_changed audit
+  // rows (and any activities) permanently orphaned in the database - not
+  // just test debris, but rows a real admin-facing report (Call Center/
+  // Field Sales performance, both of which aggregate audit_log by actor_id
+  // and date) would silently pick up as if they were genuine activity.
+  await pool.query("DELETE FROM audit_log WHERE entity_type = 'lead' AND entity_id = $1", [lead.id]);
+  await pool.query("DELETE FROM activities WHERE lead_id = $1", [lead.id]);
   await pool.query("DELETE FROM leads WHERE id = $1", [lead.id]);
 
   if (failures > 0) {

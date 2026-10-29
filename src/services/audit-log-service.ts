@@ -86,6 +86,20 @@ export async function listAuditLogForEntity(entityType: string, entityId: string
   return result.rows.map(toPublicEvent);
 }
 
+// Bulk sibling of listAuditLogForEntity - every event for MANY entities in
+// one query (used by the Leads export's owner-trail reconstruction and
+// History sheet), not one query per lead. Ascending by created_at so a
+// caller can replay each entity's own events oldest-first; group by
+// entityId client-side.
+export async function listAuditLogForEntities(entityType: string, entityIds: string[]) {
+  if (entityIds.length === 0) return [];
+  const result = await pool.query<AuditLogRow>(
+    "SELECT * FROM audit_log WHERE entity_type = $1 AND entity_id = ANY($2) ORDER BY entity_id, created_at ASC",
+    [entityType, entityIds]
+  );
+  return result.rows.map(toPublicEvent);
+}
+
 export async function listAuditLog(page: number, limit: number) {
   const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM audit_log");
   const offset = (page - 1) * limit;

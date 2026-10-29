@@ -11,7 +11,14 @@ import * as supportTicketController from "../../controllers/support-ticket-contr
 import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
-import { bulkImportLeadsSchema, createLeadSchema, listLeadsQuerySchema, shareLeadSchema, updateLeadSchema } from "../../validators/lead-validator";
+import {
+  bulkImportLeadsSchema,
+  createLeadSchema,
+  listLeadsExportQuerySchema,
+  listLeadsQuerySchema,
+  shareLeadSchema,
+  updateLeadSchema,
+} from "../../validators/lead-validator";
 import { logCallDispositionSchema, reassignLeadSchema, sendToFieldSchema } from "../../validators/call-qualification-validator";
 import { convertLeadSchema } from "../../validators/opportunity-validator";
 import { createActivitySchema } from "../../validators/activity-validator";
@@ -54,6 +61,10 @@ router.get("/quick-filter-counts", requirePermission("leads.view"), leadControll
 // check as the main GET / list route, for the same reason (Call Center
 // holds leads.queue_view, not leads.view).
 router.get("/handed-off", requireAnyPermission("leads.view", "leads.queue_view"), leadController.listHandedOff);
+// Registered before GET /:id, same reason /territories, /sources,
+// /quick-filter-counts and /handed-off above all are - otherwise Express
+// would match "export" as a lead id.
+router.get("/export", requirePermission("leads.export"), validateQuery(listLeadsExportQuerySchema), leadController.exportLeads);
 // Call Center holds leads.queue_view, not leads.view (same reasoning as the
 // GET / list route and GET /:id/history above) - EmailComposeDrawer.tsx
 // fetches a lead fresh on its own rather than reusing the queue list's
@@ -81,12 +92,12 @@ router.post(
 
 router.get("/:id/consent", requirePermission("leads.view"), leadController.getConsent);
 // Call Center holds leads.queue_view, not leads.view (see the GET / route's
-// own comment on why those stay separate permissions) - the History button
-// is visible to them on their own queue's leads, so the route has to accept
-// either. listLeadHistory still does its own real isLeadVisibleToUser check
+// own comment on why those stay separate permissions) - the History tab is
+// visible to them on their own queue's leads, so the route has to accept
+// either. getLeadTimeline still does its own real isLeadVisibleToUser check
 // underneath, so this only widens who can attempt the call, never who can
 // actually see another person's lead.
-router.get("/:id/history", requireAnyPermission("leads.view", "leads.queue_view"), leadController.getHistory);
+router.get("/:id/timeline", requireAnyPermission("leads.view", "leads.queue_view"), leadController.getTimeline);
 
 router.post("/:id/call-dispositions", requirePermission("leads.call_log"), validateBody(logCallDispositionSchema), leadController.logCallDisposition);
 router.post("/:id/qualify", requirePermission("leads.qualify"), leadController.qualify);

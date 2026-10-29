@@ -171,11 +171,15 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "leave_types.view",
     "leave_requests.view", "leave_requests.create", "leave_requests.update",
     "comp_off_credits.view",
-    // Its own scoped permission, not the full leads.create - lets Call
-    // Center bulk-import a batch (with the Call Center Executive column
-    // assigning each row directly) without also opening up the main Leads
-    // module's "+ New Lead"/general Import, which stay Admin/Manager only.
-    "leads.bulk_import",
+    // leads.bulk_import was briefly granted here so a Call Center executive
+    // could self-import their own batch - removed by explicit request: bulk
+    // import/export now stay strictly Admin-only. A Call Center executive
+    // can still only add one lead at a time (leads.queue_create above). Any
+    // batch they need now comes in via Admin's own Import, with the Call
+    // Center Executive column assigning each row - and since tier visibility
+    // is now shared across the whole FLC/SLC team (see TIER_TEAMMATE_CLAUSE
+    // in lead-service.ts), everyone on that tier can still work those rows
+    // regardless of which specific person a row was assigned to.
   ],
 };
 

@@ -3,6 +3,7 @@ import { ApiError } from "../utils/ApiError";
 import { recordAuditEvent, listAuditLogForEntity } from "./audit-log-service";
 import { bulkImportRowSchema } from "../validators/lead-validator";
 import { createCustomerFromLead, syncCustomerOwnerFromLead } from "./customer-service";
+import { listActivitiesForLead, listCommentsForActivities } from "./activity-service";
 
 // Rule A (hierarchy-based visibility): a lead is visible to its owner and to
 // everyone directly above the owner in the reporting chain. Walking UP from a
@@ -350,6 +351,7 @@ export async function isLeadVisibleToUser(leadId: string, userId: string): Promi
          l.owner_id IN (SELECT id FROM subtree)
          OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
          ${UNASSIGNED_ADMIN_CLAUSE}
+         ${TIER_TEAMMATE_CLAUSE}
        )`,
     [userId, leadId]
   );
@@ -371,6 +373,7 @@ export async function isLeadInOwnerScope(leadId: string, userId: string): Promis
        AND (
          l.owner_id IN (SELECT id FROM subtree)
          ${UNASSIGNED_ADMIN_CLAUSE}
+         ${TIER_TEAMMATE_CLAUSE}
        )`,
     [userId, leadId]
   );
@@ -437,6 +440,31 @@ async function resolveAutoAssignee(input: CreateLeadInput, creatorId: string): P
 // reached it - SLC is now the last calling tier before Qualified.
 export const FLC_STAGE = "FLC";
 export const SLC_STAGE = "SLC";
+
+// Lead sharing within a calling tier: any active Call Center employee on the
+// SAME sales_team as a lead's current owner can see and work that lead while
+// it's still at that owner's own tier stage - not just the one person it
+// happens to be assigned to. This is what lets a teammate cover someone
+// else's leads on a day they're out, without reassigning ownership (the
+// owner stays recorded as whoever it was originally given to; who actually
+// worked it shows up correctly in the activity log via created_by/
+// assigned_to, which already records the real actor, never the owner).
+// Deliberately keyed off l.status being exactly FLC/SLC (not "owner's role is
+// call_center") - a Qualified lead still owned by the SLC agent who just
+// qualified it (before Send to Field) is NOT covered by this: that handoff
+// window is still single-owner by design, same as today.
+const TIER_TEAMMATE_CLAUSE = `
+  OR (
+    l.status IN ('${FLC_STAGE}', '${SLC_STAGE}')
+    AND EXISTS (
+      SELECT 1 FROM users ru
+      JOIN users ou ON ou.id = l.owner_id
+      WHERE ru.id = $1 AND ru.role = 'call_center'
+        AND ru.sales_team_id IS NOT NULL
+        AND ru.sales_team_id = ou.sales_team_id
+    )
+  )
+`;
 
 // Resolves a calling-tier team's id by its exact sales_teams.name (e.g.
 // "FLC Team") - sales_teams.name has no unique constraint at the schema
@@ -954,7 +982,7 @@ export async function getLeadById(
        -- opposed to merely being able to see it via a lead_shares grant.
        -- See smartflo-service.ts's initiateCallForLead for why that
        -- distinction exists at all.
-       (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE}) AS in_owner_scope
+       (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE} ${TIER_TEAMMATE_CLAUSE}) AS in_owner_scope
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
      LEFT JOIN leads dl ON dl.id = l.duplicate_of_lead_id
@@ -968,7 +996,15 @@ export async function getLeadById(
   return toPublicLead(result.rows[0]);
 }
 
-export async function listLeadsForUser(requestingUserId: string, filters: ListLeadsFilters) {
+// Shared by listLeadsForUser (paginated, for the Leads page) and
+// listLeadsForExport (unpaginated, for the Export button) - one place that
+// decides what a filter means, so "Export" always matches exactly whatever
+// the admin currently has filtered on screen instead of a second, drifting
+// implementation of the same rules.
+export function buildLeadFilterConditions(
+  requestingUserId: string,
+  filters: Omit<ListLeadsFilters, "page" | "limit">
+): { conditions: string[]; params: unknown[] } {
   const conditions: string[] = ["l.is_deleted = false"];
   const params: unknown[] = [requestingUserId];
 
@@ -976,6 +1012,7 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
     l.owner_id IN (SELECT id FROM subtree)
     OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
     ${UNASSIGNED_ADMIN_CLAUSE}
+    ${TIER_TEAMMATE_CLAUSE}
   )`);
 
   if (filters.status) {
@@ -1037,6 +1074,11 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
     conditions.push(`l.owner_id IS NULL`);
   }
 
+  return { conditions, params };
+}
+
+export async function listLeadsForUser(requestingUserId: string, filters: ListLeadsFilters) {
+  const { conditions, params } = buildLeadFilterConditions(requestingUserId, filters);
   const whereClause = conditions.join(" AND ");
 
   // A lightweight companion COUNT using the exact same WHERE/params (minus
@@ -1067,7 +1109,7 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
        NOT EXISTS (
          SELECT 1 FROM consents c WHERE c.lead_id = l.id AND c.captured = true
        ) AS consent_pending,
-       (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE}) AS in_owner_scope
+       (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE} ${TIER_TEAMMATE_CLAUSE}) AS in_owner_scope
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
      LEFT JOIN leads dl ON dl.id = l.duplicate_of_lead_id
@@ -1078,6 +1120,106 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
   );
 
   return { leads: result.rows.map(toPublicLead), total: Number(countResult.rows[0].count) };
+}
+
+export interface ExportLeadRow {
+  id: string;
+  leadNumber: number;
+  fullName: string;
+  phone: string | null;
+  email: string | null;
+  companyName: string | null;
+  category: string | null;
+  status: string;
+  source: string | null;
+  territory: string | null;
+  expectedValue: number | null;
+  ownerId: string | null;
+  ownerName: string | null;
+  ownerRole: string | null;
+  ownerTeamName: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface ExportLeadQueryRow {
+  id: string;
+  lead_number: number;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  company_name: string | null;
+  category: string | null;
+  status: string;
+  source: string | null;
+  inquiry_source: string | null;
+  territory: string | null;
+  expected_value: string | null;
+  owner_id: string | null;
+  owner_name: string | null;
+  owner_role: string | null;
+  owner_team_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Mirrors bulkImportLeads' own MAX_BULK_IMPORT_ROWS precedent (5000) - a
+// clear 422 asking the admin to narrow their filters, rather than silently
+// truncating the file or hanging on an unbounded query/export.
+const MAX_EXPORT_ROWS = 20000;
+
+// Same filter rules as listLeadsForUser (via the shared
+// buildLeadFilterConditions above), but every matching row at once, no
+// pagination - "Export" always matches exactly what's currently filtered on
+// the Leads page. owner_team_name (not selected by the paginated list) is
+// what lets the export's own owner-trail reconstruction (lead-export-service.ts)
+// tell "owner is call_center on FLC Team" apart from "...on SLC Team".
+export async function listLeadsForExport(
+  requestingUserId: string,
+  filters: Omit<ListLeadsFilters, "page" | "limit">
+): Promise<ExportLeadRow[]> {
+  const { conditions, params } = buildLeadFilterConditions(requestingUserId, filters);
+  const whereClause = conditions.join(" AND ");
+
+  const countResult = await pool.query<{ count: string }>(`${SUBTREE_CTE} SELECT COUNT(*) FROM leads l WHERE ${whereClause}`, params);
+  const total = Number(countResult.rows[0].count);
+  if (total > MAX_EXPORT_ROWS) {
+    throw new ApiError(422, `This export would include ${total} leads - narrow your filters to ${MAX_EXPORT_ROWS} or fewer and try again`);
+  }
+
+  const result = await pool.query<ExportLeadQueryRow>(
+    `${SUBTREE_CTE}
+     SELECT l.id, l.lead_number, l.full_name, l.phone, l.email, l.company_name, l.category, l.status,
+       COALESCE(l.source, l.inquiry_source) AS source, l.inquiry_source, l.territory, l.expected_value,
+       l.owner_id, u.name AS owner_name, u.role AS owner_role, st.name AS owner_team_name,
+       l.created_at, l.updated_at
+     FROM leads l
+     LEFT JOIN users u ON u.id = l.owner_id
+     LEFT JOIN sales_teams st ON st.id = u.sales_team_id
+     WHERE ${whereClause}
+     ORDER BY l.lead_number ASC`,
+    params
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    leadNumber: row.lead_number,
+    fullName: row.full_name,
+    phone: row.phone,
+    email: row.email,
+    companyName: row.company_name,
+    category: row.category,
+    status: row.status,
+    source: row.source,
+    territory: row.territory,
+    expectedValue: row.expected_value === null ? null : Number(row.expected_value),
+    ownerId: row.owner_id,
+    ownerName: row.owner_name,
+    ownerRole: row.owner_role,
+    ownerTeamName: row.owner_team_name,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
 }
 
 // Real per-bucket counts for the Leads quick-filter chips (My leads /
@@ -1114,6 +1256,7 @@ export async function getQuickFilterCounts(requestingUserId: string) {
          l.owner_id IN (SELECT id FROM subtree)
          OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
          ${UNASSIGNED_ADMIN_CLAUSE}
+         ${TIER_TEAMMATE_CLAUSE}
        )`,
     [requestingUserId, HIGH_SCORE_THRESHOLD]
   );
@@ -1475,17 +1618,74 @@ export async function listLeadShares(leadId: string, requestingUserId: string) {
   return result.rows;
 }
 
-// Powers the lead detail page's assignment/stage history - every real
-// owner/status/category change, newest first. Read-only, same visibility
-// rule as viewing the lead itself (not owner-scope - anyone who can see
-// this lead can see how it got here), matching listOpportunityHistory's own
-// reasoning.
-export async function listLeadHistory(leadId: string, requestingUserId: string) {
+export interface LeadTimelineEntry {
+  kind: "activity" | "comment" | "audit";
+  id: string;
+  date: string;
+  activity: Awaited<ReturnType<typeof listActivitiesForLead>>[number] | null;
+  comment:
+    | (Awaited<ReturnType<typeof listCommentsForActivities>>[number] & {
+        activityType: string;
+        activitySubject: string | null;
+      })
+    | null;
+  event: Awaited<ReturnType<typeof listAuditLogForEntity>>[number] | null;
+}
+
+// Powers the lead detail page's single "History" tab - every real
+// communication (calls/emails/meetings/site visits/WhatsApp/internal,
+// scheduled or completed), every remark anyone left on one, and every real
+// owner/status/category change, merged into one chronological feed. Read-only,
+// same visibility rule as viewing the lead itself (not owner-scope - anyone
+// who can see this lead can see its full history), matching
+// listOpportunityHistory's/getCustomerTimeline's own reasoning. Replaces the
+// old split Logs tab + History drawer, which each showed a different partial
+// slice of this same story.
+export async function getLeadTimeline(leadId: string, requestingUserId: string): Promise<LeadTimelineEntry[]> {
   const visible = await isLeadVisibleToUser(leadId, requestingUserId);
   if (!visible) {
     throw new ApiError(403, "You do not have access to this lead");
   }
-  return listAuditLogForEntity("lead", leadId);
+
+  const [activities, auditEvents] = await Promise.all([
+    listActivitiesForLead(leadId, requestingUserId),
+    listAuditLogForEntity("lead", leadId),
+  ]);
+  const comments = await listCommentsForActivities(activities.map((a) => a.id));
+  const activityById = new Map(activities.map((a) => [a.id, a]));
+
+  const entries: LeadTimelineEntry[] = [
+    ...activities.map((a) => ({
+      kind: "activity" as const,
+      id: a.id,
+      date: a.status === "completed" ? a.updatedAt : a.createdAt,
+      activity: a,
+      comment: null,
+      event: null,
+    })),
+    ...comments.map((c) => {
+      const parent = activityById.get(c.activityId);
+      return {
+        kind: "comment" as const,
+        id: c.id,
+        date: c.createdAt,
+        activity: null,
+        comment: { ...c, activityType: parent?.type ?? "internal", activitySubject: parent?.subject ?? null },
+        event: null,
+      };
+    }),
+    ...auditEvents.map((e) => ({
+      kind: "audit" as const,
+      id: e.id,
+      date: e.createdAt,
+      activity: null,
+      comment: null,
+      event: e,
+    })),
+  ];
+
+  entries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  return entries;
 }
 
 // skipVisibilityCheck mirrors getLeadById's own escape hatch, for the exact

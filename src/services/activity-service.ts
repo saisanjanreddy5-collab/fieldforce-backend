@@ -29,6 +29,10 @@ interface ActivityRow {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  // Only present on queries that explicitly join it in (listActivitiesForLead,
+  // for the Lead History tab's "who did this" requirement) - undefined
+  // everywhere else, which toPublicActivity below treats the same as null.
+  created_by_name?: string | null;
 }
 
 interface CommentRow {
@@ -37,6 +41,9 @@ interface CommentRow {
   user_id: string | null;
   comment: string;
   created_at: string;
+  // Same deal as ActivityRow.created_by_name above - only joined in by
+  // listCommentsForActivities.
+  user_name?: string | null;
 }
 
 export interface ActivityInput {
@@ -76,6 +83,7 @@ function toPublicActivity(row: ActivityRow) {
     longitude: row.longitude === null ? null : Number(row.longitude),
     externalRefId: row.external_ref_id,
     createdBy: row.created_by,
+    createdByName: row.created_by_name ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -86,6 +94,7 @@ function toPublicComment(row: CommentRow) {
     id: row.id,
     activityId: row.activity_id,
     userId: row.user_id,
+    userName: row.user_name ?? null,
     comment: row.comment,
     createdAt: row.created_at,
   };
@@ -189,8 +198,27 @@ export async function listActivitiesForLead(leadId: string, requestingUserId: st
   }
 
   const result = await pool.query<ActivityRow>(
-    "SELECT * FROM activities WHERE lead_id = $1 ORDER BY created_at DESC",
+    `SELECT a.*, u.name AS created_by_name FROM activities a
+     LEFT JOIN users u ON u.id = a.created_by
+     WHERE a.lead_id = $1 ORDER BY a.created_at DESC`,
     [leadId]
+  );
+  return result.rows.map(toPublicActivity);
+}
+
+// Bulk sibling of listActivitiesForLead - every activity for MANY leads in
+// one query (used by the Leads export's History sheet), not one query per
+// lead. No per-lead visibility check here, same reasoning as
+// listCommentsForActivities below: the caller (lead-export-service.ts)
+// already proved visibility via listLeadsForExport's own filtered query, so
+// these ids are exactly the leads the requesting admin can already export.
+export async function getBulkActivitiesForLeads(leadIds: string[]) {
+  if (leadIds.length === 0) return [];
+  const result = await pool.query<ActivityRow>(
+    `SELECT a.*, u.name AS created_by_name FROM activities a
+     LEFT JOIN users u ON u.id = a.created_by
+     WHERE a.lead_id = ANY($1) ORDER BY a.lead_id, a.created_at DESC`,
+    [leadIds]
   );
   return result.rows.map(toPublicActivity);
 }
@@ -366,6 +394,20 @@ export async function listComments(activityId: string, requestingUserId: string)
     [activityId]
   );
 
+  return result.rows.map(toPublicComment);
+}
+
+// No visibility check here, unlike listComments above - this is an internal
+// helper only ever called from getLeadTimeline, which has already proven the
+// caller can see the parent lead these activity ids belong to.
+export async function listCommentsForActivities(activityIds: string[]) {
+  if (activityIds.length === 0) return [];
+  const result = await pool.query<CommentRow>(
+    `SELECT c.*, u.name AS user_name FROM activity_comments c
+     LEFT JOIN users u ON u.id = c.user_id
+     WHERE c.activity_id = ANY($1) ORDER BY c.created_at ASC`,
+    [activityIds]
+  );
   return result.rows.map(toPublicComment);
 }
 

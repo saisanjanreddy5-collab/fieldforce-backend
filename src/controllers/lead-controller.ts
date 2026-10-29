@@ -3,6 +3,7 @@ import { asyncHandler } from "../utils/asyncHandler";
 import { sendSuccess } from "../utils/response";
 import * as leadService from "../services/lead-service";
 import * as leadCallCenterService from "../services/lead-call-center-service";
+import * as leadExportService from "../services/lead-export-service";
 
 export const create = asyncHandler(async (req: Request, res: Response) => {
   const lead = await leadService.createLead(req.body, req.user!.id, req.ip);
@@ -66,6 +67,26 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, result);
 });
 
+export const exportLeads = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.validatedQuery as unknown as {
+    status?: string;
+    ownerId?: string;
+    zoneId?: string;
+    stateId?: string;
+    districtId?: string;
+    areaId?: string;
+    search?: string;
+    category?: string;
+    source?: string;
+    overdueOnly?: boolean;
+    highScoreOnly?: boolean;
+    consentPending?: boolean;
+    unassignedOnly?: boolean;
+  };
+  const result = await leadExportService.getLeadsExportData(req.user!.id, query);
+  sendSuccess(res, result);
+});
+
 export const getById = asyncHandler(async (req: Request, res: Response) => {
   const lead = await leadService.getLeadById(String(req.params.id), req.user!.id);
   sendSuccess(res, lead);
@@ -101,9 +122,9 @@ export const getConsent = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, consent);
 });
 
-export const getHistory = asyncHandler(async (req: Request, res: Response) => {
-  const history = await leadService.listLeadHistory(String(req.params.id), req.user!.id);
-  sendSuccess(res, history);
+export const getTimeline = asyncHandler(async (req: Request, res: Response) => {
+  const timeline = await leadService.getLeadTimeline(String(req.params.id), req.user!.id);
+  sendSuccess(res, timeline);
 });
 
 export const logCallDisposition = asyncHandler(async (req: Request, res: Response) => {
