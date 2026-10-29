@@ -2238,6 +2238,50 @@ Regards,', 'active', 4)
     // assigned_to/type existed).
     `CREATE INDEX IF NOT EXISTS idx_audit_log_actor_id ON audit_log(actor_id)`,
     `CREATE INDEX IF NOT EXISTS idx_activities_created_by ON activities(created_by)`,
+
+    // Reverses the FLC Executive/SLC Executive split two migrations above -
+    // the client clarified FLC vs SLC is which Sales Team a Call Center
+    // Executive is on, not a separate rank of its own. Back to 3 levels:
+    // Admin, Call Center Executive, Field Sales Executive. Re-creates "Call
+    // Center Executive" by cloning FLC Executive - itself a byte-for-byte
+    // clone of the original "Call Center Executive" row the split made, so
+    // this is lossless - in case this environment already fully migrated off
+    // it (its own guarded delete fired because nobody was left on it).
+    `INSERT INTO levels (
+       name, sort_order, description, headcount_limit, approval_ceiling, security_tier, is_cross_cutting,
+       record_scope, sees_label_override, approval_label_override, can_edit_label,
+       see_credit_fields, see_margin_fields, can_export, can_view_call_recordings, can_see_unmasked_pii
+     )
+     SELECT 'Call Center Executive', 1, l.description, l.headcount_limit, l.approval_ceiling, l.security_tier, l.is_cross_cutting,
+       l.record_scope, l.sees_label_override, l.approval_label_override, l.can_edit_label,
+       l.see_credit_fields, l.see_margin_fields, l.can_export, l.can_view_call_recordings, l.can_see_unmasked_pii
+     FROM levels l
+     WHERE l.name = 'FLC Executive'
+       AND NOT EXISTS (SELECT 1 FROM levels WHERE name = 'Call Center Executive')`,
+    `UPDATE users SET level_id = (SELECT id FROM levels WHERE name = 'Call Center Executive')
+     WHERE level_id IN (SELECT id FROM levels WHERE name IN ('FLC Executive', 'SLC Executive'))`,
+    `UPDATE levels SET sort_order = 1 WHERE name = 'Call Center Executive'`,
+    // Field Sales Executive moves back up to directly below Call Center
+    // Executive, now that the two calling-tier levels are gone again.
+    `UPDATE levels SET sort_order = 2 WHERE name = 'Field Sales Executive'`,
+    `DELETE FROM levels WHERE name = 'FLC Executive'
+       AND NOT EXISTS (SELECT 1 FROM users WHERE level_id = levels.id)`,
+    `DELETE FROM levels WHERE name = 'SLC Executive'
+       AND NOT EXISTS (SELECT 1 FROM users WHERE level_id = levels.id)`,
+
+    // "SKIA Call Center Team" and "TLC Team" were both supposed to be fully
+    // removed already (see the guarded deletes above), but real employees on
+    // production were still assigned to them, which silently blocked both
+    // deletes forever. There's no reliable signal for which of FLC/SLC any
+    // of them should actually be on, so this un-assigns rather than guesses
+    // - whoever shows "Sales team: -" afterward needs a quick manual pick of
+    // FLC or SLC Team, a one-time admin fix rather than a silent guess.
+    `UPDATE users SET sales_team_id = NULL
+     WHERE sales_team_id IN (SELECT id FROM sales_teams WHERE name IN ('SKIA Call Center Team', 'TLC Team'))`,
+    `DELETE FROM sales_teams WHERE name = 'SKIA Call Center Team'
+       AND NOT EXISTS (SELECT 1 FROM users WHERE sales_team_id = sales_teams.id)`,
+    `DELETE FROM sales_teams WHERE name = 'TLC Team'
+       AND NOT EXISTS (SELECT 1 FROM users WHERE sales_team_id = sales_teams.id)`,
   ];
 
   try {
