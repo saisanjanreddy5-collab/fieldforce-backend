@@ -175,3 +175,7 @@ export const listLeadsQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
 });
+
+// Same filters as the Leads page itself, minus pagination - Export always
+// returns every matching row, not one page.
+export const listLeadsExportQuerySchema = listLeadsQuerySchema.omit({ page: true, limit: true });

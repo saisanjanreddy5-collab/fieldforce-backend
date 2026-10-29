@@ -12,7 +12,11 @@
     "test:permission-middleware": "ts-node src/scripts/testPermissionMiddleware.ts",
     "test:conversion-comment-auth": "ts-node src/scripts/testConversionAndCommentAuthorization.ts",
     "test:fofo-consent-visibility": "ts-node src/scripts/testFofoConsentVisibility.ts",
-    "test:tlc-removal": "ts-node src/scripts/testTlcRemoval.ts"
+    "test:tlc-removal": "ts-node src/scripts/testTlcRemoval.ts",
+    "test:tier-team-visibility": "ts-node src/scripts/testTierTeamVisibility.ts",
+    "test:lead-timeline": "ts-node src/scripts/testLeadTimeline.ts",
+    "test:leads-export": "ts-node src/scripts/testLeadsExport.ts",
+    "test:performance-reports": "ts-node src/scripts/testPerformanceReports.ts"
   },
   "keywords": [],
   "author": "",

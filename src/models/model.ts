@@ -2168,6 +2168,76 @@ Regards,', 'active', 4)
     `DELETE FROM pipeline_stages WHERE key = 'TLC'`,
     `DELETE FROM sales_teams WHERE name = 'TLC Team'
        AND NOT EXISTS (SELECT 1 FROM users WHERE sales_team_id = sales_teams.id)`,
+
+    // "SKIA Call Center Team" was seeded before the FLC/SLC tiers existed and
+    // is never referenced by any stage/tier logic - it only ever showed up as
+    // a stray option in the Sales team dropdown. Guarded the same way as the
+    // TLC Team delete above: only removed once nobody is still assigned to it.
+    `DELETE FROM sales_teams WHERE name = 'SKIA Call Center Team'
+       AND NOT EXISTS (SELECT 1 FROM users WHERE sales_team_id = sales_teams.id)`,
+
+    // Bulk import/export is Admin-only now, by explicit request - Call Center
+    // executives go back to single-add only (leads.queue_create). This is a
+    // live grant revoke, not just a DEFAULT_ROLE_PERMISSIONS change, since
+    // role_permissions is the table requirePermission actually reads.
+    `DELETE FROM role_permissions WHERE role = 'call_center' AND permission = 'leads.bulk_import'`,
+
+    // Designation ladder: "Call Center Executive" used to cover every FLC and
+    // SLC employee under one label with no way to tell them apart in Sales
+    // force management > Levels & axes. Splits it into two levels that
+    // mirror the real FLC/SLC tiers, cloning every other setting (security
+    // tier, record scope, export/PII flags, ...) from the level being split
+    // - this is a rename/split, not a new kind of employee, so nothing about
+    // what an FLC/SLC person can see or do should change because of it.
+    `INSERT INTO levels (
+       name, sort_order, description, headcount_limit, approval_ceiling, security_tier, is_cross_cutting,
+       record_scope, sees_label_override, approval_label_override, can_edit_label,
+       see_credit_fields, see_margin_fields, can_export, can_view_call_recordings, can_see_unmasked_pii
+     )
+     SELECT 'FLC Executive', 1, l.description, l.headcount_limit, l.approval_ceiling, l.security_tier, l.is_cross_cutting,
+       l.record_scope, l.sees_label_override, l.approval_label_override, l.can_edit_label,
+       l.see_credit_fields, l.see_margin_fields, l.can_export, l.can_view_call_recordings, l.can_see_unmasked_pii
+     FROM levels l
+     WHERE l.name = 'Call Center Executive'
+       AND NOT EXISTS (SELECT 1 FROM levels WHERE name = 'FLC Executive')`,
+    `INSERT INTO levels (
+       name, sort_order, description, headcount_limit, approval_ceiling, security_tier, is_cross_cutting,
+       record_scope, sees_label_override, approval_label_override, can_edit_label,
+       see_credit_fields, see_margin_fields, can_export, can_view_call_recordings, can_see_unmasked_pii
+     )
+     SELECT 'SLC Executive', 2, l.description, l.headcount_limit, l.approval_ceiling, l.security_tier, l.is_cross_cutting,
+       l.record_scope, l.sees_label_override, l.approval_label_override, l.can_edit_label,
+       l.see_credit_fields, l.see_margin_fields, l.can_export, l.can_view_call_recordings, l.can_see_unmasked_pii
+     FROM levels l
+     WHERE l.name = 'Call Center Executive'
+       AND NOT EXISTS (SELECT 1 FROM levels WHERE name = 'SLC Executive')`,
+    // Move every existing Call Center Executive over to whichever new level
+    // matches their real sales_team_id - the one real signal for which tier
+    // they're actually on (see FLC_STAGE/SLC_STAGE in lead-service.ts).
+    `UPDATE users SET level_id = (SELECT id FROM levels WHERE name = 'FLC Executive')
+     WHERE level_id = (SELECT id FROM levels WHERE name = 'Call Center Executive')
+       AND sales_team_id = (SELECT id FROM sales_teams WHERE name = 'FLC Team')`,
+    `UPDATE users SET level_id = (SELECT id FROM levels WHERE name = 'SLC Executive')
+     WHERE level_id = (SELECT id FROM levels WHERE name = 'Call Center Executive')
+       AND sales_team_id = (SELECT id FROM sales_teams WHERE name = 'SLC Team')`,
+    // Field Sales Executive moves below both calling tiers in the ladder -
+    // Admin, FLC Executive, SLC Executive, Field Sales Executive, top to
+    // bottom, by explicit request.
+    `UPDATE levels SET sort_order = 3 WHERE name = 'Field Sales Executive'`,
+    // Only removed once every Call Center Executive has been moved off it
+    // above - same guarded-delete pattern as the TLC Team/SKIA Call Center
+    // Team cleanups above (a local-only test fixture on an already-removed
+    // TLC Team, with nowhere to move to, is expected to keep this around
+    // locally - see testTlcRemoval.ts's own fixtures).
+    `DELETE FROM levels WHERE name = 'Call Center Executive'
+       AND NOT EXISTS (SELECT 1 FROM users WHERE level_id = levels.id)`,
+    // Support the Leads export's owner-trail reconstruction and the new
+    // Call Center/Field Sales performance reports, both of which now filter/
+    // group audit_log by actor_id and activities by created_by directly -
+    // neither had an index before (only entity/created_at and lead_id/
+    // assigned_to/type existed).
+    `CREATE INDEX IF NOT EXISTS idx_audit_log_actor_id ON audit_log(actor_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_activities_created_by ON activities(created_by)`,
   ];
 
   try {
