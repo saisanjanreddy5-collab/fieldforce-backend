@@ -17,7 +17,8 @@
     "test:lead-timeline": "ts-node src/scripts/testLeadTimeline.ts",
     "test:leads-export": "ts-node src/scripts/testLeadsExport.ts",
     "test:performance-reports": "ts-node src/scripts/testPerformanceReports.ts",
-    "test:mail-sync-permanent-error": "ts-node src/scripts/testMailSyncPermanentError.ts"
+    "test:mail-sync-permanent-error": "ts-node src/scripts/testMailSyncPermanentError.ts",
+    "test:designation-ladder-reversal": "ts-node src/scripts/testDesignationLadderReversal.ts"
   },
   "keywords": [],
   "author": "",
