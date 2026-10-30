@@ -447,17 +447,19 @@ export async function createTables(): Promise<void> {
 
     // Agent: blocked today from users/targets/incentive_plans/commission_rules
     // (all MANAGER_AND_ABOVE or ADMIN_ONLY) and from write actions on offices/
-    // levels/sales_teams (MANAGER_AND_ABOVE) - view-only on those three. Full
-    // leads/opportunities/activities/attendance/dashboard access, matching
-    // the same "no route gate today" reasoning as Manager above.
+    // levels/sales_teams (MANAGER_AND_ABOVE) - view-only on sales_teams only.
+    // offices.view/levels.view are deliberately left off this role: those two
+    // are the only permissions that make nav-config.tsx's "Sales force
+    // management" item (and its Offices/Levels & axes tabs) appear at all -
+    // that module is admin/manager territory, not Field Sales Executive's.
+    // Full leads/opportunities/activities/attendance/dashboard access,
+    // matching the same "no route gate today" reasoning as Manager above.
     `INSERT INTO role_permissions (role, permission) VALUES
       ('agent','leads.view'), ('agent','leads.create'), ('agent','leads.update'), ('agent','leads.delete'), ('agent','leads.share'),
       ('agent','opportunities.view'), ('agent','opportunities.create'), ('agent','opportunities.update'), ('agent','opportunities.delete'),
       ('agent','activities.view'), ('agent','activities.create'), ('agent','activities.update'), ('agent','activities.delete'),
       ('agent','attendance.view_own'), ('agent','attendance.view_team'),
       ('agent','dashboard.view'),
-      ('agent','offices.view'),
-      ('agent','levels.view'),
       ('agent','sales_teams.view')
     ON CONFLICT (role, permission) DO NOTHING`,
 
@@ -2282,6 +2284,20 @@ Regards,', 'active', 4)
        AND NOT EXISTS (SELECT 1 FROM users WHERE sales_team_id = sales_teams.id)`,
     `DELETE FROM sales_teams WHERE name = 'TLC Team'
        AND NOT EXISTS (SELECT 1 FROM users WHERE sales_team_id = sales_teams.id)`,
+
+    // 'agent' (Field Sales Executive) was wrongly seeded with offices.view
+    // and levels.view - the only two reasons nav-config.tsx's own
+    // "Sales force management" item (and its "Offices"/"Levels & axes" tabs)
+    // ever showed up for that role. That module is admin/manager territory
+    // only; field employees have no business opening it. Neither permission
+    // is used anywhere else in the app (grepped: only Sales Force
+    // Management's own components reference them), so revoking both from
+    // 'agent' is a clean, side-effect-free fix - not seeded for 'agent' in
+    // the INSERTs above, so these DELETEs are the retroactive cleanup for a
+    // database that already has the row, same pattern as the call_center.view
+    // fix above. Harmless no-op everywhere this was never seeded.
+    `DELETE FROM role_permissions WHERE role = 'agent' AND permission = 'offices.view'`,
+    `DELETE FROM role_permissions WHERE role = 'agent' AND permission = 'levels.view'`,
   ];
 
   try {
