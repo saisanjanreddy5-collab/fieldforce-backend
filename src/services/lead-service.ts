@@ -1140,6 +1140,9 @@ export interface ExportLeadRow {
   ownerTeamName: string | null;
   createdAt: string;
   updatedAt: string;
+  internalNotes: string | null;
+  rmRemark: string | null;
+  lgRemark: string | null;
 }
 
 interface ExportLeadQueryRow {
@@ -1161,6 +1164,9 @@ interface ExportLeadQueryRow {
   owner_team_name: string | null;
   created_at: string;
   updated_at: string;
+  internal_notes: string | null;
+  rm_remark: string | null;
+  lg_remark: string | null;
 }
 
 // Mirrors bulkImportLeads' own MAX_BULK_IMPORT_ROWS precedent (5000) - a
@@ -1192,7 +1198,7 @@ export async function listLeadsForExport(
      SELECT l.id, l.lead_number, l.full_name, l.phone, l.email, l.company_name, l.category, l.status,
        COALESCE(l.source, l.inquiry_source) AS source, l.inquiry_source, l.territory, l.expected_value,
        l.owner_id, u.name AS owner_name, u.role AS owner_role, st.name AS owner_team_name,
-       l.created_at, l.updated_at
+       l.created_at, l.updated_at, l.internal_notes, l.rm_remark, l.lg_remark
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
      LEFT JOIN sales_teams st ON st.id = u.sales_team_id
@@ -1219,6 +1225,9 @@ export async function listLeadsForExport(
     ownerTeamName: row.owner_team_name,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    internalNotes: row.internal_notes,
+    rmRemark: row.rm_remark,
+    lgRemark: row.lg_remark,
   }));
 }
 
@@ -1288,13 +1297,32 @@ export async function updateLead(
   // runs because the generic dynamic-SET approach here never reads the old
   // row otherwise (unlike updateUser's manager_id change, which already does
   // this same before/after read for manager_change_log).
-  const tracksChange = updates.category !== undefined || updates.ownerId !== undefined || updates.status !== undefined;
-  let before: { category: string | null; status: string; owner_id: string | null; full_name: string } | null = null;
+  const tracksChange =
+    updates.category !== undefined ||
+    updates.ownerId !== undefined ||
+    updates.status !== undefined ||
+    updates.internalNotes !== undefined ||
+    updates.rmRemark !== undefined ||
+    updates.lgRemark !== undefined;
+  let before: {
+    category: string | null;
+    status: string;
+    owner_id: string | null;
+    full_name: string;
+    internal_notes: string | null;
+    rm_remark: string | null;
+    lg_remark: string | null;
+  } | null = null;
   if (tracksChange) {
-    const beforeResult = await pool.query<{ category: string | null; status: string; owner_id: string | null; full_name: string }>(
-      "SELECT category, status, owner_id, full_name FROM leads WHERE id = $1",
-      [leadId]
-    );
+    const beforeResult = await pool.query<{
+      category: string | null;
+      status: string;
+      owner_id: string | null;
+      full_name: string;
+      internal_notes: string | null;
+      rm_remark: string | null;
+      lg_remark: string | null;
+    }>("SELECT category, status, owner_id, full_name, internal_notes, rm_remark, lg_remark FROM leads WHERE id = $1", [leadId]);
     before = beforeResult.rows[0] ?? null;
   }
 
@@ -1442,6 +1470,34 @@ export async function updateLead(
         ipAddress,
       });
     }
+
+    // Internal Notes/RM Remark/LG Remark (LeadFormDrawer's "Visible only to
+    // your team" section) are plain mutable text with no change-log of their
+    // own, unlike everything else in the lead's History - this is what gives
+    // them one going forward, each field its own event so the History tab
+    // can show exactly which note changed, by whom, and when.
+    const noteFields: { key: "internalNotes" | "rmRemark" | "lgRemark"; column: "internal_notes" | "rm_remark" | "lg_remark"; action: string; label: string }[] = [
+      { key: "internalNotes", column: "internal_notes", action: "internal_notes_updated", label: "Internal notes" },
+      { key: "rmRemark", column: "rm_remark", action: "rm_remark_updated", label: "RM remark" },
+      { key: "lgRemark", column: "lg_remark", action: "lg_remark_updated", label: "LG remark" },
+    ];
+    for (const field of noteFields) {
+      if (updates[field.key] !== undefined && updates[field.key] !== before[field.column]) {
+        await recordAuditEvent({
+          entityType: "lead",
+          entityId: leadId,
+          entityLabel: after.full_name,
+          action: field.action,
+          summary: `${field.label} updated - ${after.full_name}`,
+          oldValue: before[field.column],
+          newValue: after[field.column],
+          actorId: requestingUserId,
+          actorName,
+          ipAddress,
+        });
+      }
+    }
+
     const statusChanged = updates.status !== undefined && updates.status !== before.status;
     const ownerChanged = updates.ownerId !== undefined && updates.ownerId !== before.owner_id;
 
