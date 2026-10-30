@@ -18,7 +18,9 @@
     "test:leads-export": "ts-node src/scripts/testLeadsExport.ts",
     "test:performance-reports": "ts-node src/scripts/testPerformanceReports.ts",
     "test:mail-sync-permanent-error": "ts-node src/scripts/testMailSyncPermanentError.ts",
-    "test:designation-ladder-reversal": "ts-node src/scripts/testDesignationLadderReversal.ts"
+    "test:designation-ladder-reversal": "ts-node src/scripts/testDesignationLadderReversal.ts",
+    "test:bulk-import-permission-fix": "ts-node src/scripts/testBulkImportPermissionFix.ts",
+    "test:internal-notes-history": "ts-node src/scripts/testInternalNotesHistory.ts"
   },
   "keywords": [],
   "author": "",

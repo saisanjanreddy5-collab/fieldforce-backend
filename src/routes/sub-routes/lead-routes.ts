@@ -37,13 +37,15 @@ router.use(requireAuth);
 // from a role never breaks their own queue, and vice versa.
 router.get("/", requireAnyPermission("leads.view", "leads.queue_view"), validateQuery(listLeadsQuerySchema), leadController.list);
 router.post("/", requirePermission("leads.create"), validateBody(createLeadSchema), leadController.create);
-// leads.bulk_import is Call Center's own scoped version of this same action
-// (executive-matched import into their own queue) - leads.create (Admin/
-// Manager) still works unchanged, this just widens who else can reach it
-// without touching the full Leads module's other leads.create-gated routes.
+// leads.bulk_import alone, not requireAnyPermission with leads.create - Admin
+// and Manager are already granted leads.bulk_import directly (see model.ts),
+// so accepting plain leads.create here too only ever had one real effect:
+// Agent also holds leads.create (for their own single-lead "create own
+// leads" right), which accidentally let Agent reach bulk import as well -
+// Export/Import is Admin-only by explicit requirement, Agent excluded.
 router.post(
   "/bulk-import",
-  requireAnyPermission("leads.create", "leads.bulk_import"),
+  requirePermission("leads.bulk_import"),
   validateBody(bulkImportLeadsSchema),
   leadController.bulkImport
 );
