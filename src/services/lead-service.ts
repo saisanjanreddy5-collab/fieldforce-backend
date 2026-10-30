@@ -466,6 +466,22 @@ const TIER_TEAMMATE_CLAUSE = `
   )
 `;
 
+// A Field Sales Executive's own Leads list is a curated "ready to work"
+// view, not Call Center's raw queue - a lead still sitting at New/FLC/SLC
+// (never called yet, or still mid-qualification) stays out of it until it
+// actually reaches Qualified or any stage beyond. The one exception is a
+// lead the field rep added themselves via their own "New lead" button
+// (starts at 'New', owned by its own creator) - hiding someone's own
+// just-added lead the instant they create it would be a confusing
+// regression, so a self-created lead always stays visible regardless of
+// stage. A no-op for every other role: admin/manager/call_center keep
+// seeing every stage, since working the raw stages is Call Center's job.
+const AGENT_WORKED_STAGE_CLAUSE = `(
+  NOT EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'agent')
+  OR l.created_by = $1
+  OR l.status NOT IN ('New', '${FLC_STAGE}', '${SLC_STAGE}')
+)`;
+
 // Resolves a calling-tier team's id by its exact sales_teams.name (e.g.
 // "FLC Team") - sales_teams.name has no unique constraint at the schema
 // level, so this takes the first match; the three team rows are seeded
@@ -1014,6 +1030,7 @@ export function buildLeadFilterConditions(
     ${UNASSIGNED_ADMIN_CLAUSE}
     ${TIER_TEAMMATE_CLAUSE}
   )`);
+  conditions.push(AGENT_WORKED_STAGE_CLAUSE);
 
   if (filters.status) {
     params.push(filters.status);
@@ -1266,7 +1283,8 @@ export async function getQuickFilterCounts(requestingUserId: string) {
          OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
          ${UNASSIGNED_ADMIN_CLAUSE}
          ${TIER_TEAMMATE_CLAUSE}
-       )`,
+       )
+       AND ${AGENT_WORKED_STAGE_CLAUSE}`,
     [requestingUserId, HIGH_SCORE_THRESHOLD]
   );
 

@@ -20,7 +20,8 @@
     "test:mail-sync-permanent-error": "ts-node src/scripts/testMailSyncPermanentError.ts",
     "test:designation-ladder-reversal": "ts-node src/scripts/testDesignationLadderReversal.ts",
     "test:bulk-import-permission-fix": "ts-node src/scripts/testBulkImportPermissionFix.ts",
-    "test:internal-notes-history": "ts-node src/scripts/testInternalNotesHistory.ts"
+    "test:internal-notes-history": "ts-node src/scripts/testInternalNotesHistory.ts",
+    "test:field-sales-leads-filter": "ts-node src/scripts/testFieldSalesLeadsFilter.ts"
   },
   "keywords": [],
   "author": "",
