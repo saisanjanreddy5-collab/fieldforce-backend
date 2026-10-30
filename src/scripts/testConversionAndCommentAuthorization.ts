@@ -50,6 +50,9 @@ async function findOrCreateUser(spec: SeedUserSpec, managerId: string | null): P
     password: "Password123",
     role: spec.role,
     managerId: managerId ?? undefined,
+    // A field employee (role AGENT) can't be registered without at least
+    // one serviceable pincode - see auth-service.ts's registerUser.
+    pincodes: spec.role === ROLES.AGENT ? ["500001"] : undefined,
   });
   return user.id;
 }
