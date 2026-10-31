@@ -64,20 +64,20 @@ export interface ListApprovalBandsFilters {
 }
 
 export async function listApprovalBands(filters: ListApprovalBandsFilters) {
-  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM approval_bands");
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM approval_bands WHERE is_deleted = false");
 
   const limit = filters.limit;
   const offset = (filters.page - 1) * filters.limit;
 
   const result = await pool.query<ApprovalBandRow>(
-    "SELECT * FROM approval_bands ORDER BY request_type ASC, sort_order ASC, range_from ASC LIMIT $1 OFFSET $2",
+    "SELECT * FROM approval_bands WHERE is_deleted = false ORDER BY request_type ASC, sort_order ASC, range_from ASC LIMIT $1 OFFSET $2",
     [limit, offset]
   );
   return { approvalBands: result.rows.map(toPublicBand), total: Number(countResult.rows[0].count) };
 }
 
 async function getBandById(id: string) {
-  const result = await pool.query<ApprovalBandRow>("SELECT * FROM approval_bands WHERE id = $1", [id]);
+  const result = await pool.query<ApprovalBandRow>("SELECT * FROM approval_bands WHERE id = $1 AND is_deleted = false", [id]);
   if (result.rows.length === 0) {
     throw new ApiError(404, "Approval band not found");
   }
@@ -153,8 +153,10 @@ export async function updateApprovalBand(id: string, updates: UpdateApprovalBand
   return getBandById(id);
 }
 
+// Archives, never permanently deletes - "data is king" - same is_deleted
+// convention leads/opportunities already use.
 export async function deleteApprovalBand(id: string): Promise<void> {
-  const result = await pool.query("DELETE FROM approval_bands WHERE id = $1", [id]);
+  const result = await pool.query("UPDATE approval_bands SET is_deleted = true WHERE id = $1 AND is_deleted = false", [id]);
   if (result.rowCount === 0) {
     throw new ApiError(404, "Approval band not found");
   }

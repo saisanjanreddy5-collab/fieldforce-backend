@@ -107,6 +107,7 @@ export async function isActivityVisibleToUser(activityId: string, userId: string
      LEFT JOIN opportunities o ON o.id = a.opportunity_id
      JOIN leads l ON l.id = COALESCE(a.lead_id, o.lead_id)
      WHERE a.id = $2
+       AND a.is_deleted = false
        AND l.is_deleted = false
        AND (
          l.owner_id IN (SELECT id FROM subtree)
@@ -129,6 +130,7 @@ export async function isActivityInOwnerScope(activityId: string, userId: string)
      LEFT JOIN opportunities o ON o.id = a.opportunity_id
      JOIN leads l ON l.id = COALESCE(a.lead_id, o.lead_id)
      WHERE a.id = $2
+       AND a.is_deleted = false
        AND l.is_deleted = false
        AND l.owner_id IN (SELECT id FROM subtree)`,
     [userId, activityId]
@@ -200,7 +202,7 @@ export async function listActivitiesForLead(leadId: string, requestingUserId: st
   const result = await pool.query<ActivityRow>(
     `SELECT a.*, u.name AS created_by_name FROM activities a
      LEFT JOIN users u ON u.id = a.created_by
-     WHERE a.lead_id = $1 ORDER BY a.created_at DESC`,
+     WHERE a.lead_id = $1 AND a.is_deleted = false ORDER BY a.created_at DESC`,
     [leadId]
   );
   return result.rows.map(toPublicActivity);
@@ -217,7 +219,7 @@ export async function getBulkActivitiesForLeads(leadIds: string[]) {
   const result = await pool.query<ActivityRow>(
     `SELECT a.*, u.name AS created_by_name FROM activities a
      LEFT JOIN users u ON u.id = a.created_by
-     WHERE a.lead_id = ANY($1) ORDER BY a.lead_id, a.created_at DESC`,
+     WHERE a.lead_id = ANY($1) AND a.is_deleted = false ORDER BY a.lead_id, a.created_at DESC`,
     [leadIds]
   );
   return result.rows.map(toPublicActivity);
@@ -230,14 +232,14 @@ export async function listActivitiesForOpportunity(opportunityId: string, reques
   }
 
   const result = await pool.query<ActivityRow>(
-    "SELECT * FROM activities WHERE opportunity_id = $1 ORDER BY created_at DESC",
+    "SELECT * FROM activities WHERE opportunity_id = $1 AND is_deleted = false ORDER BY created_at DESC",
     [opportunityId]
   );
   return result.rows.map(toPublicActivity);
 }
 
 export async function listActivitiesForUser(requestingUserId: string, filters: ListActivitiesFilters) {
-  const conditions: string[] = ["l.is_deleted = false"];
+  const conditions: string[] = ["l.is_deleted = false", "a.is_deleted = false"];
   const params: unknown[] = [requestingUserId];
 
   conditions.push(`(
@@ -288,7 +290,7 @@ export async function getActivityById(id: string, requestingUserId: string) {
     throw new ApiError(403, "You do not have access to this activity");
   }
 
-  const result = await pool.query<ActivityRow>("SELECT * FROM activities WHERE id = $1", [id]);
+  const result = await pool.query<ActivityRow>("SELECT * FROM activities WHERE id = $1 AND is_deleted = false", [id]);
   if (result.rows.length === 0) {
     throw new ApiError(404, "Activity not found");
   }
@@ -355,13 +357,16 @@ export async function mergeActivityDetailsByExternalRefId(
   return (result.rowCount ?? 0) > 0;
 }
 
+// Archives, never permanently deletes - "data is king" - same is_deleted
+// convention leads/opportunities already use. The row (and its history)
+// stays in the database, just excluded from every list/get query above.
 export async function deleteActivity(id: string, requestingUserId: string): Promise<void> {
   const inScope = await isActivityInOwnerScope(id, requestingUserId);
   if (!inScope) {
     throw new ApiError(403, "You do not have access to this activity");
   }
 
-  await pool.query("DELETE FROM activities WHERE id = $1", [id]);
+  await pool.query("UPDATE activities SET is_deleted = true WHERE id = $1 AND is_deleted = false", [id]);
 }
 
 // Intentionally uses the broad view scope, not isActivityInOwnerScope.
@@ -501,7 +506,7 @@ async function getCalendarStats(userId: string) {
        count(DISTINCT date_trunc('day', a.due_date AT TIME ZONE 'Asia/Kolkata'))
          FILTER (WHERE a.type = 'site_visit' AND a.due_date >= b.week_start AND a.due_date < b.week_end) AS field_days_this_week
      FROM bounds b
-     LEFT JOIN activities a ON a.assigned_to = $1
+     LEFT JOIN activities a ON a.assigned_to = $1 AND a.is_deleted = false
      GROUP BY b.week_start, b.week_end, b.day_start, b.day_end`,
     [userId]
   );
@@ -529,7 +534,7 @@ async function getCalendarDayTags(userId: string, from: string, to: string): Pro
   const activityDays = await pool.query<{ day: string; has_site_visit: boolean }>(
     `SELECT date_trunc('day', due_date AT TIME ZONE 'Asia/Kolkata')::date AS day, bool_or(type = 'site_visit') AS has_site_visit
      FROM activities
-     WHERE assigned_to = $1 AND due_date >= $2::date AND due_date < ($3::date + interval '1 day')
+     WHERE assigned_to = $1 AND is_deleted = false AND due_date >= $2::date AND due_date < ($3::date + interval '1 day')
      GROUP BY 1`,
     [userId, from, to]
   );
@@ -586,7 +591,7 @@ export async function getCalendarView(
     ]),
     pool.query<ActivityRow>(
       `SELECT * FROM activities
-       WHERE assigned_to = $1 AND due_date >= $2::date AND due_date < ($3::date + interval '1 day')
+       WHERE assigned_to = $1 AND is_deleted = false AND due_date >= $2::date AND due_date < ($3::date + interval '1 day')
        ORDER BY due_date ASC`,
       [viewingUserId, from, to]
     ),

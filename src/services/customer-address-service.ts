@@ -42,7 +42,7 @@ async function assertInScope(customerId: string, requestingUserId: string): Prom
 export async function listAddresses(customerId: string, requestingUserId: string) {
   await assertInScope(customerId, requestingUserId);
   const result = await pool.query<CustomerAddressRow>(
-    "SELECT * FROM customer_addresses WHERE customer_id = $1 ORDER BY type ASC, created_at ASC",
+    "SELECT * FROM customer_addresses WHERE customer_id = $1 AND is_deleted = false ORDER BY type ASC, created_at ASC",
     [customerId]
   );
   return result.rows.map(toPublicAddress);
@@ -80,7 +80,10 @@ export async function createAddress(customerId: string, input: AddressInput, req
 }
 
 async function getAddressOrThrow(addressId: string): Promise<CustomerAddressRow> {
-  const result = await pool.query<CustomerAddressRow>("SELECT * FROM customer_addresses WHERE id = $1", [addressId]);
+  const result = await pool.query<CustomerAddressRow>(
+    "SELECT * FROM customer_addresses WHERE id = $1 AND is_deleted = false",
+    [addressId]
+  );
   if (result.rows.length === 0) {
     throw new ApiError(404, "Address not found");
   }
@@ -122,5 +125,7 @@ export async function updateAddress(addressId: string, input: Partial<AddressInp
 export async function deleteAddress(addressId: string, requestingUserId: string): Promise<void> {
   const existing = await getAddressOrThrow(addressId);
   await assertInScope(existing.customer_id, requestingUserId);
-  await pool.query("DELETE FROM customer_addresses WHERE id = $1", [addressId]);
+  // Soft delete - same is_deleted convention as leads/opportunities (see
+  // lead-service.ts's deleteLead).
+  await pool.query("UPDATE customer_addresses SET is_deleted = true WHERE id = $1", [addressId]);
 }

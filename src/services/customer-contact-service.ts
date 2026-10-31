@@ -38,7 +38,7 @@ async function assertInScope(customerId: string, requestingUserId: string): Prom
 export async function listContacts(customerId: string, requestingUserId: string) {
   await assertInScope(customerId, requestingUserId);
   const result = await pool.query<CustomerContactRow>(
-    "SELECT * FROM customer_contacts WHERE customer_id = $1 ORDER BY is_primary DESC, created_at ASC",
+    "SELECT * FROM customer_contacts WHERE customer_id = $1 AND is_deleted = false ORDER BY is_primary DESC, created_at ASC",
     [customerId]
   );
   return result.rows.map(toPublicContact);
@@ -60,7 +60,7 @@ export async function createContact(customerId: string, input: ContactInput, req
   // would enforce, just applied here so the API itself can't be used to
   // violate it either.
   if (input.isPrimary) {
-    await pool.query("UPDATE customer_contacts SET is_primary = false WHERE customer_id = $1", [customerId]);
+    await pool.query("UPDATE customer_contacts SET is_primary = false WHERE customer_id = $1 AND is_deleted = false", [customerId]);
   }
 
   const result = await pool.query<CustomerContactRow>(
@@ -73,7 +73,10 @@ export async function createContact(customerId: string, input: ContactInput, req
 }
 
 async function getContactOrThrow(contactId: string): Promise<CustomerContactRow> {
-  const result = await pool.query<CustomerContactRow>("SELECT * FROM customer_contacts WHERE id = $1", [contactId]);
+  const result = await pool.query<CustomerContactRow>(
+    "SELECT * FROM customer_contacts WHERE id = $1 AND is_deleted = false",
+    [contactId]
+  );
   if (result.rows.length === 0) {
     throw new ApiError(404, "Contact not found");
   }
@@ -85,7 +88,7 @@ export async function updateContact(contactId: string, input: Partial<ContactInp
   await assertInScope(existing.customer_id, requestingUserId);
 
   if (input.isPrimary) {
-    await pool.query("UPDATE customer_contacts SET is_primary = false WHERE customer_id = $1 AND id <> $2", [
+    await pool.query("UPDATE customer_contacts SET is_primary = false WHERE customer_id = $1 AND id <> $2 AND is_deleted = false", [
       existing.customer_id,
       contactId,
     ]);
@@ -120,5 +123,7 @@ export async function updateContact(contactId: string, input: Partial<ContactInp
 export async function deleteContact(contactId: string, requestingUserId: string): Promise<void> {
   const existing = await getContactOrThrow(contactId);
   await assertInScope(existing.customer_id, requestingUserId);
-  await pool.query("DELETE FROM customer_contacts WHERE id = $1", [contactId]);
+  // Soft delete - same is_deleted convention as leads/opportunities (see
+  // lead-service.ts's deleteLead).
+  await pool.query("UPDATE customer_contacts SET is_deleted = true WHERE id = $1", [contactId]);
 }

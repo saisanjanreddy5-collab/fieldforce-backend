@@ -21,12 +21,14 @@ const SUBTREE_CTE = `
   )
 `;
 
-// Mirrors lead-service.ts's UNASSIGNED_ADMIN_CLAUSE exactly: a customer
-// whose owner_id is null (the originating lead had no owner at conversion
-// time) would otherwise be invisible to everyone, since nobody's subtree
-// contains NULL - admin is the deliberate, narrow exception.
+// Mirrors lead-service.ts's UNASSIGNED_ADMIN_CLAUSE exactly: admin is a
+// global role, not a node in the reporting chain, so it gets an
+// unconditional bypass here rather than being limited to its own subtree
+// (which would otherwise leave one admin unable to see another admin's
+// branch's customers, including unowned ones left behind by a no-owner
+// lead at conversion time).
 const UNASSIGNED_ADMIN_CLAUSE = `
-  OR (c.owner_id IS NULL AND EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin'))
+  OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin')
 `;
 
 interface CustomerRow {

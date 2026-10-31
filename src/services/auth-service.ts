@@ -19,7 +19,6 @@ interface UserRow {
   designation: string | null;
   manager_id: string | null;
   dotted_line_manager_id: string | null;
-  sales_team_id: string | null;
   zone_id: string | null;
   state_id: string | null;
   district_id: string | null;
@@ -37,12 +36,16 @@ interface UserRow {
   operation_type: string | null;
   is_active: boolean;
   created_at: string;
-  // Only present on the joined query getUserById runs (for /auth/me) -
-  // every other caller here (register/login/refresh) selects plain
-  // `users` rows, so these come back undefined for them and toPublicUser
-  // reports null, which is accurate: those call sites never looked it up.
+  // Only present on the joined query getUserById runs (for /auth/me, which
+  // login also delegates to - see loginUser's own comment on why) - every
+  // other caller here (register/refresh) selects plain `users` rows, so
+  // these come back undefined for them and toPublicUser reports null/[],
+  // which is accurate: those call sites never looked it up.
   manager_name?: string | null;
-  sales_team_name?: string | null;
+  // A Call Center Executive can now be staffed on more than one team at
+  // once (user_sales_teams) - always an array when present, never the old
+  // single sales_team_id column's name.
+  sales_team_names?: string[] | null;
 }
 
 export interface RegisterInput {
@@ -54,24 +57,16 @@ export interface RegisterInput {
   // with no Level. The validator's refine() guarantees at least one of the
   // two is present by the time this runs.
   role?: Role;
-  designation?: string;
   managerId?: string;
-  dottedLineManagerId?: string;
-  salesTeamId?: string;
-  zoneId?: string;
-  stateId?: string;
+  salesTeamIds?: string[];
   districtId?: string;
   areaId?: string;
   smartfloAgentNumber?: string;
   mobile?: string;
   territory?: string;
   employeeCode?: string;
-  dateOfJoining?: string;
   status?: string;
   levelId?: string;
-  officeId?: string;
-  divisionChannelId?: string;
-  customerCategoryId?: string;
   operationType?: "COCO" | "FOFO" | "Both";
   pincodes?: string[];
 }
@@ -85,7 +80,7 @@ function toPublicUser(row: UserRow) {
     designation: row.designation,
     managerId: row.manager_id,
     dottedLineManagerId: row.dotted_line_manager_id,
-    salesTeamId: row.sales_team_id,
+    salesTeamNames: row.sales_team_names ?? [],
     zoneId: row.zone_id,
     stateId: row.state_id,
     districtId: row.district_id,
@@ -103,7 +98,6 @@ function toPublicUser(row: UserRow) {
     operationType: row.operation_type,
     isActive: row.is_active,
     managerName: row.manager_name ?? null,
-    salesTeamName: row.sales_team_name ?? null,
   };
 }
 
@@ -187,34 +181,25 @@ export async function registerUser(input: RegisterInput) {
 
   const result = await pool.query<UserRow>(
     `INSERT INTO users (
-       name, email, password_hash, role, designation, manager_id, dotted_line_manager_id, sales_team_id, zone_id, state_id, district_id, area_id,
-       smartflo_agent_number, mobile, territory, employee_code, date_of_joining, status, level_id, office_id, division_channel_id, customer_category_id, operation_type
+       name, email, password_hash, role, manager_id, district_id, area_id,
+       smartflo_agent_number, mobile, territory, employee_code, status, level_id, operation_type
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, COALESCE($18, 'active'), $19, $20, $21, $22, $23)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12, 'active'), $13, $14)
      RETURNING *`,
     [
       input.name,
       input.email,
       passwordHash,
       role,
-      input.designation ?? null,
       input.managerId ?? null,
-      input.dottedLineManagerId ?? null,
-      input.salesTeamId ?? null,
-      input.zoneId ?? null,
-      input.stateId ?? null,
       input.districtId ?? null,
       input.areaId ?? null,
       input.smartfloAgentNumber ?? null,
       input.mobile ?? null,
       input.territory ?? null,
       employeeCode,
-      input.dateOfJoining ?? null,
       input.status ?? null,
       input.levelId ?? null,
-      input.officeId ?? null,
-      input.divisionChannelId ?? null,
-      input.customerCategoryId ?? null,
       input.operationType ?? null,
     ]
   );
@@ -225,6 +210,15 @@ export async function registerUser(input: RegisterInput) {
        SELECT $1, * FROM unnest($2::varchar[])
        ON CONFLICT (user_id, pincode) DO NOTHING`,
       [result.rows[0].id, input.pincodes]
+    );
+  }
+
+  if (input.salesTeamIds && input.salesTeamIds.length > 0) {
+    await pool.query(
+      `INSERT INTO user_sales_teams (user_id, sales_team_id)
+       SELECT $1, * FROM unnest($2::uuid[])
+       ON CONFLICT (user_id, sales_team_id) DO NOTHING`,
+      [result.rows[0].id, input.salesTeamIds]
     );
   }
 
@@ -373,10 +367,15 @@ export async function adminResetPassword(
 
 export async function getUserById(id: string) {
   const result = await pool.query<UserRow>(
-    `SELECT u.*, m.name AS manager_name, st.name AS sales_team_name
+    `SELECT u.*, m.name AS manager_name, st.sales_team_names
      FROM users u
      LEFT JOIN users m ON m.id = u.manager_id
-     LEFT JOIN sales_teams st ON st.id = u.sales_team_id
+     LEFT JOIN LATERAL (
+       SELECT array_agg(t.name ORDER BY t.name) AS sales_team_names
+       FROM user_sales_teams ust
+       JOIN sales_teams t ON t.id = ust.sales_team_id
+       WHERE ust.user_id = u.id
+     ) st ON true
      WHERE u.id = $1`,
     [id]
   );

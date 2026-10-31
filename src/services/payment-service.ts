@@ -14,6 +14,7 @@ interface PaymentRow {
   amount: string;
   created_at: string;
   updated_at: string;
+  is_deleted: boolean;
 }
 
 // Year comes from the payment's own payment_date, not "now" - see
@@ -51,7 +52,10 @@ async function assertInScope(customerId: string, requestingUserId: string): Prom
 // check fine on its own, silently cross-linking two unrelated customers'
 // transaction records with no validation error.
 async function assertInvoiceBelongsToCustomer(invoiceId: string, customerId: string): Promise<void> {
-  const result = await pool.query("SELECT 1 FROM invoices WHERE id = $1 AND customer_id = $2", [invoiceId, customerId]);
+  const result = await pool.query("SELECT 1 FROM invoices WHERE id = $1 AND customer_id = $2 AND is_deleted = false", [
+    invoiceId,
+    customerId,
+  ]);
   if ((result.rowCount ?? 0) === 0) {
     throw new ApiError(422, "That invoice does not belong to this customer");
   }
@@ -60,7 +64,7 @@ async function assertInvoiceBelongsToCustomer(invoiceId: string, customerId: str
 export async function listPaymentsForCustomer(customerId: string, requestingUserId: string) {
   await assertInScope(customerId, requestingUserId);
   const result = await pool.query<PaymentRow>(
-    "SELECT * FROM payments WHERE customer_id = $1 ORDER BY payment_date DESC, created_at DESC",
+    "SELECT * FROM payments WHERE customer_id = $1 AND is_deleted = false ORDER BY payment_date DESC, created_at DESC",
     [customerId]
   );
   return result.rows.map(toPublicPayment);
@@ -89,7 +93,7 @@ export async function createPayment(customerId: string, input: PaymentInput, req
 }
 
 async function getPaymentOrThrow(paymentId: string): Promise<PaymentRow> {
-  const result = await pool.query<PaymentRow>("SELECT * FROM payments WHERE id = $1", [paymentId]);
+  const result = await pool.query<PaymentRow>("SELECT * FROM payments WHERE id = $1 AND is_deleted = false", [paymentId]);
   if (result.rows.length === 0) {
     throw new ApiError(404, "Payment not found");
   }
@@ -132,13 +136,14 @@ export async function updatePayment(paymentId: string, input: Partial<PaymentInp
 export async function deletePayment(paymentId: string, requestingUserId: string): Promise<void> {
   const existing = await getPaymentOrThrow(paymentId);
   await assertInScope(existing.customer_id, requestingUserId);
-  await pool.query("DELETE FROM payments WHERE id = $1", [paymentId]);
+  await pool.query("UPDATE payments SET is_deleted = true WHERE id = $1 AND is_deleted = false", [paymentId]);
 
-  // There's no is_deleted column here (a hard DELETE is the real, correct
-  // behavior for this table - see model.ts), so this audit entry is the
-  // only trace that a real payment ever existed once it's gone. Matches
-  // the seriousness updateCustomer's own credit/balance changes already
-  // get - deleting a real financial record is at least as consequential.
+  // Archives rather than destroys the row - "data is king" - same
+  // is_deleted convention as leads/opportunities. The audit entry below
+  // still matters just as much as it did when this was a real DELETE: it's
+  // the one place that records who archived a real financial record and
+  // when, matching the seriousness updateCustomer's own credit/balance
+  // changes already get.
   const actorName = (await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId])).rows[0]?.name ?? null;
   await recordAuditEvent({
     entityType: "payment",
@@ -155,7 +160,7 @@ export async function deletePayment(paymentId: string, requestingUserId: string)
 
 export async function listPaymentRowsForCustomer(customerId: string) {
   const result = await pool.query<PaymentRow>(
-    "SELECT * FROM payments WHERE customer_id = $1 ORDER BY payment_date DESC",
+    "SELECT * FROM payments WHERE customer_id = $1 AND is_deleted = false ORDER BY payment_date DESC",
     [customerId]
   );
   return result.rows.map(toPublicPayment);
@@ -166,7 +171,7 @@ export async function listPaymentRowsForCustomer(customerId: string) {
 // never counts toward it.
 export async function sumClearedPayments(customerId: string): Promise<number> {
   const result = await pool.query<{ sum: string | null }>(
-    "SELECT SUM(amount) AS sum FROM payments WHERE customer_id = $1 AND status = 'cleared'",
+    "SELECT SUM(amount) AS sum FROM payments WHERE customer_id = $1 AND is_deleted = false AND status = 'cleared'",
     [customerId]
   );
   return Number(result.rows[0].sum ?? 0);

@@ -135,10 +135,10 @@ export async function listTargets(requestingUserId: string, requestingRole: Role
 
   if (requestingRole === ROLES.ADMIN) {
     const params: unknown[] = [];
-    let where = "";
+    let where = "WHERE t.is_deleted = false";
     if (filters.userId) {
       params.push(filters.userId);
-      where = "WHERE t.user_id = $1";
+      where = "WHERE t.is_deleted = false AND t.user_id = $1";
     }
 
     const countResult = await pool.query<{ count: string }>(`SELECT COUNT(*) FROM targets t ${where}`, params);
@@ -166,7 +166,7 @@ export async function listTargets(requestingUserId: string, requestingRole: Role
   const countResult = await pool.query<{ count: string }>(
     `${SUBTREE_CTE}
      SELECT COUNT(*) FROM targets t
-     WHERE t.user_id IN (SELECT id FROM subtree) ${extraFilter}`,
+     WHERE t.is_deleted = false AND t.user_id IN (SELECT id FROM subtree) ${extraFilter}`,
     params
   );
 
@@ -176,7 +176,7 @@ export async function listTargets(requestingUserId: string, requestingRole: Role
      SELECT t.*, achieved.total AS achieved_amount
      FROM targets t
      ${ACHIEVED_JOIN}
-     WHERE t.user_id IN (SELECT id FROM subtree) ${extraFilter}
+     WHERE t.is_deleted = false AND t.user_id IN (SELECT id FROM subtree) ${extraFilter}
      ORDER BY t.period_start DESC
      LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
     listParams
@@ -200,7 +200,7 @@ export async function getTargetById(id: string, requestingUserId: string, reques
     `SELECT t.*, achieved.total AS achieved_amount
      FROM targets t
      ${ACHIEVED_JOIN}
-     WHERE t.id = $1`,
+     WHERE t.id = $1 AND t.is_deleted = false`,
     [id]
   );
   const row = result.rows[0];
@@ -220,7 +220,7 @@ export async function createTarget(input: CreateTargetInput, requestingUserId: s
   const { periodStart, periodEnd } = computePeriodBoundaries(input.periodType, input.periodAnchor);
 
   const existing = await pool.query<{ id: string }>(
-    "SELECT id FROM targets WHERE user_id = $1 AND period_type = $2 AND period_start = $3",
+    "SELECT id FROM targets WHERE user_id = $1 AND period_type = $2 AND period_start = $3 AND is_deleted = false",
     [input.userId, input.periodType, periodStart]
   );
   if (existing.rows.length > 0) {
@@ -238,7 +238,7 @@ export async function createTarget(input: CreateTargetInput, requestingUserId: s
 }
 
 export async function updateTarget(id: string, updates: UpdateTargetInput, requestingUserId: string) {
-  const current = await pool.query<TargetRow>("SELECT * FROM targets WHERE id = $1", [id]);
+  const current = await pool.query<TargetRow>("SELECT * FROM targets WHERE id = $1 AND is_deleted = false", [id]);
   if (current.rows.length === 0) {
     throw new ApiError(404, "Target not found");
   }
@@ -253,7 +253,7 @@ export async function updateTarget(id: string, updates: UpdateTargetInput, reque
 
   if (updates.periodType || updates.periodAnchor) {
     const conflict = await pool.query<{ id: string }>(
-      "SELECT id FROM targets WHERE user_id = $1 AND period_type = $2 AND period_start = $3 AND id <> $4",
+      "SELECT id FROM targets WHERE user_id = $1 AND period_type = $2 AND period_start = $3 AND id <> $4 AND is_deleted = false",
       [row.user_id, periodType, periodStart, id]
     );
     if (conflict.rows.length > 0) {
@@ -275,7 +275,11 @@ export async function updateTarget(id: string, updates: UpdateTargetInput, reque
 }
 
 export async function deleteTarget(id: string): Promise<void> {
-  const result = await pool.query("DELETE FROM targets WHERE id = $1", [id]);
+  // Soft delete - same is_deleted convention as leads/opportunities (see
+  // lead-service.ts's deleteLead). Scoped to is_deleted = false so archiving
+  // an already-archived target reports "not found" rather than a silent
+  // no-op success.
+  const result = await pool.query("UPDATE targets SET is_deleted = true WHERE id = $1 AND is_deleted = false", [id]);
   if (result.rowCount === 0) {
     throw new ApiError(404, "Target not found");
   }

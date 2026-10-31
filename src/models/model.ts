@@ -1638,11 +1638,11 @@ Regards,', 'active', 4)
     // expense_claims/leave_requests workflow shape (agent can raise/edit,
     // not delete).
     `INSERT INTO role_permissions (role, permission) VALUES
-      ('admin','customers.view'), ('admin','customers.create'), ('admin','customers.update'), ('admin','customers.delete'),
-      ('manager','customers.view'), ('manager','customers.create'), ('manager','customers.update'), ('manager','customers.delete'),
-      ('agent','customers.view'), ('agent','customers.create'), ('agent','customers.update'), ('agent','customers.delete'),
+      ('admin','customers.view'), ('admin','customers.create'), ('admin','customers.update'),
+      ('manager','customers.view'), ('manager','customers.create'), ('manager','customers.update'),
+      ('agent','customers.view'), ('agent','customers.create'), ('agent','customers.update'),
       ('admin','call_center.view'), ('manager','call_center.view'),
-      ('admin','support_tickets.view'), ('admin','support_tickets.create'), ('admin','support_tickets.update'), ('admin','support_tickets.delete'),
+      ('admin','support_tickets.view'), ('admin','support_tickets.create'), ('admin','support_tickets.update'),
       ('manager','support_tickets.view'), ('manager','support_tickets.create'), ('manager','support_tickets.update'),
       ('agent','support_tickets.view'), ('agent','support_tickets.create'), ('agent','support_tickets.update')
     ON CONFLICT (role, permission) DO NOTHING`,
@@ -2298,6 +2298,81 @@ Regards,', 'active', 4)
     // fix above. Harmless no-op everywhere this was never seeded.
     `DELETE FROM role_permissions WHERE role = 'agent' AND permission = 'offices.view'`,
     `DELETE FROM role_permissions WHERE role = 'agent' AND permission = 'levels.view'`,
+
+    // customers.delete/support_tickets.delete were seeded above but never had
+    // a route behind them anywhere in the app (phantom permissions - toggling
+    // either one in the Permissions screen did nothing) - also being dropped
+    // app-wide in favor of archive, not delete, so there's nothing to wire up
+    // instead. Retroactive cleanup for a database that already has these rows
+    // from the original INSERTs above; harmless no-op on a fresh install.
+    `DELETE FROM role_permissions WHERE permission IN ('customers.delete', 'support_tickets.delete')`,
+
+    // A Call Center Executive's team assignment, many-to-many - one person
+    // can now be staffed on both the FLC and SLC teams at once (so a
+    // desperate lead doesn't get stuck mid-funnel if the dedicated SLC
+    // person happens to be out that day; the same person can carry it
+    // through both stages themselves). Mirrors employee_pincodes above
+    // exactly - same "one user, many values" shape, same join-table pattern,
+    // not a new idea. users.sales_team_id is left in place, unused going
+    // forward - every real query now reads this table instead (see
+    // lead-service.ts's resolveTierAssignee/TIER_TEAMMATE_CLAUSE and
+    // lead-call-center-service.ts's getTierCandidates).
+    `CREATE TABLE IF NOT EXISTS user_sales_teams (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      sales_team_id UUID NOT NULL REFERENCES sales_teams(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (user_id, sales_team_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_user_sales_teams_user_id ON user_sales_teams(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_user_sales_teams_sales_team_id ON user_sales_teams(sales_team_id)`,
+    // One-time backfill so every existing single-team assignment carries
+    // over the moment this table first exists - ON CONFLICT DO NOTHING makes
+    // this a safe no-op to re-run on every boot after the first time.
+    `INSERT INTO user_sales_teams (user_id, sales_team_id)
+     SELECT id, sales_team_id FROM users WHERE sales_team_id IS NOT NULL
+     ON CONFLICT (user_id, sales_team_id) DO NOTHING`,
+
+    // "Data is king, never delete" - converting every remaining hard-delete
+    // module to the exact same soft-delete convention leads/opportunities
+    // already use (is_deleted, filtered everywhere with `AND is_deleted =
+    // false`, restorable via a "Show archived" toggle instead of a one-way
+    // destructive action). Each ALTER is a no-op on a database that already
+    // has the column.
+    `ALTER TABLE activities ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE approval_bands ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE commission_rules ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE delegations ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE incentive_plans ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE user_incentive_plans ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE invoices ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE payments ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE sales_orders ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE targets ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE user_commissions ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE customer_addresses ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE customer_contacts ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT false`,
+
+    // FOFO documents are a special case - "delete" today means fs.unlink-ing
+    // the uploaded file itself (both on an explicit delete AND silently
+    // whenever a replacement is uploaded over an existing one), which is
+    // unrecoverable. The live lead_documents row is unique per (lead_id,
+    // doc_type), so an archived predecessor can't just sit in that same
+    // table next to its replacement - this is a simple append-only log
+    // instead, written right before a file would otherwise have been
+    // unlinked, so the old file and who/when it was replaced is never lost.
+    `CREATE TABLE IF NOT EXISTS lead_document_archive (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+      doc_type VARCHAR(50) NOT NULL,
+      file_path TEXT NOT NULL,
+      original_filename TEXT,
+      uploaded_by UUID REFERENCES users(id),
+      uploaded_at TIMESTAMPTZ,
+      archived_reason VARCHAR(20) NOT NULL CHECK (archived_reason IN ('deleted', 'replaced')),
+      archived_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_lead_document_archive_lead_id ON lead_document_archive(lead_id)`,
   ];
 
   try {

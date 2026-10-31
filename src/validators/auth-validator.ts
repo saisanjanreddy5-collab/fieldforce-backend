@@ -11,24 +11,18 @@ export const registerSchema = z
     // account with no Level, so at least one of the two must be present
     // (enforced by the refine below).
     role: z.enum([ROLES.ADMIN, ROLES.MANAGER, ROLES.AGENT, ROLES.CALL_CENTER]).optional(),
-    designation: z.string().optional(),
     managerId: z.string().uuid().optional(),
-    dottedLineManagerId: z.string().uuid().optional(),
-    salesTeamId: z.string().uuid().optional(),
-    zoneId: z.string().uuid().optional(),
-    stateId: z.string().uuid().optional(),
+    // A Call Center Executive can be staffed on more than one team at once
+    // (see user_sales_teams) - an array, not a single id.
+    salesTeamIds: z.array(z.string().uuid()).optional(),
     districtId: z.string().uuid().optional(),
     areaId: z.string().uuid().optional(),
     smartfloAgentNumber: z.string().optional(),
     mobile: z.string().optional(),
     territory: z.string().optional(),
     employeeCode: z.string().optional(),
-    dateOfJoining: z.string().optional(),
     status: z.enum(["active", "on_leave", "onboarding", "exited"]).optional(),
     levelId: z.string().uuid().optional(),
-    officeId: z.string().uuid().optional(),
-    divisionChannelId: z.string().uuid().optional(),
-    customerCategoryId: z.string().uuid().optional(),
     // Field employees only - which store type(s) they cover, matched against
     // a lead's own category (COCO/FOFO) when auto-assigning by pincode.
     operationType: z.enum(["COCO", "FOFO", "Both"]).optional(),

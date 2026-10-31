@@ -14,6 +14,7 @@ interface InvoiceRow {
   amount: string;
   created_at: string;
   updated_at: string;
+  is_deleted: boolean;
 }
 
 // Year comes from the invoice's own invoice_date, not "now" - see
@@ -73,7 +74,7 @@ async function assertInScope(customerId: string, requestingUserId: string): Prom
 // not a visibility bypass (the caller already has access to this
 // invoice's own customer), just real data corruption with no error raised.
 async function assertSalesOrderBelongsToCustomer(salesOrderId: string, customerId: string): Promise<void> {
-  const result = await pool.query("SELECT 1 FROM sales_orders WHERE id = $1 AND customer_id = $2", [
+  const result = await pool.query("SELECT 1 FROM sales_orders WHERE id = $1 AND customer_id = $2 AND is_deleted = false", [
     salesOrderId,
     customerId,
   ]);
@@ -85,7 +86,7 @@ async function assertSalesOrderBelongsToCustomer(salesOrderId: string, customerI
 export async function listInvoicesForCustomer(customerId: string, requestingUserId: string) {
   await assertInScope(customerId, requestingUserId);
   const result = await pool.query<InvoiceRow>(
-    "SELECT * FROM invoices WHERE customer_id = $1 ORDER BY invoice_date DESC, created_at DESC",
+    "SELECT * FROM invoices WHERE customer_id = $1 AND is_deleted = false ORDER BY invoice_date DESC, created_at DESC",
     [customerId]
   );
   return result.rows.map(toPublicInvoice);
@@ -114,7 +115,7 @@ export async function createInvoice(customerId: string, input: InvoiceInput, req
 }
 
 async function getInvoiceOrThrow(invoiceId: string): Promise<InvoiceRow> {
-  const result = await pool.query<InvoiceRow>("SELECT * FROM invoices WHERE id = $1", [invoiceId]);
+  const result = await pool.query<InvoiceRow>("SELECT * FROM invoices WHERE id = $1 AND is_deleted = false", [invoiceId]);
   if (result.rows.length === 0) {
     throw new ApiError(404, "Invoice not found");
   }
@@ -157,13 +158,14 @@ export async function updateInvoice(invoiceId: string, input: Partial<InvoiceInp
 export async function deleteInvoice(invoiceId: string, requestingUserId: string): Promise<void> {
   const existing = await getInvoiceOrThrow(invoiceId);
   await assertInScope(existing.customer_id, requestingUserId);
-  await pool.query("DELETE FROM invoices WHERE id = $1", [invoiceId]);
+  await pool.query("UPDATE invoices SET is_deleted = true WHERE id = $1 AND is_deleted = false", [invoiceId]);
 
-  // There's no is_deleted column here (a hard DELETE is the real, correct
-  // behavior for this table - see model.ts), so this audit entry is the
-  // only trace that a real invoice ever existed once it's gone. Matches
-  // the seriousness updateCustomer's own credit/balance changes already
-  // get - deleting a real financial record is at least as consequential.
+  // Archives rather than destroys the row - "data is king" - same
+  // is_deleted convention as leads/opportunities. The audit entry below
+  // still matters just as much as it did when this was a real DELETE: it's
+  // the one place that records who archived a real financial record and
+  // when, matching the seriousness updateCustomer's own credit/balance
+  // changes already get.
   const actorName = (await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId])).rows[0]?.name ?? null;
   await recordAuditEvent({
     entityType: "invoice",
@@ -180,7 +182,7 @@ export async function deleteInvoice(invoiceId: string, requestingUserId: string)
 
 export async function listInvoiceRowsForCustomer(customerId: string) {
   const result = await pool.query<InvoiceRow>(
-    "SELECT * FROM invoices WHERE customer_id = $1 ORDER BY invoice_date DESC",
+    "SELECT * FROM invoices WHERE customer_id = $1 AND is_deleted = false ORDER BY invoice_date DESC",
     [customerId]
   );
   return result.rows.map(toPublicInvoice);
@@ -188,7 +190,7 @@ export async function listInvoiceRowsForCustomer(customerId: string) {
 
 export async function countOverdueInvoices(customerId: string): Promise<number> {
   const result = await pool.query<{ count: string }>(
-    "SELECT COUNT(*) FROM invoices WHERE customer_id = $1 AND status <> 'paid' AND due_date IS NOT NULL AND due_date < CURRENT_DATE",
+    "SELECT COUNT(*) FROM invoices WHERE customer_id = $1 AND is_deleted = false AND status <> 'paid' AND due_date IS NOT NULL AND due_date < CURRENT_DATE",
     [customerId]
   );
   return Number(result.rows[0].count);

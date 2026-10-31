@@ -56,10 +56,10 @@ export interface ListCommissionRulesFilters {
 
 export async function listCommissionRules(filters: ListCommissionRulesFilters) {
   const params: unknown[] = [];
-  let where = "";
+  let where = "WHERE is_deleted = false";
   if (filters.incentivePlanId) {
     params.push(filters.incentivePlanId);
-    where = "WHERE incentive_plan_id = $1";
+    where = "WHERE incentive_plan_id = $1 AND is_deleted = false";
   }
 
   const countResult = await pool.query<{ count: string }>(`SELECT COUNT(*) FROM commission_rules ${where}`, params);
@@ -76,7 +76,7 @@ export async function listCommissionRules(filters: ListCommissionRulesFilters) {
 }
 
 export async function getCommissionRuleById(id: string) {
-  const result = await pool.query<CommissionRuleRow>("SELECT * FROM commission_rules WHERE id = $1", [id]);
+  const result = await pool.query<CommissionRuleRow>("SELECT * FROM commission_rules WHERE id = $1 AND is_deleted = false", [id]);
   if (result.rows.length === 0) {
     throw new ApiError(404, "Commission rule not found");
   }
@@ -84,7 +84,7 @@ export async function getCommissionRuleById(id: string) {
 }
 
 async function assertPlanExists(incentivePlanId: string): Promise<void> {
-  const plan = await pool.query<{ id: string }>("SELECT id FROM incentive_plans WHERE id = $1", [incentivePlanId]);
+  const plan = await pool.query<{ id: string }>("SELECT id FROM incentive_plans WHERE id = $1 AND is_deleted = false", [incentivePlanId]);
   if (plan.rows.length === 0) {
     throw new ApiError(422, "That incentive plan does not exist");
   }
@@ -94,7 +94,7 @@ export async function createCommissionRule(input: CreateCommissionRuleInput, req
   await assertPlanExists(input.incentivePlanId);
 
   const existing = await pool.query<{ id: string }>(
-    "SELECT id FROM commission_rules WHERE incentive_plan_id = $1 AND name = $2",
+    "SELECT id FROM commission_rules WHERE incentive_plan_id = $1 AND name = $2 AND is_deleted = false",
     [input.incentivePlanId, input.name]
   );
   if (existing.rows.length > 0) {
@@ -124,7 +124,7 @@ export async function updateCommissionRule(id: string, updates: UpdateCommission
 
   if (updates.name && updates.name !== current.name) {
     const nameTaken = await pool.query<{ id: string }>(
-      "SELECT id FROM commission_rules WHERE incentive_plan_id = $1 AND name = $2 AND id <> $3",
+      "SELECT id FROM commission_rules WHERE incentive_plan_id = $1 AND name = $2 AND id <> $3 AND is_deleted = false",
       [current.incentivePlanId, updates.name, id]
     );
     if (nameTaken.rows.length > 0) {
@@ -166,8 +166,10 @@ export async function updateCommissionRule(id: string, updates: UpdateCommission
   return toPublicRule(result.rows[0]);
 }
 
+// Archives, never permanently deletes - "data is king" - same is_deleted
+// convention leads/opportunities already use.
 export async function deleteCommissionRule(id: string): Promise<void> {
-  const result = await pool.query("DELETE FROM commission_rules WHERE id = $1", [id]);
+  const result = await pool.query("UPDATE commission_rules SET is_deleted = true WHERE id = $1 AND is_deleted = false", [id]);
   if (result.rowCount === 0) {
     throw new ApiError(404, "Commission rule not found");
   }

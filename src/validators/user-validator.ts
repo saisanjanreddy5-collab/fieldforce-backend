@@ -12,22 +12,17 @@ export const updateOwnProfileSchema = z.object({
 
 export const updateUserSchema = z.object({
   name: z.string().min(1, "Name is required").optional(),
-  designation: z.string().optional(),
   managerId: z.string().uuid().or(z.literal("")).optional(),
-  dottedLineManagerId: z.string().uuid().or(z.literal("")).optional(),
   smartfloAgentNumber: z.string().optional(),
   mobile: z.string().optional(),
   territory: z.string().optional(),
-  salesTeamId: z.string().uuid().or(z.literal("")).optional(),
-  zoneId: z.string().uuid().or(z.literal("")).optional(),
-  stateId: z.string().uuid().or(z.literal("")).optional(),
+  // A Call Center Executive can be staffed on more than one team at once
+  // (see user_sales_teams) - an array, not a single id. [] clears every
+  // team this person is staffed on, same convention as pincodes below.
+  salesTeamIds: z.array(z.string().uuid()).optional(),
   employeeCode: z.string().optional(),
-  dateOfJoining: z.string().or(z.literal("")).optional(),
   status: z.enum(["active", "on_leave", "onboarding", "exited"]).optional(),
   levelId: z.string().uuid().or(z.literal("")).optional(),
-  officeId: z.string().uuid().or(z.literal("")).optional(),
-  divisionChannelId: z.string().uuid().or(z.literal("")).optional(),
-  customerCategoryId: z.string().uuid().or(z.literal("")).optional(),
   // Login access toggle - Administrator only (same users.update gate as
   // every other field here). true/false, not a tri-state - there's no
   // separate "deleted" state in the app itself, only this.

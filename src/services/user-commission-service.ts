@@ -66,10 +66,10 @@ export async function listUserCommissions(requestingUserId: string, requestingRo
 
   if (requestingRole === ROLES.ADMIN) {
     const params: unknown[] = [];
-    let where = "";
+    let where = "WHERE is_deleted = false";
     if (filters.userId) {
       params.push(filters.userId);
-      where = "WHERE user_id = $1";
+      where = "WHERE is_deleted = false AND user_id = $1";
     }
 
     const countResult = await pool.query<{ count: string }>(`SELECT COUNT(*) FROM user_commissions ${where}`, params);
@@ -92,7 +92,7 @@ export async function listUserCommissions(requestingUserId: string, requestingRo
   const countResult = await pool.query<{ count: string }>(
     `${SUBTREE_CTE}
      SELECT COUNT(*) FROM user_commissions
-     WHERE user_id IN (SELECT id FROM subtree) ${extraFilter}`,
+     WHERE is_deleted = false AND user_id IN (SELECT id FROM subtree) ${extraFilter}`,
     params
   );
 
@@ -100,7 +100,7 @@ export async function listUserCommissions(requestingUserId: string, requestingRo
   const result = await pool.query<UserCommissionRow>(
     `${SUBTREE_CTE}
      SELECT * FROM user_commissions
-     WHERE user_id IN (SELECT id FROM subtree) ${extraFilter}
+     WHERE is_deleted = false AND user_id IN (SELECT id FROM subtree) ${extraFilter}
      ORDER BY created_at DESC
      LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
     listParams
@@ -125,7 +125,9 @@ export async function createUserCommission(input: CreateUserCommissionInput, req
 }
 
 export async function deleteUserCommission(id: string): Promise<void> {
-  const result = await pool.query("DELETE FROM user_commissions WHERE id = $1", [id]);
+  // Soft delete - same is_deleted convention as leads/opportunities (see
+  // lead-service.ts's deleteLead).
+  const result = await pool.query("UPDATE user_commissions SET is_deleted = true WHERE id = $1 AND is_deleted = false", [id]);
   if (result.rowCount === 0) {
     throw new ApiError(404, "Commission arrangement not found");
   }

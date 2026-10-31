@@ -12,6 +12,7 @@ interface IncentivePlanRow {
   updated_by: string | null;
   created_at: string;
   updated_at: string;
+  is_deleted: boolean;
 }
 
 export interface CreateIncentivePlanInput {
@@ -53,20 +54,20 @@ export interface ListIncentivePlansFilters {
 // Configuration data, not a per-person record - visible to any Manager+ the
 // same way sales_teams/levels/offices are, no subtree scoping needed.
 export async function listIncentivePlans(filters: ListIncentivePlansFilters) {
-  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM incentive_plans");
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM incentive_plans WHERE is_deleted = false");
 
   const limit = filters.limit;
   const offset = (filters.page - 1) * filters.limit;
 
   const result = await pool.query<IncentivePlanRow>(
-    "SELECT * FROM incentive_plans ORDER BY name ASC LIMIT $1 OFFSET $2",
+    "SELECT * FROM incentive_plans WHERE is_deleted = false ORDER BY name ASC LIMIT $1 OFFSET $2",
     [limit, offset]
   );
   return { incentivePlans: result.rows.map(toPublicPlan), total: Number(countResult.rows[0].count) };
 }
 
 export async function getIncentivePlanById(id: string) {
-  const result = await pool.query<IncentivePlanRow>("SELECT * FROM incentive_plans WHERE id = $1", [id]);
+  const result = await pool.query<IncentivePlanRow>("SELECT * FROM incentive_plans WHERE id = $1 AND is_deleted = false", [id]);
   if (result.rows.length === 0) {
     throw new ApiError(404, "Incentive plan not found");
   }
@@ -82,7 +83,7 @@ function assertValidDateRange(start: string | undefined, end: string | null | un
 export async function createIncentivePlan(input: CreateIncentivePlanInput, requestingUserId: string) {
   assertValidDateRange(input.effectiveStartDate, input.effectiveEndDate);
 
-  const existing = await pool.query<{ id: string }>("SELECT id FROM incentive_plans WHERE name = $1", [input.name]);
+  const existing = await pool.query<{ id: string }>("SELECT id FROM incentive_plans WHERE name = $1 AND is_deleted = false", [input.name]);
   if (existing.rows.length > 0) {
     throw new ApiError(409, "An incentive plan with this name already exists");
   }
@@ -113,7 +114,7 @@ export async function updateIncentivePlan(id: string, updates: UpdateIncentivePl
 
   if (updates.name && updates.name !== current.name) {
     const nameTaken = await pool.query<{ id: string }>(
-      "SELECT id FROM incentive_plans WHERE name = $1 AND id <> $2",
+      "SELECT id FROM incentive_plans WHERE name = $1 AND id <> $2 AND is_deleted = false",
       [updates.name, id]
     );
     if (nameTaken.rows.length > 0) {
@@ -155,8 +156,12 @@ export async function updateIncentivePlan(id: string, updates: UpdateIncentivePl
   return toPublicPlan(result.rows[0]);
 }
 
+// Archives rather than destroys the row - "data is king" - same is_deleted
+// convention as leads/opportunities. Still enforced against every other
+// query in this file, so an archived plan behaves as if it's gone from
+// anywhere it would otherwise be picked or listed.
 export async function deleteIncentivePlan(id: string): Promise<void> {
-  const result = await pool.query("DELETE FROM incentive_plans WHERE id = $1", [id]);
+  const result = await pool.query("UPDATE incentive_plans SET is_deleted = true WHERE id = $1 AND is_deleted = false", [id]);
   if (result.rowCount === 0) {
     throw new ApiError(404, "Incentive plan not found");
   }

@@ -118,6 +118,7 @@ export async function isOpportunityVisibleToUser(opportunityId: string, userId: 
        AND (
          l.owner_id IN (SELECT id FROM subtree)
          OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
+         OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin')
        )`,
     [userId, opportunityId]
   );
@@ -136,7 +137,10 @@ export async function isOpportunityInOwnerScope(opportunityId: string, userId: s
      WHERE o.id = $2
        AND o.is_deleted = false
        AND l.is_deleted = false
-       AND l.owner_id IN (SELECT id FROM subtree)`,
+       AND (
+         l.owner_id IN (SELECT id FROM subtree)
+         OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin')
+       )`,
     [userId, opportunityId]
   );
   return (result.rowCount ?? 0) > 0;
@@ -253,6 +257,7 @@ export async function listOpportunitiesForUser(requestingUserId: string, filters
   conditions.push(`(
     l.owner_id IN (SELECT id FROM subtree)
     OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
+    OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin')
   )`);
 
   if (filters.stage) {
