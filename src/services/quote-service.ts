@@ -312,7 +312,9 @@ const SUBTREE_CTE = `
 
 export async function listQuotes(requestingUserId: string, filters: ListQuotesFilters) {
   const conditions: string[] = [
-    `(l.owner_id IN (SELECT id FROM subtree) OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1))`,
+    `(l.owner_id IN (SELECT id FROM subtree)
+      OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
+      OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin'))`,
   ];
   const params: unknown[] = [requestingUserId];
 

@@ -146,7 +146,7 @@ export async function getTeamRollup(requestingUserId: string, requestingRole: Ro
            AND (o.won_at AT TIME ZONE '${BUSINESS_TIMEZONE}')::date BETWEEN t.period_start AND t.period_end
        ), 0) AS achieved_amount
      FROM targets t
-     WHERE t.user_id = ANY($1) AND t.period_type = 'monthly' AND t.period_start = $2`,
+     WHERE t.user_id = ANY($1) AND t.period_type = 'monthly' AND t.period_start = $2 AND t.is_deleted = false`,
     [personIds, start]
   );
   const targetByUser = new Map(targetsResult.rows.map((r) => [r.user_id, r]));

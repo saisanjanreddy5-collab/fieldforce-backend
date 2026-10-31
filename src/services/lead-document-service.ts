@@ -120,14 +120,25 @@ export async function saveUploadedFile(
     throw new ApiError(422, "Unknown document type");
   }
 
-  const existing = await pool.query<{ file_path: string | null }>(
-    "SELECT file_path FROM lead_documents WHERE lead_id = $1 AND doc_type = $2",
+  const existing = await pool.query<{
+    file_path: string | null;
+    original_filename: string | null;
+    uploaded_by: string | null;
+    uploaded_at: string | null;
+  }>(
+    "SELECT file_path, original_filename, uploaded_by, uploaded_at FROM lead_documents WHERE lead_id = $1 AND doc_type = $2",
     [leadId, docType]
   );
-  // Replacing a previous upload - remove the old file so they don't pile up.
-  const previousPath = existing.rows[0]?.file_path;
-  if (previousPath) {
-    fs.unlink(previousPath, () => undefined);
+  // Replacing a previous upload - the old file is archived (logged + kept on
+  // disk), never unlinked. Data is never destroyed, even on a routine
+  // re-upload.
+  const previous = existing.rows[0];
+  if (previous?.file_path) {
+    await pool.query(
+      `INSERT INTO lead_document_archive (lead_id, doc_type, file_path, original_filename, uploaded_by, uploaded_at, archived_reason)
+       VALUES ($1, $2, $3, $4, $5, $6, 'replaced')`,
+      [leadId, docType, previous.file_path, previous.original_filename, previous.uploaded_by, previous.uploaded_at]
+    );
   }
 
   const result = await pool.query<DocumentRow>(
@@ -162,8 +173,14 @@ export async function getDocumentFile(documentId: string): Promise<{ filePath: s
 
 export async function deleteDocumentFile(documentId: string) {
   const row = await getDocumentRow(documentId);
+  // Archived (logged + kept on disk), never unlinked - same "never destroy
+  // data" rule as every other delete action in this app.
   if (row.file_path) {
-    fs.unlink(row.file_path, () => undefined);
+    await pool.query(
+      `INSERT INTO lead_document_archive (lead_id, doc_type, file_path, original_filename, uploaded_by, uploaded_at, archived_reason)
+       VALUES ($1, $2, $3, $4, $5, $6, 'deleted')`,
+      [row.lead_id, row.doc_type, row.file_path, row.original_filename, row.uploaded_by, row.uploaded_at]
+    );
   }
   const result = await pool.query<DocumentRow>(
     `UPDATE lead_documents SET status = 'not_uploaded', file_path = NULL, original_filename = NULL, uploaded_by = NULL, uploaded_at = NULL, updated_at = now()

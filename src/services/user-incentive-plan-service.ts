@@ -15,6 +15,7 @@ interface UserIncentivePlanRow {
   updated_by: string | null;
   created_at: string;
   updated_at: string;
+  is_deleted: boolean;
 }
 
 export interface CreateUserIncentivePlanInput {
@@ -67,10 +68,10 @@ export async function listUserIncentivePlans(requestingUserId: string, requestin
 
   if (requestingRole === ROLES.ADMIN) {
     const params: unknown[] = [];
-    let where = "";
+    let where = "WHERE is_deleted = false";
     if (filters.userId) {
       params.push(filters.userId);
-      where = "WHERE user_id = $1";
+      where = `WHERE is_deleted = false AND user_id = $${params.length}`;
     }
 
     const countResult = await pool.query<{ count: string }>(`SELECT COUNT(*) FROM user_incentive_plans ${where}`, params);
@@ -93,7 +94,7 @@ export async function listUserIncentivePlans(requestingUserId: string, requestin
   const countResult = await pool.query<{ count: string }>(
     `${SUBTREE_CTE}
      SELECT COUNT(*) FROM user_incentive_plans
-     WHERE user_id IN (SELECT id FROM subtree) ${extraFilter}`,
+     WHERE user_id IN (SELECT id FROM subtree) AND is_deleted = false ${extraFilter}`,
     params
   );
 
@@ -101,7 +102,7 @@ export async function listUserIncentivePlans(requestingUserId: string, requestin
   const result = await pool.query<UserIncentivePlanRow>(
     `${SUBTREE_CTE}
      SELECT * FROM user_incentive_plans
-     WHERE user_id IN (SELECT id FROM subtree) ${extraFilter}
+     WHERE user_id IN (SELECT id FROM subtree) AND is_deleted = false ${extraFilter}
      ORDER BY effective_start_date DESC
      LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
     listParams
@@ -110,7 +111,7 @@ export async function listUserIncentivePlans(requestingUserId: string, requestin
 }
 
 export async function createUserIncentivePlan(input: CreateUserIncentivePlanInput, requestingUserId: string) {
-  const plan = await pool.query<{ id: string }>("SELECT id FROM incentive_plans WHERE id = $1", [input.incentivePlanId]);
+  const plan = await pool.query<{ id: string }>("SELECT id FROM incentive_plans WHERE id = $1 AND is_deleted = false", [input.incentivePlanId]);
   if (plan.rows.length === 0) {
     throw new ApiError(422, "That incentive plan does not exist");
   }
@@ -134,8 +135,10 @@ export async function createUserIncentivePlan(input: CreateUserIncentivePlanInpu
   return toPublicAssignment(result.rows[0]);
 }
 
+// Archives rather than destroys the row - "data is king" - same is_deleted
+// convention as leads/opportunities.
 export async function deleteUserIncentivePlan(id: string): Promise<void> {
-  const result = await pool.query("DELETE FROM user_incentive_plans WHERE id = $1", [id]);
+  const result = await pool.query("UPDATE user_incentive_plans SET is_deleted = true WHERE id = $1 AND is_deleted = false", [id]);
   if (result.rowCount === 0) {
     throw new ApiError(404, "Assignment not found");
   }

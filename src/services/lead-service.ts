@@ -332,13 +332,17 @@ function toPublicLead(row: LeadRow) {
 // Admin-only exception, added deliberately (not the blanket "admin sees
 // everything" bypass this file's other comments warn against): an
 // unassigned lead (owner_id IS NULL) can never match Rule A/B for anyone,
-// by definition, so without this it would be permanently unmanageable by
-// anyone at all. Scoped narrowly to that one condition, checked inline via
-// the requesting user's real role - no new parameter, so every existing
-// caller of these functions picks it up automatically and stays consistent
-// (list and detail can never disagree, since both read this same clause).
+// Admin is a global role, not a node in the reporting chain - two admin
+// accounts in different branches of the org (or with no manager relationship
+// to each other at all) must still see the exact same company-wide data, not
+// just whatever happens to sit in their own subtree. Unconditional for any
+// requesting user whose role is admin, not scoped to unassigned leads only -
+// checked inline via the requesting user's real role, no new parameter, so
+// every existing caller of these functions picks it up automatically and
+// stays consistent (list and detail can never disagree, since both read this
+// same clause).
 const UNASSIGNED_ADMIN_CLAUSE = `
-  OR (l.owner_id IS NULL AND EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin'))
+  OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin')
 `;
 
 export async function isLeadVisibleToUser(leadId: string, userId: string): Promise<boolean> {
@@ -453,15 +457,20 @@ export const SLC_STAGE = "SLC";
 // call_center") - a Qualified lead still owned by the SLC agent who just
 // qualified it (before Send to Field) is NOT covered by this: that handoff
 // window is still single-owner by design, same as today.
+// A Call Center Executive can now be staffed on more than one team at once
+// (user_sales_teams is many-to-many - see model.ts), so "same team" is an
+// EXISTS over two joined rows sharing a sales_team_id, not a direct column
+// compare - this is what lets someone staffed on both FLC and SLC cover a
+// teammate's lead at either tier, not just whichever single team they used
+// to be limited to.
 const TIER_TEAMMATE_CLAUSE = `
   OR (
     l.status IN ('${FLC_STAGE}', '${SLC_STAGE}')
     AND EXISTS (
       SELECT 1 FROM users ru
-      JOIN users ou ON ou.id = l.owner_id
-      WHERE ru.id = $1 AND ru.role = 'call_center'
-        AND ru.sales_team_id IS NOT NULL
-        AND ru.sales_team_id = ou.sales_team_id
+      JOIN user_sales_teams rust ON rust.user_id = ru.id
+      JOIN user_sales_teams oust ON oust.sales_team_id = rust.sales_team_id
+      WHERE ru.id = $1 AND ru.role = 'call_center' AND oust.user_id = l.owner_id
     )
   )
 `;
@@ -502,7 +511,8 @@ export async function resolveTierAssignee(teamId: string, stage: string): Promis
   const result = await pool.query<{ id: string }>(
     `SELECT u.id
      FROM users u
-     WHERE u.role = 'call_center' AND u.is_active = true AND u.sales_team_id = $1
+     JOIN user_sales_teams ust ON ust.user_id = u.id AND ust.sales_team_id = $1
+     WHERE u.role = 'call_center' AND u.is_active = true
      ORDER BY (
        SELECT COUNT(*) FROM leads l WHERE l.owner_id = u.id AND l.status = $2 AND l.is_deleted = false
      ) ASC, random()
@@ -510,46 +520,6 @@ export async function resolveTierAssignee(teamId: string, stage: string): Promis
     [teamId, stage]
   );
   return result.rows[0]?.id ?? null;
-}
-
-// Resolves a bulk-import row's free-text "Call Center Executive" column to
-// a real account - email first (unique, guaranteed on every user), then
-// employee_code (also exists on every user, but nullable/optional) as a
-// fallback for sheets that use codes instead of emails. Case-insensitive on
-// both, since a spreadsheet's casing is never guaranteed to match what's
-// stored. Deliberately does not fall back to a fuzzy name match - a typo'd
-// or ambiguous name silently routing a real customer lead to the wrong
-// person is a worse outcome than reporting the row as unresolved.
-// Maps a sales_teams.name to the stage a lead assigned to that team's
-// member should actually land at - e.g. naming an SLC Team person's email
-// in the import must land the row at SLC, not FLC, or it would be invisible
-// in that person's own queue (scoped by their own team's stage) despite
-// genuinely being theirs.
-const STAGE_BY_TEAM_NAME: Record<string, string> = {
-  "FLC Team": FLC_STAGE,
-  "SLC Team": SLC_STAGE,
-};
-
-interface CallCenterExecutiveMatch {
-  id: string;
-  stage: string | null;
-}
-
-async function resolveCallCenterExecutiveByIdentifier(identifier: string): Promise<CallCenterExecutiveMatch | null> {
-  const trimmed = identifier.trim();
-  if (!trimmed) return null;
-  const result = await pool.query<{ id: string; team_name: string | null }>(
-    `SELECT u.id, st.name AS team_name
-     FROM users u
-     LEFT JOIN sales_teams st ON st.id = u.sales_team_id
-     WHERE u.role = 'call_center' AND u.is_active = true
-       AND (LOWER(u.email) = LOWER($1) OR LOWER(u.employee_code) = LOWER($1))
-     LIMIT 1`,
-    [trimmed]
-  );
-  const row = result.rows[0];
-  if (!row) return null;
-  return { id: row.id, stage: row.team_name ? STAGE_BY_TEAM_NAME[row.team_name] ?? null : null };
 }
 
 // Distinct territory values actually in use across leads, for the
@@ -803,13 +773,6 @@ export interface BulkImportResult {
   created: number;
   skipped: { row: number; reason: string }[];
   errors: { row: number; message: string }[];
-  // Rows that WERE created (count toward `created`, same as any other
-  // successful row) but not with the executive the sheet named - see the
-  // FLC-only check below. Kept separate from `skipped` on purpose: a
-  // skipped row needs someone to go fix it and re-import, a redirected row
-  // needs nothing further, it's just worth knowing it didn't land with the
-  // specific person the sheet said.
-  redirected: { row: number; reason: string }[];
 }
 
 const MAX_BULK_IMPORT_ROWS = 5000;
@@ -827,7 +790,7 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
     throw new ApiError(422, `This file has ${rows.length} rows - the max is ${MAX_BULK_IMPORT_ROWS} per import`);
   }
 
-  const result: BulkImportResult = { created: 0, skipped: [], errors: [], redirected: [] };
+  const result: BulkImportResult = { created: 0, skipped: [], errors: [] };
   const seenPhones = new Set<string>();
 
   for (let i = 0; i < rows.length; i++) {
@@ -860,52 +823,13 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
         if (normalized.length === 10) seenPhones.add(normalized);
       }
 
-      // An explicit executive identifier bypasses round-robin entirely - the
-      // row lands directly in that person's own queue. Deliberately FLC-only
-      // (not "whichever tier their team actually is") - every row here is a
-      // brand-new, never-called customer, so landing one directly at SLC
-      // would let it skip real calling at the earlier tier with nothing to
-      // show it happened, just because a sheet named the wrong person (a
-      // genuinely easy mistake: a data-entry sheet mixing FLC/SLC staff in
-      // one column has no visual difference between them).
-      //
-      // Naming an SLC person (or an identifier that doesn't resolve at all)
-      // falls back to the same FLC round-robin a blank column gets,
-      // rather than being skipped outright - confirmed as the wanted
-      // behavior over leaving the row out of the import entirely, which
-      // risks a real customer never making it into the CRM at all if the
-      // skip list goes unnoticed in a large file. ownerId/status are simply
-      // left unset below, which is exactly what a row with no
-      // assigneeIdentifier gets too - createLead's own FLC-entry branch
-      // handles the round-robin assignment either way. Recorded in
-      // `redirected`, not `skipped`, since the row DID get created - there's
-      // nothing to go fix, just something worth knowing about.
-      let ownerId: string | undefined;
-      let status: string | undefined;
-      if (row.assigneeIdentifier) {
-        const assignee = await resolveCallCenterExecutiveByIdentifier(row.assigneeIdentifier);
-        if (!assignee) {
-          result.redirected.push({
-            row: rowNumber,
-            reason: `Executive "${row.assigneeIdentifier}" not found or not an active Call Center employee - assigned to FLC round-robin instead`,
-          });
-        } else if (!assignee.stage) {
-          result.redirected.push({
-            row: rowNumber,
-            reason: `Executive "${row.assigneeIdentifier}" is not assigned to a calling tier yet - assigned to FLC round-robin instead`,
-          });
-        } else if (assignee.stage !== FLC_STAGE) {
-          result.redirected.push({
-            row: rowNumber,
-            reason: `Executive "${row.assigneeIdentifier}" is on the ${assignee.stage} team, not FLC - assigned to FLC round-robin instead, so every lead still goes through calling in order`,
-          });
-        } else {
-          ownerId = assignee.id;
-          status = assignee.stage;
-        }
-      }
-
-      await createLead({ ...row, ownerId, status }, creatorId, undefined, { requiresQualification: true });
+      // Bulk-imported leads always go through the same FLC round-robin a
+      // blank-column row always got - a sheet can no longer hand-pick a
+      // specific person, so every imported lead lands in the shared FLC
+      // queue exactly like one added any other way. ownerId/status are left
+      // unset; createLead's own FLC-entry branch handles the round-robin
+      // assignment.
+      await createLead({ ...row }, creatorId, undefined, { requiresQualification: true });
       result.created++;
     } catch (err) {
       if (err instanceof ApiError && err.statusCode === 409) {
@@ -1464,7 +1388,7 @@ export async function updateLead(
      UPDATE leads SET ${setClauses.join(", ")} WHERE id = $${leadIdIdx}
      RETURNING *, (
        COALESCE(owner_id IN (SELECT id FROM subtree), false)
-       OR (owner_id IS NULL AND EXISTS (SELECT 1 FROM users ru WHERE ru.id = $${scopeUserIdx} AND ru.role = 'admin'))
+       OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $${scopeUserIdx} AND ru.role = 'admin')
      ) AS in_owner_scope`,
     params
   );

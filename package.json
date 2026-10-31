@@ -21,7 +21,10 @@
     "test:designation-ladder-reversal": "ts-node src/scripts/testDesignationLadderReversal.ts",
     "test:bulk-import-permission-fix": "ts-node src/scripts/testBulkImportPermissionFix.ts",
     "test:internal-notes-history": "ts-node src/scripts/testInternalNotesHistory.ts",
-    "test:field-sales-leads-filter": "ts-node src/scripts/testFieldSalesLeadsFilter.ts"
+    "test:field-sales-leads-filter": "ts-node src/scripts/testFieldSalesLeadsFilter.ts",
+    "test:admin-global-visibility": "ts-node src/scripts/testAdminGlobalVisibility.ts",
+    "test:dual-team-staffing": "ts-node src/scripts/testDualTeamStaffing.ts",
+    "test:soft-delete-conversion": "ts-node src/scripts/testSoftDeleteConversion.ts"
   },
   "keywords": [],
   "author": "",

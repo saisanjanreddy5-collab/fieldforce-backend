@@ -15,7 +15,6 @@ async function main(): Promise<void> {
     email,
     password,
     role: ROLES.ADMIN,
-    designation: "Admin",
   });
 
   console.log("Admin user created:", admin);

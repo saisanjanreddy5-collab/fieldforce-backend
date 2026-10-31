@@ -52,7 +52,7 @@ async function assertInScope(customerId: string, requestingUserId: string): Prom
 export async function listOrdersForCustomer(customerId: string, requestingUserId: string) {
   await assertInScope(customerId, requestingUserId);
   const result = await pool.query<SalesOrderRow>(
-    "SELECT * FROM sales_orders WHERE customer_id = $1 ORDER BY order_date DESC, created_at DESC",
+    "SELECT * FROM sales_orders WHERE customer_id = $1 AND is_deleted = false ORDER BY order_date DESC, created_at DESC",
     [customerId]
   );
   return result.rows.map(toPublicOrder);
@@ -77,7 +77,7 @@ export async function createOrder(customerId: string, input: SalesOrderInput, re
 }
 
 async function getOrderOrThrow(orderId: string): Promise<SalesOrderRow> {
-  const result = await pool.query<SalesOrderRow>("SELECT * FROM sales_orders WHERE id = $1", [orderId]);
+  const result = await pool.query<SalesOrderRow>("SELECT * FROM sales_orders WHERE id = $1 AND is_deleted = false", [orderId]);
   if (result.rows.length === 0) {
     throw new ApiError(404, "Sales order not found");
   }
@@ -116,14 +116,11 @@ export async function updateOrder(orderId: string, input: Partial<SalesOrderInpu
 export async function deleteOrder(orderId: string, requestingUserId: string): Promise<void> {
   const existing = await getOrderOrThrow(orderId);
   await assertInScope(existing.customer_id, requestingUserId);
-  await pool.query("DELETE FROM sales_orders WHERE id = $1", [orderId]);
+  // Soft delete - same is_deleted convention as leads/opportunities (see
+  // lead-service.ts's deleteLead). A real financial record is never hard-
+  // destroyed; this audit entry plus the archived row itself are both kept.
+  await pool.query("UPDATE sales_orders SET is_deleted = true WHERE id = $1", [orderId]);
 
-  // There's no is_deleted column here (a hard DELETE is the real, correct
-  // behavior for this table - see model.ts), so this audit entry is the
-  // only trace that a real sales order ever existed once it's gone.
-  // Matches the seriousness updateCustomer's own credit/balance changes
-  // already get - deleting a real financial record is at least as
-  // consequential.
   const actorName = (await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId])).rows[0]?.name ?? null;
   await recordAuditEvent({
     entityType: "sales_order",
@@ -143,7 +140,7 @@ export async function deleteOrder(orderId: string, requestingUserId: string): Pr
 // same as invoices/payments do.
 export async function listOrderRowsForCustomer(customerId: string) {
   const result = await pool.query<SalesOrderRow>(
-    "SELECT * FROM sales_orders WHERE customer_id = $1 ORDER BY order_date DESC",
+    "SELECT * FROM sales_orders WHERE customer_id = $1 AND is_deleted = false ORDER BY order_date DESC",
     [customerId]
   );
   return result.rows.map(toPublicOrder);
@@ -151,7 +148,7 @@ export async function listOrderRowsForCustomer(customerId: string) {
 
 export async function countOpenOrders(customerId: string): Promise<number> {
   const result = await pool.query<{ count: string }>(
-    "SELECT COUNT(*) FROM sales_orders WHERE customer_id = $1 AND status = 'confirmed'",
+    "SELECT COUNT(*) FROM sales_orders WHERE customer_id = $1 AND status = 'confirmed' AND is_deleted = false",
     [customerId]
   );
   return Number(result.rows[0].count);

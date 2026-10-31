@@ -126,13 +126,14 @@ export async function listSupportTickets(requestingUserId: string, filters: List
   const conditions = [
     "l.is_deleted = false",
     // Matches lead-service.ts's isLeadVisibleToUser exactly (subtree, shares,
-    // and the same admin-sees-unassigned-leads carve-out) - without the last
-    // clause, a ticket on an unowned lead an admin can otherwise see via
-    // GET /leads/:id/support-tickets would silently disappear from this
-    // top-level listing for that same admin.
+    // and the same unconditional admin bypass) - without the last clause, a
+    // ticket on a lead outside this admin's own subtree (including an
+    // unowned one) would silently disappear from this top-level listing even
+    // though GET /leads/:id/support-tickets would show it fine for the same
+    // admin.
     `(l.owner_id IN (SELECT id FROM subtree)
       OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
-      OR (l.owner_id IS NULL AND EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin')))`,
+      OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin'))`,
   ];
   const params: unknown[] = [requestingUserId];
 

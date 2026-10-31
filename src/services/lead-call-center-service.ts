@@ -137,7 +137,10 @@ async function resolveFieldFallbackAssignee(): Promise<{ id: string; name: strin
 
 async function getTierCandidates(teamId: string): Promise<SwapCandidate[]> {
   const result = await pool.query<SwapCandidate>(
-    "SELECT id, name, email FROM users WHERE role = 'call_center' AND is_active = true AND sales_team_id = $1 ORDER BY name ASC",
+    `SELECT u.id, u.name, u.email FROM users u
+     JOIN user_sales_teams ust ON ust.user_id = u.id AND ust.sales_team_id = $1
+     WHERE u.role = 'call_center' AND u.is_active = true
+     ORDER BY u.name ASC`,
     [teamId]
   );
   return result.rows;

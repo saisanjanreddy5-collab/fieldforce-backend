@@ -31,22 +31,14 @@ export async function listDistinctTerritories(): Promise<string[]> {
 
 export interface UpdateUserInput {
   name?: string;
-  designation?: string;
   managerId?: string;
-  dottedLineManagerId?: string;
   smartfloAgentNumber?: string;
   mobile?: string;
   territory?: string;
-  salesTeamId?: string;
-  zoneId?: string;
-  stateId?: string;
+  salesTeamIds?: string[];
   employeeCode?: string;
-  dateOfJoining?: string;
   status?: string;
   levelId?: string;
-  officeId?: string;
-  divisionChannelId?: string;
-  customerCategoryId?: string;
   isActive?: boolean;
   operationType?: string;
   pincodes?: string[];
@@ -63,7 +55,7 @@ interface UserRow {
   smartflo_agent_number: string | null;
   mobile: string | null;
   territory: string | null;
-  sales_team_id: string | null;
+  sales_team_ids: string[] | null;
   zone_id: string | null;
   state_id: string | null;
   employee_code: string | null;
@@ -91,7 +83,10 @@ function toPublicUser(row: UserRow) {
     smartfloAgentNumber: row.smartflo_agent_number,
     mobile: row.mobile,
     territory: row.territory,
-    salesTeamId: row.sales_team_id,
+    // A Call Center Executive can now be staffed on more than one team at
+    // once (see user_sales_teams/SALES_TEAMS_JOIN) - always an array, 0/1/2
+    // entries, never the single legacy sales_team_id column.
+    salesTeamIds: row.sales_team_ids ?? [],
     zoneId: row.zone_id,
     stateId: row.state_id,
     employeeCode: row.employee_code,
@@ -118,6 +113,16 @@ const PINCODES_JOIN = `
   ) ep ON true
 `;
 
+// Same shape, same reason, as PINCODES_JOIN above - a Call Center Executive
+// can now be on more than one team (user_sales_teams), so this aggregates
+// into the array toPublicUser expects instead of users.sales_team_id's old
+// single value.
+const SALES_TEAMS_JOIN = `
+  LEFT JOIN LATERAL (
+    SELECT array_agg(sales_team_id) AS sales_team_ids FROM user_sales_teams WHERE user_id = u.id
+  ) st ON true
+`;
+
 export interface ListUsersFilters {
   page: number;
   limit: number;
@@ -136,7 +141,7 @@ export async function listUsers(requestingUserId: string, requestingRole: Role, 
     // disappear with no way back to re-enable it.
     const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM users");
     const result = await pool.query<UserRow>(
-      `SELECT u.*, ep.pincodes FROM users u ${PINCODES_JOIN} ORDER BY u.name ASC LIMIT $1 OFFSET $2`,
+      `SELECT u.*, ep.pincodes, st.sales_team_ids FROM users u ${PINCODES_JOIN} ${SALES_TEAMS_JOIN} ORDER BY u.name ASC LIMIT $1 OFFSET $2`,
       [limit, offset]
     );
     return { users: result.rows.map(toPublicUser), total: Number(countResult.rows[0].count) };
@@ -160,9 +165,10 @@ export async function listUsers(requestingUserId: string, requestingRole: Role, 
        UNION ALL
        SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
      )
-     SELECT u.*, ep.pincodes FROM users u
+     SELECT u.*, ep.pincodes, st.sales_team_ids FROM users u
      INNER JOIN subtree s ON u.id = s.id
      ${PINCODES_JOIN}
+     ${SALES_TEAMS_JOIN}
      WHERE u.is_active = true
      ORDER BY u.name ASC
      LIMIT $2 OFFSET $3`,
@@ -252,22 +258,13 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
   const normalize = (value: string | undefined) => (value === "" ? null : value);
   const fieldMap: Record<string, unknown> = {
     name: updates.name,
-    designation: normalize(updates.designation),
     manager_id: normalize(updates.managerId),
-    dotted_line_manager_id: normalize(updates.dottedLineManagerId),
     smartflo_agent_number: normalize(updates.smartfloAgentNumber),
     mobile: normalize(updates.mobile),
     territory: normalize(updates.territory),
-    sales_team_id: normalize(updates.salesTeamId),
-    zone_id: normalize(updates.zoneId),
-    state_id: normalize(updates.stateId),
     employee_code: normalize(updates.employeeCode),
-    date_of_joining: normalize(updates.dateOfJoining),
     status: updates.status,
     level_id: normalize(updates.levelId),
-    office_id: normalize(updates.officeId),
-    division_channel_id: normalize(updates.divisionChannelId),
-    customer_category_id: normalize(updates.customerCategoryId),
     operation_type: normalize(updates.operationType),
     is_active: updates.isActive,
     role,
@@ -298,8 +295,26 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
     }
   }
 
+  // Same full-replace pattern as pincodes above - a full replace, not a
+  // diff, and submitting [] deliberately clears every team this person is
+  // staffed on.
+  if (updates.salesTeamIds !== undefined) {
+    await pool.query("DELETE FROM user_sales_teams WHERE user_id = $1", [id]);
+    if (updates.salesTeamIds.length > 0) {
+      await pool.query(
+        `INSERT INTO user_sales_teams (user_id, sales_team_id)
+         SELECT $1, * FROM unnest($2::uuid[])
+         ON CONFLICT (user_id, sales_team_id) DO NOTHING`,
+        [id, updates.salesTeamIds]
+      );
+    }
+  }
+
   if (setClauses.length === 0) {
-    const existing = await pool.query<UserRow>(`SELECT u.*, ep.pincodes FROM users u ${PINCODES_JOIN} WHERE u.id = $1`, [id]);
+    const existing = await pool.query<UserRow>(
+      `SELECT u.*, ep.pincodes, st.sales_team_ids FROM users u ${PINCODES_JOIN} ${SALES_TEAMS_JOIN} WHERE u.id = $1`,
+      [id]
+    );
     if (existing.rows.length === 0) {
       throw new ApiError(404, "User not found");
     }
@@ -327,6 +342,9 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
     }
   }
 
-  const final = await pool.query<UserRow>(`SELECT u.*, ep.pincodes FROM users u ${PINCODES_JOIN} WHERE u.id = $1`, [id]);
+  const final = await pool.query<UserRow>(
+    `SELECT u.*, ep.pincodes, st.sales_team_ids FROM users u ${PINCODES_JOIN} ${SALES_TEAMS_JOIN} WHERE u.id = $1`,
+    [id]
+  );
   return toPublicUser(final.rows[0]);
 }

@@ -32,13 +32,13 @@ export interface ListDelegationsFilters {
 // flow for a delegate to actually receive, so this just records who covers
 // for whom and when.
 export async function listDelegations(filters: ListDelegationsFilters) {
-  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM delegations");
+  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM delegations WHERE is_deleted = false");
 
   const limit = filters.limit;
   const offset = (filters.page - 1) * filters.limit;
 
   const result = await pool.query<DelegationRow>(
-    "SELECT * FROM delegations ORDER BY start_date DESC LIMIT $1 OFFSET $2",
+    "SELECT * FROM delegations WHERE is_deleted = false ORDER BY start_date DESC LIMIT $1 OFFSET $2",
     [limit, offset]
   );
   return { delegations: result.rows.map(toPublicDelegation), total: Number(countResult.rows[0].count) };
@@ -64,8 +64,10 @@ export async function createDelegation(input: CreateDelegationInput, requestingU
   return toPublicDelegation(result.rows[0]);
 }
 
+// Archives, never permanently deletes - "data is king" - same is_deleted
+// convention leads/opportunities already use.
 export async function deleteDelegation(id: string): Promise<void> {
-  const result = await pool.query("DELETE FROM delegations WHERE id = $1", [id]);
+  const result = await pool.query("UPDATE delegations SET is_deleted = true WHERE id = $1 AND is_deleted = false", [id]);
   if (result.rowCount === 0) {
     throw new ApiError(404, "Delegation not found");
   }

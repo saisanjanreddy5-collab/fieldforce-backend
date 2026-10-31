@@ -54,9 +54,9 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "quotes.view", "quotes.create", "quotes.update",
     "leads.export", "opportunities.export", "reports.export", "audit_log.export",
     "user_commissions.view", "user_commissions.create", "user_commissions.delete",
-    "customers.view", "customers.create", "customers.update", "customers.delete",
+    "customers.view", "customers.create", "customers.update",
     "call_center.view",
-    "support_tickets.view", "support_tickets.create", "support_tickets.update", "support_tickets.delete",
+    "support_tickets.view", "support_tickets.create", "support_tickets.update",
     "leads.call_log", "leads.qualify", "leads.send_to_field", "leads.reassign", "leads.queue_create",
   ],
   [ROLES.MANAGER]: [
@@ -98,7 +98,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "quotes.view", "quotes.create", "quotes.update",
     "leads.export", "opportunities.export", "reports.export", "audit_log.export",
     "user_commissions.view",
-    "customers.view", "customers.create", "customers.update", "customers.delete",
+    "customers.view", "customers.create", "customers.update",
     "call_center.view",
     "support_tickets.view", "support_tickets.create", "support_tickets.update",
     "leads.call_log", "leads.qualify", "leads.send_to_field", "leads.reassign", "leads.queue_create",
@@ -109,8 +109,12 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "activities.view", "activities.create", "activities.update", "activities.delete",
     "attendance.view_own", "attendance.view_team",
     "dashboard.view",
-    "offices.view",
-    "levels.view",
+    // offices.view/levels.view deliberately absent - those are the only two
+    // permissions that make Sales Force Management's own nav item (and its
+    // Offices/Levels & axes tabs) appear at all, which is admin/manager
+    // territory, not Field Sales Executive's (see the matching retroactive
+    // DELETE in model.ts). This "factory defaults" map must stay in sync
+    // with that fix, or "Reset role to default" would silently re-grant them.
     "structure_axis.view",
     "sales_teams.view",
     "fofo_onboarding.view", "fofo_onboarding.upload_document",
@@ -124,7 +128,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "pipeline_stages.view",
     "lead_categories.view",
     "quotes.view", "quotes.create", "quotes.update",
-    "customers.view", "customers.create", "customers.update", "customers.delete",
+    "customers.view", "customers.create", "customers.update",
     "support_tickets.view", "support_tickets.create", "support_tickets.update",
   ],
   // A real, separate account for Call Center employees - their own queue

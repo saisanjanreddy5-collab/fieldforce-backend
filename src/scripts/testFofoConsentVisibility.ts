@@ -4,14 +4,21 @@ import { createLead, getLeadConsent } from "../services/lead-service";
 import { getHandoff } from "../services/fofo-onboarding-service";
 import { ROLES } from "../utils/roles";
 
-// Reproduces the real bug reported in production: an admin opening a FOFO
-// handoff whose lead owner falls outside their own manager subtree got the
-// lead fine (getLeadById's own skipVisibilityCheck already covers that) but
-// a 403 from the separate /leads/:id/consent call, which had no such bypass
-// - FofoHandoffDetail.tsx's Promise.all then failed the whole page on that
-// one 403 even though the handoff itself loaded. Admin here deliberately has
-// no manager (a second, disconnected root) so owner is provably outside
-// their subtree, same shape as the real production case.
+// Originally reproduced a production bug: an admin opening a FOFO handoff
+// whose lead owner falls outside their own manager subtree got the lead fine
+// (getLeadById's own skipVisibilityCheck already covered that) but a 403
+// from the separate /leads/:id/consent call, which had no such bypass -
+// FofoHandoffDetail.tsx's Promise.all then failed the whole page on that one
+// 403 even though the handoff itself loaded. Admin here deliberately has no
+// manager (a second, disconnected root) so owner is provably outside their
+// subtree, same shape as the real production case.
+//
+// Superseded by the later "admin is a global role" fix (lead-service.ts's
+// UNASSIGNED_ADMIN_CLAUSE, now unconditional for any admin, not just
+// unassigned leads) - isLeadVisibleToUser itself no longer 403s an admin for
+// ANY lead regardless of subtree, so the direct getLeadConsent call below no
+// longer needs getHandoff's own skipVisibilityCheck bypass to succeed
+// either. Both paths are asserted to succeed now, not just the handoff one.
 
 async function findOrCreateUser(email: string, name: string, role: (typeof ROLES)[keyof typeof ROLES]): Promise<string> {
   const existing = await pool.query<{ id: string }>("SELECT id FROM users WHERE email = $1", [email]);
@@ -37,16 +44,17 @@ async function main(): Promise<void> {
   const lead = await createLead({ fullName: "FOFO Consent Visibility Test Lead", category: "FOFO" }, ownerId);
   console.log("Lead created:", lead.id, "owned by test owner (no manager, outside admin's subtree)");
 
-  console.log("\n--- Before fix behavior (direct getLeadConsent, no bypass) ---");
-  let threw403 = false;
+  console.log("\n--- Direct getLeadConsent, no explicit bypass option passed ---");
+  let consentSucceeded = false;
   try {
     await getLeadConsent(lead.id, adminId);
+    consentSucceeded = true;
   } catch (err) {
-    threw403 = (err as { statusCode?: number }).statusCode === 403;
+    console.error("getLeadConsent threw:", err);
   }
-  assertEqual("Direct getLeadConsent still 403s for admin outside subtree (expected, unchanged)", threw403, true);
+  assertEqual("getLeadConsent now succeeds for admin outside subtree too (global admin fix)", consentSucceeded, true);
 
-  console.log("\n--- After fix: getHandoff (what the FOFO page actually calls) ---");
+  console.log("\n--- getHandoff (what the FOFO page actually calls) ---");
   let handoffSucceeded = false;
   let consentIncluded = false;
   try {
