@@ -457,21 +457,19 @@ export const SLC_STAGE = "SLC";
 // call_center") - a Qualified lead still owned by the SLC agent who just
 // qualified it (before Send to Field) is NOT covered by this: that handoff
 // window is still single-owner by design, same as today.
-// A Call Center Executive can now be staffed on more than one team at once
-// (user_sales_teams is many-to-many - see model.ts), so "same team" is an
-// EXISTS over two joined rows sharing a sales_team_id, not a direct column
-// compare - this is what lets someone staffed on both FLC and SLC cover a
-// teammate's lead at either tier, not just whichever single team they used
-// to be limited to.
+// Client-confirmed, explicit: EVERY active Call Center Executive can see and
+// work ANY lead still at FLC or SLC, regardless of which team (FLC/SLC) they
+// themselves are tagged as - a freshly bulk-imported batch must be visible
+// to the whole Call Center floor immediately, not just whoever happens to
+// share the lead's current owner's team. Team tagging (user_sales_teams)
+// still matters elsewhere (round-robin auto-assignment of new/escalated
+// leads still picks within the matching team, for workload balance) - this
+// clause is specifically about who can SEE/WORK an already-existing lead,
+// which is now unconditional for the whole call_center role.
 const TIER_TEAMMATE_CLAUSE = `
   OR (
     l.status IN ('${FLC_STAGE}', '${SLC_STAGE}')
-    AND EXISTS (
-      SELECT 1 FROM users ru
-      JOIN user_sales_teams rust ON rust.user_id = ru.id
-      JOIN user_sales_teams oust ON oust.sales_team_id = rust.sales_team_id
-      WHERE ru.id = $1 AND ru.role = 'call_center' AND oust.user_id = l.owner_id
-    )
+    AND EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'call_center')
   )
 `;
 
