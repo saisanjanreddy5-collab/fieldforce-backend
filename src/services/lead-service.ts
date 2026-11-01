@@ -1223,6 +1223,85 @@ export async function getQuickFilterCounts(requestingUserId: string) {
   };
 }
 
+// Every plain, directly-editable lead field gets its own readable label here
+// so a change to it shows up in History - this is what the client explicitly
+// asked for ("whatever changes we do for a lead... needs to be visible in
+// the history"), not just the handful of fields (category/status/owner/
+// notes) that already had dedicated tracking below. Deliberately excludes:
+// status/category/owner_id (already produce their own, more specific
+// history entries further down - double-logging them here would show the
+// same change twice), internal_notes/rm_remark/lg_remark (same reason, via
+// the noteFields loop below), and every raw foreign-key id column
+// (duplicate_of_lead_id/sales_team_id/zone_id/state_id/district_id/area_id/
+// campaign_id) - showing "a1b2c3d4-... -> e5f6..." in History is worse than
+// not tracking it at all; resolving those to real names is real further
+// work, not something to fake here.
+const FIELD_AUDIT_LABELS: Partial<Record<keyof LeadRow, string>> = {
+  full_name: "Full name",
+  contact_name: "Contact name",
+  profession: "Profession",
+  start_date: "Start date",
+  qualified_person: "Qualified person",
+  financial_status: "Financial status",
+  welcome_message_sent: "Welcome message sent",
+  prospect_status: "Prospect status",
+  lead_score: "Lead score",
+  phone: "Phone",
+  alt_phone: "Alternate phone",
+  email: "Email",
+  website: "Website",
+  preferred_language: "Preferred language",
+  pincode: "Pincode",
+  address_line1: "Address line 1",
+  address_line2: "Address line 2",
+  territory: "Territory",
+  company_name: "Company name",
+  source: "Source",
+  inquiry_category: "Inquiry category",
+  inquiry_source: "Inquiry source",
+  capture_channel: "Capture channel",
+  utm_tags: "UTM tags",
+  expected_value: "Expected value",
+  received_at: "Received at",
+  has_store_location: "Has store location",
+  store_name: "Store name",
+  store_address: "Store address",
+  store_pincode: "Store pincode",
+  store_city: "Store city",
+  store_state: "Store state",
+  carpet_area: "Carpet area",
+  frontage: "Frontage",
+  ownership: "Ownership",
+  investment_capacity: "Investment capacity",
+  existing_business: "Existing business",
+  expected_opening: "Expected opening",
+  gst_number: "GST number",
+  pan_number: "PAN number",
+  drug_licence_number: "Drug licence number",
+  fssai_number: "FSSAI number",
+  entity_type: "Entity type",
+  aadhaar_number: "Aadhaar number",
+  nearest_coco_store: "Nearest COCO store",
+  signage_status: "Signage status",
+  security_deposit: "Security deposit",
+  opening_stock: "Opening stock",
+  margin_slab: "Margin slab",
+  credit_limit_requested: "Credit limit requested",
+  credit_category: "Credit category",
+  payment_terms: "Payment terms",
+  target_go_live: "Target go-live",
+};
+
+// Plain string/number/boolean columns only - render cleanly as a before/
+// after Tag pair in HistoryTab.tsx's default AuditEntry branch. true/false
+// shown as Yes/No, same as how LeadFormDrawer itself labels a boolean field
+// on screen, not the raw JS value.
+function formatAuditFieldValue(value: unknown): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return String(value);
+}
+
 export async function updateLead(
   leadId: string,
   updates: Partial<CreateLeadInput>,
@@ -1234,39 +1313,16 @@ export async function updateLead(
     throw new ApiError(403, "You do not have access to this lead");
   }
 
-  // Tracked separately from the generic fieldMap below since these three are
-  // the ones the real Audit trail cares about - captured before the UPDATE
+  // Full row, not just a handful of columns - captured before the UPDATE
   // runs because the generic dynamic-SET approach here never reads the old
   // row otherwise (unlike updateUser's manager_id change, which already does
-  // this same before/after read for manager_change_log).
-  const tracksChange =
-    updates.category !== undefined ||
-    updates.ownerId !== undefined ||
-    updates.status !== undefined ||
-    updates.internalNotes !== undefined ||
-    updates.rmRemark !== undefined ||
-    updates.lgRemark !== undefined;
-  let before: {
-    category: string | null;
-    status: string;
-    owner_id: string | null;
-    full_name: string;
-    internal_notes: string | null;
-    rm_remark: string | null;
-    lg_remark: string | null;
-  } | null = null;
-  if (tracksChange) {
-    const beforeResult = await pool.query<{
-      category: string | null;
-      status: string;
-      owner_id: string | null;
-      full_name: string;
-      internal_notes: string | null;
-      rm_remark: string | null;
-      lg_remark: string | null;
-    }>("SELECT category, status, owner_id, full_name, internal_notes, rm_remark, lg_remark FROM leads WHERE id = $1", [leadId]);
-    before = beforeResult.rows[0] ?? null;
-  }
+  // this same before/after read for manager_change_log). Every plain field
+  // edit (name, email, phone, address, ...) now gets its own History entry
+  // via the generic FIELD_AUDIT_LABELS loop further down, not just the
+  // handful of fields (category/status/owner/notes) that already had
+  // dedicated tracking - this is what the full row read is for.
+  const beforeResult = await pool.query<LeadRow>("SELECT * FROM leads WHERE id = $1", [leadId]);
+  const before = beforeResult.rows[0] ?? null;
 
   // Only re-checked when the phone number is actually being changed - same
   // flag-not-block behavior as createLead above, so editing a lead's number
@@ -1540,6 +1596,37 @@ export async function updateLead(
       // of whether statusChanged too - ownership syncing isn't tied to the
       // audit-entry combining above.
       await syncCustomerOwnerFromLead(leadId, updates.ownerId);
+    }
+
+    // Generic field-level history - one entry per plain field that actually
+    // changed in this edit (a form save touching several fields at once
+    // produces several entries, same as this file's existing precedent of
+    // one entry per real change rather than one combined blob). No AUDIT_VERB
+    // entry needed on the frontend for the shared "lead_field_updated" action
+    // - HistoryTab.tsx already falls back to showing `summary` verbatim
+    // right after the actor's name when an action has no dedicated verb, and
+    // the phrasing below ("updated the X") already reads correctly there.
+    for (const [column, label] of Object.entries(FIELD_AUDIT_LABELS) as [keyof LeadRow, string][]) {
+      // No separate "was this field even part of the edit" check needed -
+      // the UPDATE above only ever SETs columns that were actually provided
+      // (see fieldMap's own `value !== undefined` filter), so any untouched
+      // column's before/after is identical by construction and is skipped
+      // by the display-value comparison below anyway.
+      const oldDisplay = formatAuditFieldValue(before[column]);
+      const newDisplay = formatAuditFieldValue(after[column]);
+      if (oldDisplay === newDisplay) continue;
+      await recordAuditEvent({
+        entityType: "lead",
+        entityId: leadId,
+        entityLabel: after.full_name,
+        action: "lead_field_updated",
+        summary: `updated the ${label.toLowerCase()}`,
+        oldValue: oldDisplay,
+        newValue: newDisplay,
+        actorId: requestingUserId,
+        actorName,
+        ipAddress,
+      });
     }
   }
 
