@@ -135,13 +135,16 @@ async function resolveFieldFallbackAssignee(): Promise<{ id: string; name: strin
   return result.rows[0] ?? null;
 }
 
-async function getTierCandidates(teamId: string): Promise<SwapCandidate[]> {
+// Client-confirmed, explicit: every active Call Center Executive is a valid
+// candidate for any FLC/SLC lead, regardless of their own team tag (see
+// lead-service.ts's TIER_TEAMMATE_CLAUSE - the matching visibility rule).
+// Team tagging still drives round-robin auto-assignment; it no longer limits
+// who can be manually handed a lead here.
+async function getTierCandidates(): Promise<SwapCandidate[]> {
   const result = await pool.query<SwapCandidate>(
     `SELECT u.id, u.name, u.email FROM users u
-     JOIN user_sales_teams ust ON ust.user_id = u.id AND ust.sales_team_id = $1
      WHERE u.role = 'call_center' AND u.is_active = true
-     ORDER BY u.name ASC`,
-    [teamId]
+     ORDER BY u.name ASC`
   );
   return result.rows;
 }
@@ -282,8 +285,7 @@ export async function getSwapCandidates(leadId: string, requestingUserId: string
   const facts = await getLeadAssignmentFacts(leadId);
   const teamName = tierTeamName(facts.status);
   if (teamName) {
-    const teamId = await getSalesTeamIdByName(teamName);
-    return teamId ? getTierCandidates(teamId) : [];
+    return getTierCandidates();
   }
   return getFieldCandidates(facts.pincode, facts.category);
 }
@@ -389,8 +391,7 @@ export async function reassignLead(
 
   const facts = await getLeadAssignmentFacts(leadId);
   const teamName = tierTeamName(facts.status);
-  const teamId = teamName ? await getSalesTeamIdByName(teamName) : null;
-  const candidates = teamId ? await getTierCandidates(teamId) : await getFieldCandidates(facts.pincode, facts.category);
+  const candidates = teamName ? await getTierCandidates() : await getFieldCandidates(facts.pincode, facts.category);
 
   if (!candidates.some((c) => c.id === newOwnerId)) {
     throw new ApiError(

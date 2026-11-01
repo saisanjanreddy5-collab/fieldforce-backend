@@ -3,11 +3,16 @@ import { pool } from "../config/db";
 import { createLead, isLeadInOwnerScope, isLeadVisibleToUser } from "../services/lead-service";
 import { logCallDisposition } from "../services/lead-call-center-service";
 
-// Verifies the "cover for an absent teammate" requirement: any FLC-team
-// member can see/call ANY lead currently at FLC (not just their own), same
-// for SLC, without owner_id ever changing to reflect who actually worked it
-// - the activity log is what records the real actor (see
-// lead-call-center-service.ts's logCallDisposition).
+// Verifies the client-confirmed, explicit rule: EVERY active Call Center
+// Executive can see/work ANY lead currently at FLC or SLC, regardless of
+// which team (FLC/SLC) they themselves are tagged as - a freshly
+// bulk-imported batch must be visible to the whole Call Center floor right
+// away, not just whoever happens to share the lead's team tag. owner_id
+// never changes just because a non-owner worked it - the activity log is
+// what records the real actor (see lead-call-center-service.ts's
+// logCallDisposition). Once a lead reaches Qualified, this blanket coverage
+// no longer applies - that handoff window is still single-owner by design,
+// unrelated to the FLC/SLC team-tagging question this test is about.
 
 let failures = 0;
 function assertEqual(label: string, actual: unknown, expected: unknown): void {
@@ -40,9 +45,10 @@ async function main(): Promise<void> {
   const cc2 = await pool.query<{ id: string }>("SELECT id FROM users WHERE email = 'cc2@test.local'");
   const cc2Id = cc2.rows[0].id;
 
-  // cc4: a second FLC-team member - tests "teammate, not owner" at FLC.
+  // cc4/cc5: two more call_center fixtures (one FLC-tagged, one SLC-tagged
+  // by inheritance from their templates) - used to prove this generalizes to
+  // any call_center person, not just the two primary fixtures.
   const cc4Id = await findOrCreateFixture("cc4@test.local", "CC Agent 4", "EMP-TEST-CC4", "cc1@test.local");
-  // cc5: a second SLC-team member - tests "teammate, not owner" at SLC.
   const cc5Id = await findOrCreateFixture("cc5@test.local", "CC Agent 5", "EMP-TEST-CC5", "cc2@test.local");
 
   // --- FLC tier: lead owned by cc1 ---
@@ -54,18 +60,18 @@ async function main(): Promise<void> {
   );
   assertEqual("FLC lead lands at FLC, owned by cc1", flcLead.status, "FLC");
 
-  assertEqual("FLC teammate (cc4) is in owner scope", await isLeadInOwnerScope(flcLead.id, cc4Id), true);
-  assertEqual("SLC agent (cc2) is NOT in owner scope of an FLC lead", await isLeadInOwnerScope(flcLead.id, cc2Id), false);
+  assertEqual("Same-team call center person (cc4) is in owner scope", await isLeadInOwnerScope(flcLead.id, cc4Id), true);
+  assertEqual("Cross-team call center person (cc2, SLC) is ALSO in owner scope of an FLC lead", await isLeadInOwnerScope(flcLead.id, cc2Id), true);
 
-  // Teammate actually logs a call - owner must stay cc1, actor must be cc4.
-  await logCallDisposition(flcLead.id, { disposition: "Call Done And Interested" }, cc4Id);
+  // A cross-team person actually logs a call - owner must stay cc1, actor must be cc2.
+  await logCallDisposition(flcLead.id, { disposition: "Call Done And Interested" }, cc2Id);
   const afterCall = await pool.query<{ owner_id: string }>("SELECT owner_id FROM leads WHERE id = $1", [flcLead.id]);
-  assertEqual("Owner unchanged after teammate logs a call", afterCall.rows[0].owner_id, cc1Id);
+  assertEqual("Owner unchanged after a cross-team person logs a call", afterCall.rows[0].owner_id, cc1Id);
   const activity = await pool.query<{ created_by: string; assigned_to: string }>(
     "SELECT created_by, assigned_to FROM activities WHERE lead_id = $1 AND type = 'call' ORDER BY created_at DESC LIMIT 1",
     [flcLead.id]
   );
-  assertEqual("Activity log attributes the call to the real actor (cc4)", activity.rows[0].created_by, cc4Id);
+  assertEqual("Activity log attributes the call to the real actor (cc2)", activity.rows[0].created_by, cc2Id);
 
   // --- SLC tier: lead directly set up as owned by cc2 at SLC stage ---
   const slcLead = await createLead(
@@ -76,16 +82,16 @@ async function main(): Promise<void> {
   );
   await pool.query("UPDATE leads SET status = 'SLC', owner_id = $1 WHERE id = $2", [cc2Id, slcLead.id]);
 
-  assertEqual("SLC teammate (cc5) is in owner scope", await isLeadInOwnerScope(slcLead.id, cc5Id), true);
-  assertEqual("FLC teammate (cc4) is NOT in owner scope of an SLC lead", await isLeadInOwnerScope(slcLead.id, cc4Id), false);
-  assertEqual("Original FLC owner (cc1) is NOT in owner scope of someone else's SLC lead", await isLeadInOwnerScope(slcLead.id, cc1Id), false);
+  assertEqual("Same-team call center person (cc5) is in owner scope", await isLeadInOwnerScope(slcLead.id, cc5Id), true);
+  assertEqual("Cross-team call center person (cc4, FLC) is ALSO in owner scope of an SLC lead", await isLeadInOwnerScope(slcLead.id, cc4Id), true);
+  assertEqual("Original FLC owner (cc1) is ALSO in owner scope of someone else's SLC lead", await isLeadInOwnerScope(slcLead.id, cc1Id), true);
 
-  // Once Qualified, the handoff window is single-owner again - a teammate
-  // keeps read-visibility (isLeadVisibleToUser uses the same clause too) only
-  // through an explicit share, never bare tier-teammate standing.
+  // Once Qualified, the handoff window is single-owner again - this blanket
+  // call-center coverage no longer applies (unrelated to team tagging), and
+  // a non-owner keeps visibility only through an explicit share.
   await pool.query("UPDATE leads SET status = 'Qualified' WHERE id = $1", [slcLead.id]);
-  assertEqual("SLC teammate (cc5) loses owner scope once Qualified", await isLeadInOwnerScope(slcLead.id, cc5Id), false);
-  assertEqual("SLC teammate (cc5) also loses plain visibility once Qualified", await isLeadVisibleToUser(slcLead.id, cc5Id), false);
+  assertEqual("Non-owner call center person (cc5) loses owner scope once Qualified", await isLeadInOwnerScope(slcLead.id, cc5Id), false);
+  assertEqual("Non-owner call center person (cc5) also loses plain visibility once Qualified", await isLeadVisibleToUser(slcLead.id, cc5Id), false);
 
   console.log(`\n${failures === 0 ? "ALL ASSERTIONS PASSED" : `${failures} ASSERTION(S) FAILED`}`);
 
