@@ -92,9 +92,14 @@ async function main(): Promise<void> {
     "History includes the logged call with its disposition",
     fullFunnelHistory.some((h) => h.kind === "Activity" && h.detail.includes("Call Done And Interested"))
   );
+  // Escalating no longer reassigns ownership (client-confirmed - see
+  // escalateTier's own comment), so it's now a plain stage-change audit
+  // event ("Lead stage changed - ... : FLC -> SLC"), not the old combined
+  // "escalated" action that only fired when owner and status changed
+  // together.
   assertTrue(
-    "History includes the FLC->SLC escalation",
-    fullFunnelHistory.some((h) => h.kind === "History" && h.detail.toLowerCase().includes("escalat"))
+    "History includes the FLC->SLC stage change",
+    fullFunnelHistory.some((h) => h.kind === "History" && h.detail.includes("FLC -> SLC"))
   );
   assertTrue(
     "History includes the field fallback assignment",

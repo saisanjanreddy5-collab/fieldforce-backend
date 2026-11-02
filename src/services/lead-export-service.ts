@@ -43,40 +43,85 @@ function splitStageOwner(value: string): { stage: string; owner: string } | null
 // section for the full reasoning behind each branch. Pure/testable on
 // purpose: no DB access in here, just the four audit actions lead-service.ts
 // and lead-call-center-service.ts actually produce for a lead.
+//
+// Ownership is now sticky through New -> FLC -> SLC (startFlc/escalateTier
+// no longer reassign - client-confirmed, see their own comments), so most
+// stage moves are a plain "status_changed" with no owner info attached at
+// all. A stage entered that way is "pending": we don't yet know who held it,
+// but since ownership never silently changes on its own, whoever the NEXT
+// real owner-change event's oldValue names (an owner_reassigned, or an
+// escalated pair, if one still occurs) must have been the owner all along -
+// that single fact retroactively resolves every pending stage still unset,
+// not just the one stage that event names directly.
 export function reconstructOwnerTrail(eventsOldestFirst: OwnerTrailEvent[], current: CurrentOwnerFacts) {
   const stageOwner: Record<string, string> = {};
   let fieldFallbackOwner: string | null = null;
   let currentStage: string | null = null;
+  let lastKnownOwner: string | null = null;
+  const pendingStages: string[] = [];
+
+  // A stage was just entered (or, for the very first transition seen,
+  // "re-entered" via that event's oldValue, since a lead's true starting
+  // stage is itself never audited) - resolve it now if we already know the
+  // owner, otherwise queue it for the next real owner-change event to
+  // backfill.
+  const enterStage = (stage: string) => {
+    if (lastKnownOwner !== null) {
+      if (stageOwner[stage] === undefined) stageOwner[stage] = lastKnownOwner;
+    } else if (!pendingStages.includes(stage)) {
+      pendingStages.push(stage);
+    }
+  };
+
+  // The owner named here held every still-pending stage - only meaningful
+  // the first time we ever learn a real name; once lastKnownOwner is set,
+  // pendingStages is already empty and stays that way.
+  const backfillPending = (ownerName: string) => {
+    if (lastKnownOwner !== null) return;
+    for (const stage of pendingStages) {
+      if (stageOwner[stage] === undefined) stageOwner[stage] = ownerName;
+    }
+    pendingStages.length = 0;
+  };
 
   for (const event of eventsOldestFirst) {
     if (event.action === "escalated" && event.oldValue && event.newValue) {
       const from = splitStageOwner(event.oldValue);
       const to = splitStageOwner(event.newValue);
-      // Only backfill the earlier stage the first time it's seen - a later,
-      // unrelated event should never clobber the real original snapshot.
-      if (from && stageOwner[from.stage] === undefined) stageOwner[from.stage] = from.owner;
+      if (from) {
+        if (stageOwner[from.stage] === undefined) stageOwner[from.stage] = from.owner;
+        backfillPending(from.owner);
+        lastKnownOwner = from.owner;
+      }
       if (to) {
         stageOwner[to.stage] = to.owner;
         currentStage = to.stage;
+        lastKnownOwner = to.owner;
       }
     } else if (event.action === "status_changed" && event.newValue) {
-      // Owner didn't change here (e.g. qualifyLead's SLC -> Qualified) -
-      // just advances the tracker so a later owner-only event attributes to
-      // the right stage.
+      // The first transition ever seen also tells us the lead's real
+      // starting stage via oldValue - otherwise it would never be
+      // attributable at all (createLead writes no audit row of its own).
+      if (currentStage === null && event.oldValue) enterStage(event.oldValue);
       currentStage = event.newValue;
-    } else if (event.action === "owner_reassigned" && event.newValue && currentStage) {
+      enterStage(currentStage);
+    } else if (event.action === "owner_reassigned" && event.newValue) {
       // Covers both the admin's manual Reassign and sendToField (which
-      // deliberately never changes status - see sendToField's own comment),
-      // attributed to whatever stage is current right now.
-      stageOwner[currentStage] = event.newValue;
+      // deliberately never changes status - see sendToField's own comment).
+      // oldValue is who held it through every pending stage up to now;
+      // newValue is who holds the current stage from this point on.
+      if (event.oldValue) backfillPending(event.oldValue);
+      if (currentStage) stageOwner[currentStage] = event.newValue;
+      lastKnownOwner = event.newValue;
     } else if (event.action === "field_fallback_assignment" && event.newValue) {
       fieldFallbackOwner = event.newValue;
+      lastKnownOwner = event.newValue;
     }
   }
 
-  // A lead's very first owner is never itself audited (createLead writes no
-  // audit row) - if replay never set a tier, only trust the lead's *current*
-  // live owner for that tier if it never left that tier at all.
+  // If replay never resolved a tier at all (no events ever touched it),
+  // only trust the lead's *current* live owner for that tier if it never
+  // left that tier in the first place.
   const flcHandledBy = stageOwner.FLC ?? (current.status === "FLC" ? current.ownerName : null) ?? "-";
   const slcHandledBy = stageOwner.SLC ?? (current.status === "SLC" ? current.ownerName : null) ?? "-";
   const fieldSalesExecutive =
