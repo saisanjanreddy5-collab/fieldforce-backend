@@ -86,12 +86,16 @@ async function main(): Promise<void> {
   assertEqual("Cross-team call center person (cc4, FLC) is ALSO in owner scope of an SLC lead", await isLeadInOwnerScope(slcLead.id, cc4Id), true);
   assertEqual("Original FLC owner (cc1) is ALSO in owner scope of someone else's SLC lead", await isLeadInOwnerScope(slcLead.id, cc1Id), true);
 
-  // Once Qualified, the handoff window is single-owner again - this blanket
-  // call-center coverage no longer applies (unrelated to team tagging), and
-  // a non-owner keeps visibility only through an explicit share.
+  // Once Qualified, the handoff window is single-owner again for OWNER
+  // SCOPE (can call/edit/act) - that blanket call-center coverage no longer
+  // applies there (unrelated to team tagging). Plain VISIBILITY is a
+  // different story, per the client's later, separate, explicit
+  // confirmation: every active Call Center Executive can look up ANY lead
+  // forever, read-only, even long after it's left the floor - see
+  // CALL_CENTER_UNIVERSAL_VISIBILITY_CLAUSE's own comment in lead-service.ts.
   await pool.query("UPDATE leads SET status = 'Qualified' WHERE id = $1", [slcLead.id]);
   assertEqual("Non-owner call center person (cc5) loses owner scope once Qualified", await isLeadInOwnerScope(slcLead.id, cc5Id), false);
-  assertEqual("Non-owner call center person (cc5) also loses plain visibility once Qualified", await isLeadVisibleToUser(slcLead.id, cc5Id), false);
+  assertEqual("Non-owner call center person (cc5) keeps read-only visibility forever, even once Qualified", await isLeadVisibleToUser(slcLead.id, cc5Id), true);
 
   console.log(`\n${failures === 0 ? "ALL ASSERTIONS PASSED" : `${failures} ASSERTION(S) FAILED`}`);
 

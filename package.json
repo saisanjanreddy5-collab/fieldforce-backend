@@ -25,6 +25,7 @@
     "test:admin-global-visibility": "ts-node src/scripts/testAdminGlobalVisibility.ts",
     "test:soft-delete-conversion": "ts-node src/scripts/testSoftDeleteConversion.ts",
     "test:new-stage-and-team-removal": "ts-node src/scripts/testNewStageAndTeamRemoval.ts",
+    "test:universal-call-center-visibility": "ts-node src/scripts/testUniversalCallCenterVisibility.ts",
     "test:lead-field-history": "ts-node src/scripts/testLeadFieldHistory.ts"
   },
   "keywords": [],

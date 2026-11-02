@@ -349,6 +349,20 @@ const UNASSIGNED_ADMIN_CLAUSE = `
   OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin')
 `;
 
+// Client-confirmed, explicit: every active Call Center Executive can look up
+// ANY lead at any time, for its entire lifetime - not just while it's still
+// New/FLC/SLC (that's TIER_TEAMMATE_CLAUSE above, which ALSO grants real
+// owner-scope/action rights while a lead is still on the Call Center floor).
+// This one is read-only visibility ONLY - deliberately part of
+// isLeadVisibleToUser/global search, never isLeadInOwnerScope, so a Call
+// Center Executive can see what happened to a lead that's since gone to
+// Field Sales or been Converted, but can't call/edit/qualify it any more
+// once it's left their floor. Exported so global-search-service.ts's own
+// copy of this visibility logic stays in sync instead of silently drifting.
+export const CALL_CENTER_UNIVERSAL_VISIBILITY_CLAUSE = `
+  OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'call_center')
+`;
+
 export async function isLeadVisibleToUser(leadId: string, userId: string): Promise<boolean> {
   const result = await pool.query(
     `${SUBTREE_CTE}
@@ -360,6 +374,7 @@ export async function isLeadVisibleToUser(leadId: string, userId: string): Promi
          OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
          ${UNASSIGNED_ADMIN_CLAUSE}
          ${TIER_TEAMMATE_CLAUSE}
+         ${CALL_CENTER_UNIVERSAL_VISIBILITY_CLAUSE}
        )`,
     [userId, leadId]
   );
@@ -890,12 +905,21 @@ export async function getDistinctLeadSources(): Promise<string[]> {
 // their queue goes completely blank with no trace of what they'd actually
 // handled, which read as the work having vanished rather than finished.
 // lead_shares rows created by shareLeadBackToSender (lead-call-center-
-// service.ts) are exactly "leads this person used to own and has since
-// handed off" - nothing else writes that table for that reason today, so
-// querying it directly needs no new column or flag. Each row still comes
-// back with in_owner_scope: false (real, not assumed - computed the same
-// way getLeadById does), since a rep can revisit these but never act on
-// them again.
+// service.ts) are exactly "a lead that's left the Call Center floor" -
+// nothing else writes that table for that reason today, so querying it
+// directly needs no new column or flag. Each row still comes back with
+// in_owner_scope: false (real, not assumed - computed the same way
+// getLeadById does), since a rep can revisit these but never act on them
+// again.
+//
+// Client-confirmed, explicit: every active Call Center Executive can look up
+// ANY lead that's ever left the floor, not just the ones they personally
+// handed off themselves - see CALL_CENTER_UNIVERSAL_VISIBILITY_CLAUSE's own
+// comment. Scoped to call_center specifically (via the EXISTS check below)
+// rather than broadened for every requester, so Admin/Manager keep seeing
+// only their own personal hand-offs here, same as before - they already have
+// full company-wide visibility through the normal Leads page, this section
+// has never been their real workspace.
 export async function listLeadsHandedOffByUser(requestingUserId: string) {
   const result = await pool.query<LeadRow>(
     `${SUBTREE_CTE}
@@ -903,11 +927,18 @@ export async function listLeadsHandedOffByUser(requestingUserId: string) {
        dl.full_name AS duplicate_of_full_name, dl.lead_number AS duplicate_of_lead_number,
        (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE}) AS in_owner_scope
      FROM leads l
-     JOIN lead_shares ls ON ls.lead_id = l.id AND ls.shared_with_user_id = $1
      LEFT JOIN users u ON u.id = l.owner_id
      LEFT JOIN leads dl ON dl.id = l.duplicate_of_lead_id
      WHERE l.is_deleted = false
-     ORDER BY ls.created_at DESC`,
+       AND EXISTS (
+         SELECT 1 FROM lead_shares ls
+         WHERE ls.lead_id = l.id
+           AND (
+             ls.shared_with_user_id = $1
+             OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'call_center')
+           )
+       )
+     ORDER BY l.updated_at DESC`,
     [requestingUserId]
   );
   return result.rows.map(toPublicLead);
