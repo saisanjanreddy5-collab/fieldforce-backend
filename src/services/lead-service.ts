@@ -229,6 +229,10 @@ export interface ListLeadsFilters {
   highScoreOnly?: boolean;
   consentPending?: boolean;
   unassignedOnly?: boolean;
+  // When the lead actually came into the CRM (created_at) - plain calendar
+  // dates (YYYY-MM-DD), inclusive on both ends.
+  createdFrom?: string;
+  createdTo?: string;
   page: number;
   limit: number;
 }
@@ -436,39 +440,35 @@ async function resolveAutoAssignee(input: CreateLeadInput, creatorId: string): P
 }
 
 // The two calling-tier stages a marketing lead walks through before
-// reaching the existing Qualified stage, each worked by its own team pool
-// (see resolveTierAssignee/getSalesTeamIdByName below). Exported so
-// lead-call-center-service.ts's escalation actions and the bulk-import path
+// reaching the existing Qualified stage, worked by every active Call Center
+// Executive (see resolveTierAssignee below - no team split any more).
+// Exported so lead-call-center-service.ts's escalation actions and the bulk-import path
 // share one real source of truth instead of each hardcoding these strings.
 // A third tier (TLC) was removed before any real lead or employee ever
 // reached it - SLC is now the last calling tier before Qualified.
 export const FLC_STAGE = "FLC";
 export const SLC_STAGE = "SLC";
 
-// Lead sharing within a calling tier: any active Call Center employee on the
-// SAME sales_team as a lead's current owner can see and work that lead while
-// it's still at that owner's own tier stage - not just the one person it
-// happens to be assigned to. This is what lets a teammate cover someone
-// else's leads on a day they're out, without reassigning ownership (the
-// owner stays recorded as whoever it was originally given to; who actually
-// worked it shows up correctly in the activity log via created_by/
+// Lead sharing across the whole Call Center floor: any active Call Center
+// Executive can see and work any lead still at New/FLC/SLC, not just the one
+// person it happens to be assigned to. This is what lets a teammate cover
+// someone else's leads on a day they're out, without reassigning ownership
+// (the owner stays recorded as whoever it was originally given to; who
+// actually worked it shows up correctly in the activity log via created_by/
 // assigned_to, which already records the real actor, never the owner).
-// Deliberately keyed off l.status being exactly FLC/SLC (not "owner's role is
-// call_center") - a Qualified lead still owned by the SLC agent who just
-// qualified it (before Send to Field) is NOT covered by this: that handoff
-// window is still single-owner by design, same as today.
+// Deliberately keyed off l.status being exactly New/FLC/SLC (not "owner's
+// role is call_center") - a Qualified lead still owned by the SLC agent who
+// just qualified it (before Send to Field) is NOT covered by this: that
+// handoff window is still single-owner by design, same as today.
 // Client-confirmed, explicit: EVERY active Call Center Executive can see and
-// work ANY lead still at FLC or SLC, regardless of which team (FLC/SLC) they
-// themselves are tagged as - a freshly bulk-imported batch must be visible
-// to the whole Call Center floor immediately, not just whoever happens to
-// share the lead's current owner's team. Team tagging (user_sales_teams)
-// still matters elsewhere (round-robin auto-assignment of new/escalated
-// leads still picks within the matching team, for workload balance) - this
-// clause is specifically about who can SEE/WORK an already-existing lead,
-// which is now unconditional for the whole call_center role.
+// work ANY lead still at New, FLC, or SLC - there is no FLC/SLC team split
+// any more (removed by explicit request; see resolveTierAssignee, and
+// UserFormWizard.tsx no longer offers a Sales team field for this role). A
+// freshly imported or manually created batch is visible to the whole Call
+// Center floor immediately, however it was created.
 const TIER_TEAMMATE_CLAUSE = `
   OR (
-    l.status IN ('${FLC_STAGE}', '${SLC_STAGE}')
+    l.status IN ('New', '${FLC_STAGE}', '${SLC_STAGE}')
     AND EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'call_center')
   )
 `;
@@ -489,33 +489,42 @@ const AGENT_WORKED_STAGE_CLAUSE = `(
   OR l.status NOT IN ('New', '${FLC_STAGE}', '${SLC_STAGE}')
 )`;
 
-// Resolves a calling-tier team's id by its exact sales_teams.name (e.g.
-// "FLC Team") - sales_teams.name has no unique constraint at the schema
-// level, so this takes the first match; the three team rows are seeded
-// once in model.ts and never duplicated in practice.
-export async function getSalesTeamIdByName(name: string): Promise<string | null> {
-  const result = await pool.query<{ id: string }>("SELECT id FROM sales_teams WHERE name = $1 LIMIT 1", [name]);
-  return result.rows[0]?.id ?? null;
-}
-
-// Least-loaded round robin within one calling-tier team - picks whoever on
-// that team currently has the fewest leads still sitting in that tier's own
-// stage, so volume self-balances instead of a strict rotation that can't
-// tell a fast agent from a slow one apart. Returns null when the team has
-// no active member yet - the lead is left unassigned rather than thrown
-// away, same as every other "nobody matched" case in this file; it's still
+// Least-loaded round robin across EVERY active Call Center Executive - no
+// team filter any more (the FLC/SLC team split was removed by explicit
+// client request). A fresh FLC-bound lead actually starts at 'New', not
+// 'FLC', until someone clicks "FLC" to start working it - so FLC's own
+// workload count includes both statuses, otherwise round robin would never
+// see today's real backlog and degrade into a coin flip. SLC has no such
+// pre-stage; a lead only ever reaches it via an explicit escalation, so its
+// count stays exact. Returns null when there's no active Call Center
+// Executive at all - the lead is left unassigned rather than thrown away,
+// same as every other "nobody matched" case in this file; it's still
 // reachable afterward via the existing admin-sees-unassigned-leads rule.
-export async function resolveTierAssignee(teamId: string, stage: string): Promise<string | null> {
+export async function resolveTierAssignee(stage: string): Promise<string | null> {
+  const workloadStatuses = stage === FLC_STAGE ? [FLC_STAGE, "New"] : [stage];
   const result = await pool.query<{ id: string }>(
     `SELECT u.id
      FROM users u
-     JOIN user_sales_teams ust ON ust.user_id = u.id AND ust.sales_team_id = $1
      WHERE u.role = 'call_center' AND u.is_active = true
      ORDER BY (
-       SELECT COUNT(*) FROM leads l WHERE l.owner_id = u.id AND l.status = $2 AND l.is_deleted = false
+       SELECT COUNT(*) FROM leads l WHERE l.owner_id = u.id AND l.status = ANY($1) AND l.is_deleted = false
      ) ASC, random()
      LIMIT 1`,
-    [teamId, stage]
+    [workloadStatuses]
+  );
+  return result.rows[0]?.id ?? null;
+}
+
+// Resolves the bulk-import "Call Center Executive" column (an email) to an
+// active Call Center Executive's id - case-insensitive, since spreadsheet
+// data is never reliably cased. A typo'd/inactive/wrong-role email returns
+// null rather than throwing, so that row just falls back to round robin
+// like a blank cell would (client-confirmed: no reason to fail a whole
+// import row over one bad email).
+export async function resolveCallCenterExecutiveByEmail(email: string): Promise<string | null> {
+  const result = await pool.query<{ id: string }>(
+    "SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND role = 'call_center' AND is_active = true",
+    [email.trim()]
   );
   return result.rows[0]?.id ?? null;
 }
@@ -639,9 +648,15 @@ export async function createLead(
   let ownerId: string | null;
   let status = input.status;
   if (options?.requiresQualification && input.ownerId === undefined) {
-    const flcTeamId = await getSalesTeamIdByName("FLC Team");
-    ownerId = options.assignToCreator ? creatorId : flcTeamId ? await resolveTierAssignee(flcTeamId, FLC_STAGE) : null;
-    status = status ?? FLC_STAGE;
+    // assignToCreator (the Call Center workspace's own "Add lead" action)
+    // keeps today's instant-FLC behavior unchanged - the agent logging this
+    // contact mid-call is already working it, no gate needed. Every other
+    // marketing-sourced path (bulk import, website form, QR campaign) now
+    // lands on 'New' first, same as a manually-created lead always has -
+    // "FLC" is a deliberate click, not an automatic landing spot, for any of
+    // them.
+    ownerId = options.assignToCreator ? creatorId : await resolveTierAssignee(FLC_STAGE);
+    status = status ?? (options.assignToCreator ? FLC_STAGE : "New");
   } else {
     ownerId = input.ownerId ?? (await resolveAutoAssignee(input, creatorId));
   }
@@ -821,13 +836,21 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
         if (normalized.length === 10) seenPhones.add(normalized);
       }
 
-      // Bulk-imported leads always go through the same FLC round-robin a
-      // blank-column row always got - a sheet can no longer hand-pick a
-      // specific person, so every imported lead lands in the shared FLC
-      // queue exactly like one added any other way. ownerId/status are left
-      // unset; createLead's own FLC-entry branch handles the round-robin
-      // assignment.
-      await createLead({ ...row }, creatorId, undefined, { requiresQualification: true });
+      // A row can hand-pick a starting owner via the "Call Center Executive"
+      // column (by email) - resolved here, not trusted as a raw id, and
+      // falls back to the normal round-robin (ownerId left undefined) if the
+      // email is blank or doesn't match an active Call Center Executive.
+      // Either way the lead still lands on 'New' and stays visible to the
+      // whole Call Center floor - see TIER_TEAMMATE_CLAUSE.
+      const assignedOwnerId = row.assignedToEmail
+        ? await resolveCallCenterExecutiveByEmail(row.assignedToEmail)
+        : null;
+      await createLead(
+        { ...row, ownerId: assignedOwnerId ?? undefined },
+        creatorId,
+        undefined,
+        { requiresQualification: true }
+      );
       result.created++;
     } catch (err) {
       if (err instanceof ApiError && err.statusCode === 409) {
@@ -1011,6 +1034,17 @@ export function buildLeadFilterConditions(
   }
   if (filters.unassignedOnly) {
     conditions.push(`l.owner_id IS NULL`);
+  }
+  // Calendar-date bounds on created_at (not a timestamp range) - createdTo's
+  // own day counts in full, so "filter to 2 Nov" doesn't quietly exclude
+  // everything created after midnight that day.
+  if (filters.createdFrom) {
+    params.push(filters.createdFrom);
+    conditions.push(`l.created_at >= $${params.length}::date`);
+  }
+  if (filters.createdTo) {
+    params.push(filters.createdTo);
+    conditions.push(`l.created_at < ($${params.length}::date + INTERVAL '1 day')`);
   }
 
   return { conditions, params };

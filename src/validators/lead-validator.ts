@@ -127,6 +127,13 @@ export const bulkImportRowSchema = z.object({
   expectedValue: z.coerce.number().optional(),
   website: z.string().optional(),
   internalNotes: z.string().optional(),
+  // Who this row starts out assigned to (by email, resolved server-side in
+  // bulkImportLeads) - purely a starting owner, never an access gate: every
+  // Call Center Executive can see and work this lead regardless of who it's
+  // assigned to (TIER_TEAMMATE_CLAUSE in lead-service.ts). A blank cell, or
+  // an email that doesn't match an active Call Center Executive, falls back
+  // to the normal round-robin assignment - never rejects the row.
+  assignedToEmail: z.string().trim().optional(),
 });
 
 // The only schema actually passed to validateBody for this route - just
@@ -167,6 +174,11 @@ export const listLeadsQuerySchema = z.object({
   highScoreOnly: queryBoolean,
   consentPending: queryBoolean,
   unassignedOnly: queryBoolean,
+  // When the lead actually came into the CRM (created_at), not any later
+  // activity - a plain calendar date, inclusive on both ends (createdTo's
+  // whole day counts, not just midnight).
+  createdFrom: z.string().optional(),
+  createdTo: z.string().optional(),
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
 });
