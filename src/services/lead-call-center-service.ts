@@ -4,7 +4,6 @@ import { recordAuditEvent } from "./audit-log-service";
 import {
   createLead,
   getLeadById,
-  getSalesTeamIdByName,
   isLeadInOwnerScope,
   resolveTierAssignee,
   updateLead,
@@ -15,14 +14,13 @@ import {
 import { createActivityForLead } from "./activity-service";
 
 const QUALIFIED_STAGE = "Qualified";
+const NEW_STAGE = "New";
 
-// Which team pool backs each calling tier - null for any stage that isn't
-// one of the two (Qualified, Open, etc.), where the Field-side pincode
-// matching below applies instead.
-function tierTeamName(stage: string): string | null {
-  if (stage === FLC_STAGE) return "FLC Team";
-  if (stage === SLC_STAGE) return "SLC Team";
-  return null;
+// Whether this stage is still Call Center's own floor (New/FLC/SLC, worked
+// by any active Call Center Executive - no team split) as opposed to a Field
+// Sales stage, where the pincode-matching logic below applies instead.
+function isCallCenterTierStage(stage: string): boolean {
+  return stage === NEW_STAGE || stage === FLC_STAGE || stage === SLC_STAGE;
 }
 
 // Ownership-based visibility (isLeadVisibleToUser/isLeadInOwnerScope) means
@@ -228,22 +226,64 @@ export async function qualifyLead(leadId: string, requestingUserId: string, ipAd
   return updateLead(leadId, { status: QUALIFIED_STAGE }, requestingUserId, ipAddress);
 }
 
+// Puts a brand-new lead to work - every creation path (manual, bulk import,
+// website, QR) now lands on 'New' first; this is the one explicit click that
+// moves it into the real FLC queue. Owner never changes here - whoever was
+// already assigned (explicit bulk-import email, round robin, or an admin's
+// own pick at manual creation) keeps it; this is a pure stage move, not a
+// handoff, so there's no shareLeadBackToSender like the tier escalations
+// below.
+export async function startFlc(leadId: string, requestingUserId: string, ipAddress?: string | null) {
+  const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
+  if (!inScope) {
+    throw new ApiError(403, "You do not have access to this lead");
+  }
+
+  const facts = await getLeadAssignmentFacts(leadId);
+  if (facts.status !== NEW_STAGE) {
+    throw new ApiError(422, `Only a lead in the "${NEW_STAGE}" stage can move to FLC`);
+  }
+
+  return updateLead(leadId, { status: FLC_STAGE }, requestingUserId, ipAddress);
+}
+
+// Lets any active Call Center Executive take ownership of a lead they can
+// already see (New/FLC/SLC, per TIER_TEAMMATE_CLAUSE) without going through
+// the Admin/Manager-only Reassign flow below - the real case this exists for
+// is covering a colleague's leads on a day they're out. Deliberately
+// narrower than reassignLead: always assigns to the caller themselves, never
+// to anyone else, and gated to the call_center role at the route layer
+// rather than a new permission row (Admin/Manager already have the general
+// Reassign tool for handing a lead to anyone).
+export async function claimLead(leadId: string, requestingUserId: string, ipAddress?: string | null) {
+  const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
+  if (!inScope) {
+    throw new ApiError(403, "You do not have access to this lead");
+  }
+
+  const facts = await getLeadAssignmentFacts(leadId);
+  if (!isCallCenterTierStage(facts.status)) {
+    throw new ApiError(422, "This lead can no longer be picked up");
+  }
+
+  return updateLead(leadId, { ownerId: requestingUserId }, requestingUserId, ipAddress);
+}
+
 // Escalates a lead from one calling tier to the next, reassigning it to the
-// next tier's own least-loaded active member - mirrors sendToField's own
-// shape exactly (owner-scope check, resolve a new owner, updateLead, then
-// shareLeadBackToSender so the escalating caller keeps read-only visibility
-// afterward), since that handoff already solves every sub-problem this
-// needs. No pincode-style coverage gap here - every FLC/SLC team member is
-// equally eligible, so there's no fallback-when-nobody-covers path like
-// Field Sales has; `resolveTierAssignee` only returns null when the next
-// tier genuinely has zero active members, which is a real setup error, not
-// a routine case to paper over.
+// next tier's own least-loaded active Call Center Executive - mirrors
+// sendToField's own shape exactly (owner-scope check, resolve a new owner,
+// updateLead, then shareLeadBackToSender so the escalating caller keeps
+// read-only visibility afterward), since that handoff already solves every
+// sub-problem this needs. No pincode-style coverage gap here - every Call
+// Center Executive is equally eligible, so there's no fallback-when-nobody-
+// covers path like Field Sales has; `resolveTierAssignee` only returns null
+// when there's genuinely no active Call Center Executive at all, which is a
+// real setup error, not a routine case to paper over.
 async function escalateTier(
   leadId: string,
   requestingUserId: string,
   fromStage: string,
   toStage: string,
-  toTeamName: string,
   ipAddress?: string | null
 ) {
   const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
@@ -256,10 +296,9 @@ async function escalateTier(
     throw new ApiError(422, `Only a lead in the "${fromStage}" stage can be escalated to ${toStage}`);
   }
 
-  const teamId = await getSalesTeamIdByName(toTeamName);
-  const nextOwnerId = teamId ? await resolveTierAssignee(teamId, toStage) : null;
+  const nextOwnerId = await resolveTierAssignee(toStage);
   if (!nextOwnerId) {
-    throw new ApiError(422, `No active ${toTeamName} employee exists yet to receive this lead.`);
+    throw new ApiError(422, "No active Call Center Executive exists yet to receive this lead.");
   }
 
   const updated = await updateLead(leadId, { status: toStage, ownerId: nextOwnerId }, requestingUserId, ipAddress);
@@ -268,14 +307,14 @@ async function escalateTier(
 }
 
 export async function escalateToSlc(leadId: string, requestingUserId: string, ipAddress?: string | null) {
-  return escalateTier(leadId, requestingUserId, FLC_STAGE, SLC_STAGE, "SLC Team", ipAddress);
+  return escalateTier(leadId, requestingUserId, FLC_STAGE, SLC_STAGE, ipAddress);
 }
 
-// Who this lead could be handed to right now - at an FLC/SLC stage, any
-// active member of that exact tier's own team (no pincode concept on that
-// side); at/after Qualified, only field employees who actually cover its
-// pincode. Reused by both the Send to Field Sales flow (to disambiguate
-// multiple matches) and the general Reassign/Swap action.
+// Who this lead could be handed to right now - at a New/FLC/SLC stage, any
+// active Call Center Executive (no team concept on that side any more);
+// at/after Qualified, only field employees who actually cover its pincode.
+// Reused by both the Send to Field Sales flow (to disambiguate multiple
+// matches) and the general Reassign/Swap action.
 export async function getSwapCandidates(leadId: string, requestingUserId: string): Promise<SwapCandidate[]> {
   const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
   if (!inScope) {
@@ -283,8 +322,7 @@ export async function getSwapCandidates(leadId: string, requestingUserId: string
   }
 
   const facts = await getLeadAssignmentFacts(leadId);
-  const teamName = tierTeamName(facts.status);
-  if (teamName) {
+  if (isCallCenterTierStage(facts.status)) {
     return getTierCandidates();
   }
   return getFieldCandidates(facts.pincode, facts.category);
@@ -390,14 +428,14 @@ export async function reassignLead(
   }
 
   const facts = await getLeadAssignmentFacts(leadId);
-  const teamName = tierTeamName(facts.status);
-  const candidates = teamName ? await getTierCandidates() : await getFieldCandidates(facts.pincode, facts.category);
+  const isCallCenterTier = isCallCenterTierStage(facts.status);
+  const candidates = isCallCenterTier ? await getTierCandidates() : await getFieldCandidates(facts.pincode, facts.category);
 
   if (!candidates.some((c) => c.id === newOwnerId)) {
     throw new ApiError(
       422,
-      teamName
-        ? `That person is not an active ${teamName} employee`
+      isCallCenterTier
+        ? "That person is not an active Call Center Executive"
         : "That employee does not cover this lead's pincode - pick someone from the eligible list",
       { candidates }
     );

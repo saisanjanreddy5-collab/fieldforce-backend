@@ -60,6 +60,8 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     highScoreOnly?: boolean;
     consentPending?: boolean;
     unassignedOnly?: boolean;
+    createdFrom?: string;
+    createdTo?: string;
     page: number;
     limit: number;
   };
@@ -82,6 +84,8 @@ export const exportLeads = asyncHandler(async (req: Request, res: Response) => {
     highScoreOnly?: boolean;
     consentPending?: boolean;
     unassignedOnly?: boolean;
+    createdFrom?: string;
+    createdTo?: string;
   };
   const result = await leadExportService.getLeadsExportData(req.user!.id, query);
   sendSuccess(res, result);
@@ -135,6 +139,16 @@ export const logCallDisposition = asyncHandler(async (req: Request, res: Respons
 export const qualify = asyncHandler(async (req: Request, res: Response) => {
   const lead = await leadCallCenterService.qualifyLead(String(req.params.id), req.user!.id, req.ip);
   sendSuccess(res, lead, "Lead marked Qualified");
+});
+
+export const startFlc = asyncHandler(async (req: Request, res: Response) => {
+  const lead = await leadCallCenterService.startFlc(String(req.params.id), req.user!.id, req.ip);
+  sendSuccess(res, lead, "Moved to FLC");
+});
+
+export const claim = asyncHandler(async (req: Request, res: Response) => {
+  const lead = await leadCallCenterService.claimLead(String(req.params.id), req.user!.id, req.ip);
+  sendSuccess(res, lead, "Lead picked up");
 });
 
 export const escalateToSlc = asyncHandler(async (req: Request, res: Response) => {
