@@ -1,4 +1,5 @@
 import { pool } from "../config/db";
+import { CALL_CENTER_UNIVERSAL_VISIBILITY_CLAUSE } from "./lead-service";
 
 // Same subtree-visibility rule leads/opportunities already use everywhere
 // else (owner in the requester's reporting subtree, or explicitly shared) -
@@ -12,10 +13,21 @@ const SUBTREE_CTE = `
   )
 `;
 
-const VISIBILITY_CLAUSE = `(
+const BASE_VISIBILITY = `
   l.owner_id IN (SELECT id FROM subtree)
   OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
-)`;
+`;
+
+// Opportunities keep the base rule only - Call Center holds no
+// opportunities.view permission at all, so surfacing one they'd just 403 on
+// opening would be a confusing dead end, not a real feature.
+const OPPORTUNITY_VISIBILITY_CLAUSE = `(${BASE_VISIBILITY})`;
+
+// Leads additionally get the call-center-universal clause - a Call Center
+// Executive who can open a lead directly must also be able to find it by
+// search (imports lead-service.ts's own clause rather than re-deriving it
+// here, so the two can never silently drift apart).
+const LEAD_VISIBILITY_CLAUSE = `(${BASE_VISIBILITY} ${CALL_CENTER_UNIVERSAL_VISIBILITY_CLAUSE})`;
 
 interface LeadResultRow {
   id: string;
@@ -62,7 +74,7 @@ export async function globalSearch(requestingUserId: string, query: string): Pro
     `${SUBTREE_CTE}
      SELECT l.id, l.full_name, l.company_name, l.phone, l.email, l.category, l.status
      FROM leads l
-     WHERE l.is_deleted = false AND ${VISIBILITY_CLAUSE}
+     WHERE l.is_deleted = false AND ${LEAD_VISIBILITY_CLAUSE}
        AND (l.full_name ILIKE $2 OR l.company_name ILIKE $2 OR l.phone ILIKE $2 OR l.email ILIKE $2 OR l.contact_name ILIKE $2)
      ORDER BY l.created_at DESC
      LIMIT ${RESULT_LIMIT}`,
@@ -74,7 +86,7 @@ export async function globalSearch(requestingUserId: string, query: string): Pro
      SELECT o.id, o.name, l.full_name AS lead_full_name, o.stage, o.value
      FROM opportunities o
      JOIN leads l ON l.id = o.lead_id
-     WHERE o.is_deleted = false AND l.is_deleted = false AND ${VISIBILITY_CLAUSE}
+     WHERE o.is_deleted = false AND l.is_deleted = false AND ${OPPORTUNITY_VISIBILITY_CLAUSE}
        AND (o.name ILIKE $2 OR l.full_name ILIKE $2)
      ORDER BY o.created_at DESC
      LIMIT ${RESULT_LIMIT}`,
