@@ -5,7 +5,6 @@ import {
   createLead,
   getLeadById,
   isLeadInOwnerScope,
-  resolveTierAssignee,
   updateLead,
   FLC_STAGE,
   SLC_STAGE,
@@ -223,7 +222,15 @@ export async function qualifyLead(leadId: string, requestingUserId: string, ipAd
     throw new ApiError(422, `Only a lead in the "${SLC_STAGE}" stage can be marked Qualified`);
   }
 
-  return updateLead(leadId, { status: QUALIFIED_STAGE }, requestingUserId, ipAddress);
+  // Whoever actually marks this Qualified becomes its owner at that exact
+  // moment. Qualified is the one point where single-owner visibility kicks
+  // back in (TIER_TEAMMATE_CLAUSE stops covering a lead once it's Qualified -
+  // see that comment in lead-service.ts), so without this, a Call Center
+  // Executive who worked a colleague's FLC/SLC lead the whole way through
+  // would lose all access the instant they qualified it, with no Send to
+  // Field button for them. Setting owner here guarantees the person who just
+  // did the work can immediately carry it through themselves.
+  return updateLead(leadId, { status: QUALIFIED_STAGE, ownerId: requestingUserId }, requestingUserId, ipAddress);
 }
 
 // Puts a brand-new lead to work - every creation path (manual, bulk import,
@@ -231,8 +238,8 @@ export async function qualifyLead(leadId: string, requestingUserId: string, ipAd
 // moves it into the real FLC queue. Owner never changes here - whoever was
 // already assigned (explicit bulk-import email, round robin, or an admin's
 // own pick at manual creation) keeps it; this is a pure stage move, not a
-// handoff, so there's no shareLeadBackToSender like the tier escalations
-// below.
+// handoff, so there's no shareLeadBackToSender (same as escalateTier below -
+// neither of these reassigns ownership any more).
 export async function startFlc(leadId: string, requestingUserId: string, ipAddress?: string | null) {
   const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
   if (!inScope) {
@@ -269,16 +276,18 @@ export async function claimLead(leadId: string, requestingUserId: string, ipAddr
   return updateLead(leadId, { ownerId: requestingUserId }, requestingUserId, ipAddress);
 }
 
-// Escalates a lead from one calling tier to the next, reassigning it to the
-// next tier's own least-loaded active Call Center Executive - mirrors
-// sendToField's own shape exactly (owner-scope check, resolve a new owner,
-// updateLead, then shareLeadBackToSender so the escalating caller keeps
-// read-only visibility afterward), since that handoff already solves every
-// sub-problem this needs. No pincode-style coverage gap here - every Call
-// Center Executive is equally eligible, so there's no fallback-when-nobody-
-// covers path like Field Sales has; `resolveTierAssignee` only returns null
-// when there's genuinely no active Call Center Executive at all, which is a
-// real setup error, not a routine case to paper over.
+// Escalates a lead from one calling tier to the next - a pure stage move,
+// same as startFlc above. Client-confirmed, explicit: escalating no longer
+// hands the lead to a different round-robin pick. That reassignment made
+// sense back when FLC and SLC were separate teams (a lead genuinely had to
+// reach someone on the other team); now that every active Call Center
+// Executive already works every New/FLC/SLC lead regardless of who owns it
+// (TIER_TEAMMATE_CLAUSE), forcing a random owner swap on escalate only
+// strands whoever's actually been working the lead the moment it reaches
+// Qualified, where single-owner visibility kicks back in - see qualifyLead's
+// own comment. The person who escalates keeps it, and carries it through to
+// Qualified/Send to Field themselves unless they explicitly hand it off via
+// Reassign/Pick up this lead.
 async function escalateTier(
   leadId: string,
   requestingUserId: string,
@@ -296,14 +305,7 @@ async function escalateTier(
     throw new ApiError(422, `Only a lead in the "${fromStage}" stage can be escalated to ${toStage}`);
   }
 
-  const nextOwnerId = await resolveTierAssignee(toStage);
-  if (!nextOwnerId) {
-    throw new ApiError(422, "No active Call Center Executive exists yet to receive this lead.");
-  }
-
-  const updated = await updateLead(leadId, { status: toStage, ownerId: nextOwnerId }, requestingUserId, ipAddress);
-  await shareLeadBackToSender(leadId, requestingUserId);
-  return updated;
+  return updateLead(leadId, { status: toStage }, requestingUserId, ipAddress);
 }
 
 export async function escalateToSlc(leadId: string, requestingUserId: string, ipAddress?: string | null) {
