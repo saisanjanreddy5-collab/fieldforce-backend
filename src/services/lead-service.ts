@@ -1006,8 +1006,12 @@ export function buildLeadFilterConditions(
   conditions.push(AGENT_WORKED_STAGE_CLAUSE);
 
   if (filters.status) {
-    params.push(filters.status);
-    conditions.push(`l.status = $${params.length}`);
+    // Comma-separated accepted too (e.g. "New,FLC,SLC") - lets a caller like
+    // the Call Center queue fetch every tier stage it cares about in one
+    // request instead of one full paginated fetch per stage. A plain single
+    // value still works exactly as before (ANY over a one-element array).
+    params.push(filters.status.split(","));
+    conditions.push(`l.status = ANY($${params.length})`);
   }
   if (filters.ownerId) {
     params.push(filters.ownerId);

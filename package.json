@@ -28,7 +28,8 @@
     "test:universal-call-center-visibility": "ts-node src/scripts/testUniversalCallCenterVisibility.ts",
     "test:lead-field-history": "ts-node src/scripts/testLeadFieldHistory.ts",
     "test:batch1-validation-fixes": "ts-node src/scripts/testBatch1ValidationFixes.ts",
-    "test:batch2-partial-fixes": "ts-node src/scripts/testBatch2PartialFixes.ts"
+    "test:batch2-partial-fixes": "ts-node src/scripts/testBatch2PartialFixes.ts",
+    "test:multi-status-filter-and-pagination": "ts-node src/scripts/testMultiStatusFilterAndPagination.ts"
   },
   "keywords": [],
   "author": "",
