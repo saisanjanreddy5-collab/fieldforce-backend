@@ -1,6 +1,7 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { recordAuditEvent } from "./audit-log-service";
+import { Role, ROLES } from "../utils/roles";
 
 export const LEAVE_TYPE_KEYS = ["casual", "sick", "earned", "comp_off"] as const;
 export type LeaveTypeKey = (typeof LEAVE_TYPE_KEYS)[number];
@@ -279,15 +280,25 @@ export async function listMyRequests(userId: string) {
 // Direct reports only - Leave approval is by "the reporting manager", not
 // the whole subtree, so this deliberately doesn't reuse the recursive
 // subtree CTE the record-scope modules (leads/opportunities/activities) use.
-export async function listTeamRequests(managerId: string) {
+// Admin is a global role, not a node in the reporting chain - admin
+// accounts routinely have zero direct reports of their own (same fact
+// team-rollup-service.ts's own getTeamRollup already documents), so the
+// plain "WHERE u.manager_id = $1" below left an admin's own Team tab
+// permanently empty, reading as "only my own leave list" even though every
+// other screen already gives admin full company-wide visibility. Every
+// other role keeps the direct-reports-only scope unchanged.
+export async function listTeamRequests(managerId: string, requestingRole: Role) {
+  const whereClause =
+    requestingRole === ROLES.ADMIN
+      ? `lr.start_date <= CURRENT_DATE + INTERVAL '30 days' AND lr.end_date >= CURRENT_DATE AND lr.status != 'cancelled'`
+      : `u.manager_id = $1 AND lr.start_date <= CURRENT_DATE + INTERVAL '30 days' AND lr.end_date >= CURRENT_DATE AND lr.status != 'cancelled'`;
+  const params = requestingRole === ROLES.ADMIN ? [] : [managerId];
+
   const result = await pool.query<LeaveRequestRow>(
     `${REQUEST_SELECT}
-     WHERE u.manager_id = $1
-       AND lr.start_date <= CURRENT_DATE + INTERVAL '30 days'
-       AND lr.end_date >= CURRENT_DATE
-       AND lr.status != 'cancelled'
+     WHERE ${whereClause}
      ORDER BY lr.start_date ASC`,
-    [managerId]
+    params
   );
   return result.rows.map(toPublicLeaveRequest);
 }

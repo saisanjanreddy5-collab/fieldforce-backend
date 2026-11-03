@@ -1,6 +1,14 @@
 import { z } from "zod";
 import { paginationQuerySchema } from "./pagination";
 
+// Same shape and reasoning as registerSchema's own mobileNumber in
+// auth-validator.ts (kept as a separate local copy, not a shared import -
+// these two validator files have deliberately stayed independent of each
+// other everywhere else in this codebase).
+const mobileNumber = z
+  .union([z.literal(""), z.string().regex(/^(\+91[\s-]?)?\d{10}$/, "Enter a valid 10-digit mobile number")])
+  .optional();
+
 // Deliberately narrow - self-service profile editing must never let a
 // user touch their own role, permissions, manager, level, or territory.
 // Only the one field a person legitimately needs to self-correct (their
@@ -14,7 +22,7 @@ export const updateUserSchema = z.object({
   name: z.string().min(1, "Name is required").optional(),
   managerId: z.string().uuid().or(z.literal("")).optional(),
   smartfloAgentNumber: z.string().optional(),
-  mobile: z.string().optional(),
+  mobile: mobileNumber,
   territory: z.string().optional(),
   // A Call Center Executive can be staffed on more than one team at once
   // (see user_sales_teams) - an array, not a single id. [] clears every

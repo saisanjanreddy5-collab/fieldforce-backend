@@ -26,7 +26,7 @@ export const listMine = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const listTeam = asyncHandler(async (req: Request, res: Response) => {
-  sendSuccess(res, await leaveService.listTeamRequests(req.user!.id));
+  sendSuccess(res, await leaveService.listTeamRequests(req.user!.id, req.user!.role));
 });
 
 export const listPendingApprovals = asyncHandler(async (req: Request, res: Response) => {

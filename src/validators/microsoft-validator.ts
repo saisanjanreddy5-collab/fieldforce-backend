@@ -14,6 +14,9 @@ export const sendLeadEmailSchema = z.object({
 
 export const createTeamsMeetingSchema = z.object({
   subject: z.string().min(1, "Subject is required"),
-  startTime: z.string().min(1, "Start time is required"),
+  startTime: z
+    .string()
+    .min(1, "Start time is required")
+    .refine((v) => new Date(v) >= new Date(), { message: "Start time can't be in the past" }),
   endTime: z.string().min(1, "End time is required"),
 });

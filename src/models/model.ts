@@ -226,8 +226,18 @@ export async function createTables(): Promise<void> {
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS store_pincode VARCHAR(20)`,
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS store_city VARCHAR(100)`,
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS store_state VARCHAR(100)`,
+    // Legacy free-text columns - no longer written to (see carpet_area_sqft/
+    // frontage_ft below), kept in place only so any pre-existing values
+    // ("620 sq ft") aren't lost. Nothing in current code reads these two any
+    // more.
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS carpet_area VARCHAR(50)`,
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS frontage VARCHAR(50)`,
+    // Real replacements - a plain number input (sq ft / ft), not free text
+    // mixing a number with a unit. Client-confirmed: these were open text
+    // boxes with zero validation, letting a negative or nonsense value
+    // through.
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS carpet_area_sqft DECIMAL(10,2)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS frontage_ft DECIMAL(10,2)`,
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS ownership VARCHAR(50)`,
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS investment_capacity DECIMAL(12,2)`,
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS existing_business VARCHAR(255)`,
@@ -927,7 +937,11 @@ export async function createTables(): Promise<void> {
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS margin_slab VARCHAR(50)`,
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS credit_limit_requested DECIMAL(12,2)`,
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS credit_category VARCHAR(50)`,
+    // Legacy free-text column ("Net 21 days") - no longer written to, kept
+    // only so pre-existing values aren't lost. Replaced below by a plain
+    // day-count number, same reasoning as carpet_area_sqft above.
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS payment_terms VARCHAR(100)`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS payment_days INTEGER`,
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS target_go_live DATE`,
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS push_status VARCHAR(20) NOT NULL DEFAULT 'not_pushed' CHECK (push_status IN ('not_pushed','pushed'))`,
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS onboarding_app_id VARCHAR(50)`,

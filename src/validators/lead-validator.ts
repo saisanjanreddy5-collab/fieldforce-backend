@@ -2,6 +2,14 @@ import { z } from "zod";
 
 const uuid = z.string().uuid();
 
+// Blank is fine (phone is optional on a lead), but a non-blank value must be
+// a real 10-digit mobile number - this is what was missing: nothing here
+// ever actually checked the shape, letting garbage into a field Smartflo
+// then tries to dial.
+const tenDigitPhone = z
+  .union([z.literal(""), z.string().regex(/^\d{10}$/, "Enter a 10-digit mobile number")])
+  .optional();
+
 const consentInputSchema = z.object({
   captured: z.boolean().optional(),
   method: z.string().optional(),
@@ -18,7 +26,6 @@ export const createLeadSchema = z.object({
   startDate: z.string().optional(),
   qualifiedPerson: z.string().optional(),
   financialStatus: z.string().optional(),
-  welcomeMessageSent: z.boolean().optional(),
   status: z.string().optional(),
   prospectStatus: z.string().optional(),
   category: z.string().optional(),
@@ -27,8 +34,8 @@ export const createLeadSchema = z.object({
   leadScore: z.coerce.number().min(0).max(100).optional(),
 
   // Contact tab
-  phone: z.string().optional(),
-  altPhone: z.string().optional(),
+  phone: tenDigitPhone,
+  altPhone: tenDigitPhone,
   email: z.string().email().optional(),
   website: z.string().optional(),
   preferredLanguage: z.string().optional(),
@@ -68,28 +75,39 @@ export const createLeadSchema = z.object({
   storePincode: z.string().optional(),
   storeCity: z.string().optional(),
   storeState: z.string().optional(),
-  carpetArea: z.string().optional(),
-  frontage: z.string().optional(),
+  carpetArea: z.coerce.number().min(0).optional(),
+  frontage: z.coerce.number().min(0).optional(),
   ownership: z.string().optional(),
   investmentCapacity: z.coerce.number().optional(),
   existingBusiness: z.string().optional(),
   expectedOpening: z.string().optional(),
   gstNumber: z.string().optional(),
-  panNumber: z.string().optional(),
+  // Blank is fine, but a non-blank value must be a real PAN: 5 letters, 4
+  // digits, 1 letter (e.g. ABCDE1234F) - the standard format every Indian
+  // PAN follows, case-insensitive on entry but always stored uppercase.
+  panNumber: z
+    .union([z.literal(""), z.string().regex(/^[A-Za-z]{5}[0-9]{4}[A-Za-z]$/, "Enter a valid PAN (e.g. ABCDE1234F)")])
+    .transform((v) => (v ? v.toUpperCase() : v))
+    .optional(),
   drugLicenceNumber: z.string().optional(),
   fssaiNumber: z.string().optional(),
 
   // FOFO onboarding handoff
   entityType: z.string().optional(),
   aadhaarNumber: z.string().optional(),
-  nearestCocoStore: z.string().optional(),
+  // Free text by design ("Baner - 6.2 km" mixes a store name with a
+  // distance) - not worth splitting into separate fields, but a negative
+  // number anywhere in it is never legitimate.
+  nearestCocoStore: z.string().refine((v) => !/-\d/.test(v), "Can't contain a negative number").optional(),
   signageStatus: z.string().optional(),
   securityDeposit: z.coerce.number().optional(),
   openingStock: z.coerce.number().optional(),
-  marginSlab: z.string().optional(),
+  // Same reasoning as nearestCocoStore above - "Slab B — 22%" mixes a tier
+  // label with a rate, stays free text, just can't go negative.
+  marginSlab: z.string().refine((v) => !/-\d/.test(v), "Can't contain a negative number").optional(),
   creditLimitRequested: z.coerce.number().optional(),
   creditCategory: z.string().optional(),
-  paymentTerms: z.string().optional(),
+  paymentTerms: z.coerce.number().min(0).int().optional(),
   targetGoLive: z.string().optional(),
 
   // Consent tab - written to the separate consents table
@@ -172,7 +190,6 @@ export const listLeadsQuerySchema = z.object({
   source: z.string().optional(),
   overdueOnly: queryBoolean,
   highScoreOnly: queryBoolean,
-  consentPending: queryBoolean,
   unassignedOnly: queryBoolean,
   // When the lead actually came into the CRM (created_at), not any later
   // activity - a plain calendar date, inclusive on both ends (createdTo's

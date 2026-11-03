@@ -58,7 +58,6 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     source?: string;
     overdueOnly?: boolean;
     highScoreOnly?: boolean;
-    consentPending?: boolean;
     unassignedOnly?: boolean;
     createdFrom?: string;
     createdTo?: string;
@@ -82,7 +81,6 @@ export const exportLeads = asyncHandler(async (req: Request, res: Response) => {
     source?: string;
     overdueOnly?: boolean;
     highScoreOnly?: boolean;
-    consentPending?: boolean;
     unassignedOnly?: boolean;
     createdFrom?: string;
     createdTo?: string;

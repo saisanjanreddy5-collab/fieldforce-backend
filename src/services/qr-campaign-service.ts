@@ -331,6 +331,11 @@ export async function submitPublicCapture(
       existingBusiness: fieldConfig.existingStore && input.existingStore ? "Yes" : undefined,
       preferredLanguage: fieldConfig.preferredLanguage ? input.preferredLanguage?.trim() || undefined : undefined,
       source: "qr",
+      // inquirySource alone used to leave Inquiry Category permanently blank
+      // for every QR-sourced lead - the frontend locks that field (can't be
+      // hand-typed) whenever captureChannel isn't manual_entry, so with
+      // nothing setting it here it just stayed empty forever.
+      inquiryCategory: "QR Code",
       inquirySource: `QR code — ${row.name}`,
       captureChannel: "qr",
       utmTags: row.utm_tags ?? undefined,
