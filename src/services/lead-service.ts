@@ -69,6 +69,8 @@ interface LeadRow {
   store_state: string | null;
   carpet_area: string | null;
   frontage: string | null;
+  carpet_area_sqft: string | null;
+  frontage_ft: string | null;
   ownership: string | null;
   investment_capacity: string | null;
   existing_business: string | null;
@@ -87,6 +89,7 @@ interface LeadRow {
   credit_limit_requested: string | null;
   credit_category: string | null;
   payment_terms: string | null;
+  payment_days: number | null;
   target_go_live: string | null;
   push_status: string;
   onboarding_app_id: string | null;
@@ -124,7 +127,6 @@ interface LeadRow {
   in_owner_scope: boolean;
   has_overdue_activity?: boolean;
   next_activity_due_at?: string | null;
-  consent_pending?: boolean;
 }
 
 export interface LeadConsentInput {
@@ -143,7 +145,6 @@ export interface CreateLeadInput {
   startDate?: string;
   qualifiedPerson?: string;
   financialStatus?: string;
-  welcomeMessageSent?: boolean;
   status?: string;
   prospectStatus?: string;
   category?: string;
@@ -187,8 +188,8 @@ export interface CreateLeadInput {
   storePincode?: string;
   storeCity?: string;
   storeState?: string;
-  carpetArea?: string;
-  frontage?: string;
+  carpetArea?: number;
+  frontage?: number;
   ownership?: string;
   investmentCapacity?: number;
   existingBusiness?: string;
@@ -208,7 +209,7 @@ export interface CreateLeadInput {
   marginSlab?: string;
   creditLimitRequested?: number;
   creditCategory?: string;
-  paymentTerms?: string;
+  paymentTerms?: number;
   targetGoLive?: string;
 
   // Consent tab
@@ -227,7 +228,6 @@ export interface ListLeadsFilters {
   source?: string;
   overdueOnly?: boolean;
   highScoreOnly?: boolean;
-  consentPending?: boolean;
   unassignedOnly?: boolean;
   // When the lead actually came into the CRM (created_at) - plain calendar
   // dates (YYYY-MM-DD), inclusive on both ends.
@@ -252,7 +252,6 @@ function toPublicLead(row: LeadRow) {
     startDate: row.start_date,
     qualifiedPerson: row.qualified_person,
     financialStatus: row.financial_status,
-    welcomeMessageSent: row.welcome_message_sent,
     status: row.status,
     prospectStatus: row.prospect_status,
     category: row.category,
@@ -290,8 +289,8 @@ function toPublicLead(row: LeadRow) {
     storePincode: row.store_pincode,
     storeCity: row.store_city,
     storeState: row.store_state,
-    carpetArea: row.carpet_area,
-    frontage: row.frontage,
+    carpetArea: row.carpet_area_sqft === null ? null : Number(row.carpet_area_sqft),
+    frontage: row.frontage_ft === null ? null : Number(row.frontage_ft),
     ownership: row.ownership,
     investmentCapacity: row.investment_capacity === null ? null : Number(row.investment_capacity),
     existingBusiness: row.existing_business,
@@ -309,7 +308,7 @@ function toPublicLead(row: LeadRow) {
     marginSlab: row.margin_slab,
     creditLimitRequested: row.credit_limit_requested === null ? null : Number(row.credit_limit_requested),
     creditCategory: row.credit_category,
-    paymentTerms: row.payment_terms,
+    paymentTerms: row.payment_days,
     targetGoLive: row.target_go_live,
     pushStatus: row.push_status,
     onboardingAppId: row.onboarding_app_id,
@@ -329,7 +328,6 @@ function toPublicLead(row: LeadRow) {
     inOwnerScope: row.in_owner_scope,
     hasOverdueActivity: row.has_overdue_activity ?? undefined,
     nextActivityDueAt: row.next_activity_due_at ?? null,
-    consentPending: row.consent_pending ?? undefined,
   };
 }
 
@@ -683,7 +681,6 @@ export async function createLead(
     start_date: input.startDate,
     qualified_person: input.qualifiedPerson,
     financial_status: input.financialStatus,
-    welcome_message_sent: input.welcomeMessageSent,
     // 'New' (capital N) matches pipeline_stages' real key for this stage -
     // same reasoning as 'Converted' on the createCustomerFromLead path
     // below. Used to default to lowercase 'new' here, silently diverging
@@ -728,8 +725,8 @@ export async function createLead(
     store_pincode: input.storePincode,
     store_city: input.storeCity,
     store_state: input.storeState,
-    carpet_area: input.carpetArea,
-    frontage: input.frontage,
+    carpet_area_sqft: input.carpetArea,
+    frontage_ft: input.frontage,
     ownership: input.ownership,
     investment_capacity: input.investmentCapacity,
     existing_business: input.existingBusiness,
@@ -747,7 +744,7 @@ export async function createLead(
     margin_slab: input.marginSlab,
     credit_limit_requested: input.creditLimitRequested,
     credit_category: input.creditCategory,
-    payment_terms: input.paymentTerms,
+    payment_days: input.paymentTerms,
     target_go_live: input.targetGoLive,
     created_by: creatorId,
     updated_by: creatorId,
@@ -1060,9 +1057,6 @@ export function buildLeadFilterConditions(
     params.push(HIGH_SCORE_THRESHOLD);
     conditions.push(`l.lead_score >= $${params.length}`);
   }
-  if (filters.consentPending) {
-    conditions.push(`NOT EXISTS (SELECT 1 FROM consents c WHERE c.lead_id = l.id AND c.captured = true)`);
-  }
   if (filters.unassignedOnly) {
     conditions.push(`l.owner_id IS NULL`);
   }
@@ -1110,9 +1104,6 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
          SELECT MIN(a.due_date) FROM activities a
          WHERE a.lead_id = l.id AND a.due_date IS NOT NULL AND a.status <> 'completed'
        ) AS next_activity_due_at,
-       NOT EXISTS (
-         SELECT 1 FROM consents c WHERE c.lead_id = l.id AND c.captured = true
-       ) AS consent_pending,
        (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE} ${TIER_TEAMMATE_CLAUSE}) AS in_owner_scope
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
@@ -1334,6 +1325,8 @@ const FIELD_AUDIT_LABELS: Partial<Record<keyof LeadRow, string>> = {
   store_state: "Store state",
   carpet_area: "Carpet area",
   frontage: "Frontage",
+  carpet_area_sqft: "Carpet area",
+  frontage_ft: "Frontage",
   ownership: "Ownership",
   investment_capacity: "Investment capacity",
   existing_business: "Existing business",
@@ -1352,6 +1345,7 @@ const FIELD_AUDIT_LABELS: Partial<Record<keyof LeadRow, string>> = {
   credit_limit_requested: "Credit limit requested",
   credit_category: "Credit category",
   payment_terms: "Payment terms",
+  payment_days: "Payment days",
   target_go_live: "Target go-live",
 };
 
@@ -1400,7 +1394,6 @@ export async function updateLead(
     start_date: updates.startDate,
     qualified_person: updates.qualifiedPerson,
     financial_status: updates.financialStatus,
-    welcome_message_sent: updates.welcomeMessageSent,
     status: updates.status,
     prospect_status: updates.prospectStatus,
     category: updates.category,
@@ -1439,8 +1432,8 @@ export async function updateLead(
     store_pincode: updates.storePincode,
     store_city: updates.storeCity,
     store_state: updates.storeState,
-    carpet_area: updates.carpetArea,
-    frontage: updates.frontage,
+    carpet_area_sqft: updates.carpetArea,
+    frontage_ft: updates.frontage,
     ownership: updates.ownership,
     investment_capacity: updates.investmentCapacity,
     existing_business: updates.existingBusiness,
@@ -1458,7 +1451,7 @@ export async function updateLead(
     margin_slab: updates.marginSlab,
     credit_limit_requested: updates.creditLimitRequested,
     credit_category: updates.creditCategory,
-    payment_terms: updates.paymentTerms,
+    payment_days: updates.paymentTerms,
     target_go_live: updates.targetGoLive,
   };
 

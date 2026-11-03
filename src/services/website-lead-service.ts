@@ -201,6 +201,11 @@ export async function submitWebsiteLead(apiKey: string, input: PublicWebsiteSubm
       internalNotes: input.message?.trim() || undefined,
       category: row.default_category ?? undefined,
       source: "website",
+      // Same reasoning as qr-campaign-service.ts's own fix: inquirySource
+      // alone left Inquiry Category permanently blank for every
+      // website-sourced lead, since that field is locked (can't be
+      // hand-typed) whenever captureChannel isn't manual_entry.
+      inquiryCategory: "Website",
       inquirySource: `Website — ${row.name}`,
       captureChannel: "website",
       utmTags: row.utm_tags ?? undefined,

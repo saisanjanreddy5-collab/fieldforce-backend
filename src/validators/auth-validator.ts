@@ -1,6 +1,16 @@
 import { z } from "zod";
 import { ROLES } from "../utils/roles";
 
+// Accepts a plain 10-digit number or one prefixed with +91 - matches the
+// Create User form's own placeholder ("+91 98xxx xxxxx"). Blank stays fine
+// (mobile is optional); the real bug this closes is that nothing here used
+// to check the shape at all, so one badly-formed value could overflow the
+// users.mobile VARCHAR(20) column and crash as a raw 500 instead of a clean
+// validation error.
+const mobileNumber = z
+  .union([z.literal(""), z.string().regex(/^(\+91[\s-]?)?\d{10}$/, "Enter a valid 10-digit mobile number")])
+  .optional();
+
 export const registerSchema = z
   .object({
     name: z.string().min(1, "Name is required"),
@@ -18,7 +28,7 @@ export const registerSchema = z
     districtId: z.string().uuid().optional(),
     areaId: z.string().uuid().optional(),
     smartfloAgentNumber: z.string().optional(),
-    mobile: z.string().optional(),
+    mobile: mobileNumber,
     territory: z.string().optional(),
     employeeCode: z.string().optional(),
     status: z.enum(["active", "on_leave", "onboarding", "exited"]).optional(),
