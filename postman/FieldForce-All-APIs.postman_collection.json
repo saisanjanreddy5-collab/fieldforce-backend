@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "b7e4f1a2-9c3d-4e5f-8a1b-2c3d4e5f6a7b",
     "name": "FieldForce CRM - All APIs",
-    "description": "Complete scope: every API endpoint in the FieldForce backend, generated directly from the live backend route/validator source on 2026-10-23. Every endpoint below is real and currently deployed - nothing here is guessed.\n\n- Base URL points at production: https://devcrm.nextechltd.in/api\n- All endpoints (except Login/Refresh/Logout/Register, and the handful of genuinely public or webhook endpoints noted in their own folder/description) require `Authorization: Bearer <accessToken>`. This collection handles that for you via the `accessToken` collection variable - just run \"Login\" first and every other request will auto-use the token.\n- Every response is wrapped as `{ success: boolean, data: ..., message?: string }`. On error: `{ success: false, message: string, errors?: ... }` with a 4xx/5xx status code.\n- Most endpoints are gated by a permission string (shown in each request's description, e.g. `leads.view`). If a user's role doesn't have that permission, the API returns 403.\n- A few folders (Public QR, Public Website Leads, Frappe Webhooks, and specific webhook routes inside the Integrations folders) are genuinely NOT behind a user token - their descriptions explain the real mechanism (rate limiting only, or a shared-secret/HMAC signature header). Those are marked `noauth` and are mostly not relevant to a mobile app's own login flow.\n- This collection folds in and supersedes FieldForce-Login-Leads.postman_collection.json (Auth + Leads folders are unchanged / reused here) and adds every other module in the CRM.",
+    "description": "Complete scope: every API endpoint in the FieldForce backend, generated directly from the live backend route/validator source, originally on 2026-10-23 and refreshed on 2026-11-02 to catch up with the Call Center lifecycle rework. Every endpoint below is real and currently deployed - nothing here is guessed.\n\n- Base URL points at production: https://devcrm.nextechltd.in/api\n- All endpoints (except Login/Refresh/Logout/Register, and the handful of genuinely public or webhook endpoints noted in their own folder/description) require `Authorization: Bearer <accessToken>`. This collection handles that for you via the `accessToken` collection variable - just run \"Login\" first and every other request will auto-use the token.\n- Every response is wrapped as `{ success: boolean, data: ..., message?: string }`. On error: `{ success: false, message: string, errors?: ... }` with a 4xx/5xx status code.\n- Most endpoints are gated by a permission string (shown in each request's description, e.g. `leads.view`). If a user's role doesn't have that permission, the API returns 403.\n- A few folders (Public QR, Public Website Leads, Frappe Webhooks, and specific webhook routes inside the Integrations folders) are genuinely NOT behind a user token - their descriptions explain the real mechanism (rate limiting only, or a shared-secret/HMAC signature header). Those are marked `noauth` and are mostly not relevant to a mobile app's own login flow.\n- This collection folds in and supersedes FieldForce-Login-Leads.postman_collection.json (Auth + Leads folders are unchanged / reused here) and adds every other module in the CRM.\n\n**2026-11-02 update - newly added since the last version:** `POST /auth/change-password`; `POST /leads/queue` (Call Center's own \"Add lead\"); `GET /leads/sources`, `GET /leads/handed-off`, `GET /leads/export`, `GET /leads/{id}/timeline` (these existed on the backend before but were missing from this collection); the whole new \"Call Center Lifecycle\" folder under Leads - Log Call Disposition, Push to FLC, Pick Up This Lead, Qualify Lead, Escalate to SLC, Get Swap Candidates, Send to Field Sales, Reassign Lead; `createdFrom`/`createdTo` date-range filters on List Leads and Export Leads; `GET /reports/call-center-performance` and `GET /reports/field-sales-performance`; `GET /integrations/whatsapp/webhook` (verification handshake).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -444,6 +444,33 @@
             },
             "description": "Requires permission: `users.create`, called with an ADMIN's own access token (not public self-signup - there's no public registration in this API). Included here for completeness since it lives on the auth router, but the mobile app's own login screen will only ever call Login/Refresh/Logout/Me above.\n\nEither `role` (admin/manager/agent) or `levelId` must be provided. Response: `{ success: true, data: <new user object>, message: \"User created\" }`, 201."
           }
+        },
+        {
+          "name": "Change Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"currentPassword\": \"\",\n  \"newPassword\": \"\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/change-password",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "change-password"
+              ]
+            },
+            "description": "Requires: valid access token (no specific permission - every role, including Call Center and Field Sales, can change their own password). `newPassword` must be at least 8 characters. Response: `{ success: true, data: null, message: \"Password changed\" }`."
+          }
         }
       ]
     },
@@ -543,6 +570,18 @@
                       "value": "true",
                       "disabled": true,
                       "description": "\"true\" or \"false\""
+                    },
+                    {
+                      "key": "createdFrom",
+                      "value": "2026-11-01",
+                      "disabled": true,
+                      "description": "calendar date (YYYY-MM-DD), inclusive - filters by when the lead actually came into the CRM (created_at)"
+                    },
+                    {
+                      "key": "createdTo",
+                      "value": "2026-11-30",
+                      "disabled": true,
+                      "description": "calendar date (YYYY-MM-DD), inclusive (whole day counts)"
                     }
                   ]
                 },
@@ -617,6 +656,33 @@
               }
             },
             {
+              "name": "Create Own Queue Lead (Call Center)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"fullName\": \"Test Lead\",\n  \"phone\": \"9876543210\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/leads/queue",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "queue"
+                  ]
+                },
+                "description": "Requires permission: `leads.queue_create`. Call Center's own \"Add lead\" action for a contact who called in directly (not a marketing import) - same body shape as Create Lead. Always lands in the creator's own queue at the \"New\" stage. Response 201: `{ success: true, data: <new lead>, message: \"Lead created\" }`."
+              }
+            },
+            {
               "name": "List Territories",
               "request": {
                 "method": "GET",
@@ -634,6 +700,23 @@
               }
             },
             {
+              "name": "List Lead Sources",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/leads/sources",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "sources"
+                  ]
+                },
+                "description": "Requires permission: `leads.view`. Returns the distinct list of lead `source` values already in use (e.g. Website, Referral, Walk-in) - useful for populating a picker, same idea as List Territories. Response: `{ success: true, data: string[] }`."
+              }
+            },
+            {
               "name": "Quick Filter Counts",
               "request": {
                 "method": "GET",
@@ -648,6 +731,80 @@
                   ]
                 },
                 "description": "Requires permission: `leads.view`. Returns badge counts for the standard quick filters, scoped to the caller. Response: `{ success: true, data: { all, myLeads, unassigned, overdue, fofo, highScore } }` (all numbers)."
+              }
+            },
+            {
+              "name": "List Handed-Off Leads",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/leads/handed-off",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "handed-off"
+                  ]
+                },
+                "description": "Requires permission: `leads.view` OR `leads.queue_view`. \"My Queue\"'s second section on the Call Center screen - every lead this Call Center floor has sent on to Field Sales. Every active Call Center Executive sees the full company-wide list here (not just leads they personally handled), read-only past this point - no call/edit/stage-progression actions are available on these any more. Response: `{ success: true, data: [...] }`."
+              }
+            },
+            {
+              "name": "Export Leads",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/leads/export",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "export"
+                  ],
+                  "query": [
+                    {
+                      "key": "status",
+                      "value": "",
+                      "disabled": true
+                    },
+                    {
+                      "key": "ownerId",
+                      "value": "",
+                      "disabled": true,
+                      "description": "uuid"
+                    },
+                    {
+                      "key": "search",
+                      "value": "",
+                      "disabled": true
+                    },
+                    {
+                      "key": "category",
+                      "value": "",
+                      "disabled": true
+                    },
+                    {
+                      "key": "source",
+                      "value": "",
+                      "disabled": true
+                    },
+                    {
+                      "key": "createdFrom",
+                      "value": "2026-11-01",
+                      "disabled": true,
+                      "description": "calendar date (YYYY-MM-DD), inclusive"
+                    },
+                    {
+                      "key": "createdTo",
+                      "value": "2026-11-30",
+                      "disabled": true,
+                      "description": "calendar date (YYYY-MM-DD), inclusive"
+                    }
+                  ]
+                },
+                "description": "Requires permission: `leads.export`. Same filters as List Leads (see its own query params for the full set - ownerId/zoneId/stateId/districtId/areaId/overdueOnly/highScoreOnly/consentPending/unassignedOnly all apply here too), minus `page`/`limit` - always returns every matching row, not one page, as plain JSON (not a CSV/XLSX file download). Response: `{ success: true, data: [...] }` (one object per lead, including an FLC/SLC/Field \"handled by\" owner trail)."
               }
             },
             {
@@ -897,6 +1054,24 @@
               }
             },
             {
+              "name": "Get Lead Timeline",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/leads/{{leadId}}/timeline",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "{{leadId}}",
+                    "timeline"
+                  ]
+                },
+                "description": "Requires permission: `leads.view` OR `leads.queue_view`. Powers the lead detail screen's History tab - a merged, chronological feed of status changes, call dispositions, activities, and ownership changes. Response: `{ success: true, data: [...] }`."
+              }
+            },
+            {
               "name": "List Quotes for Lead",
               "request": {
                 "method": "GET",
@@ -930,6 +1105,185 @@
                   ]
                 },
                 "description": "Requires permission: `support_tickets.view`. Response: `{ success: true, data: [...] }`."
+              }
+            }
+          ]
+        },
+        {
+          "name": "Call Center Lifecycle",
+          "item": [
+            {
+              "name": "Log Call Disposition",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"disposition\": \"Call Done And Interested\",\n  \"notes\": \"\",\n  \"callbackAt\": \"\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/leads/{{leadId}}/call-dispositions",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "{{leadId}}",
+                    "call-dispositions"
+                  ]
+                },
+                "description": "Requires permission: `leads.call_log`. `disposition` is required - one of: `Ringing`, `Not Reachable`, `Switched Off`, `Language`, `Call Back`, `Call Done And Interested`, `Call Done And Not Interested`. `callbackAt` (ISO datetime) is required only when `disposition` is `Call Back` - it schedules a real follow-up activity. `notes` is always optional. Does not change the lead's stage - this just logs the outcome of a call made while the lead is at New/FLC/SLC. Response 201: `{ success: true, data: <updated lead> }`."
+              }
+            },
+            {
+              "name": "Push to FLC",
+              "request": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/leads/{{leadId}}/start-flc",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "{{leadId}}",
+                    "start-flc"
+                  ]
+                },
+                "description": "Requires permission: `leads.call_log`. No body. Moves a lead from `New` to `FLC` - the explicit, deliberate first step of the Call Center funnel (every lead lands at `New` first regardless of how it was created; nothing auto-advances it). Ownership does not change. 422 if the lead isn't currently at `New`. Response: `{ success: true, data: <updated lead>, message: \"Moved to FLC\" }`."
+              }
+            },
+            {
+              "name": "Pick Up This Lead (Self-Assign)",
+              "request": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/leads/{{leadId}}/claim",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "{{leadId}}",
+                    "claim"
+                  ]
+                },
+                "description": "Requires role: `call_center` (not a specific permission - any active Call Center Executive can call this). No body. Self-assigns a lead currently at New/FLC/SLC to the caller - e.g. to cover an absent colleague. Caller becomes the new owner immediately. Response: `{ success: true, data: <updated lead>, message: \"Lead picked up\" }`."
+              }
+            },
+            {
+              "name": "Qualify Lead",
+              "request": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/leads/{{leadId}}/qualify",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "{{leadId}}",
+                    "qualify"
+                  ]
+                },
+                "description": "Requires permission: `leads.qualify`. No body. Moves a lead from `SLC` to `Qualified` and sets its owner to the caller (whoever marks a lead Qualified becomes the one who can immediately Send to Field). Response: `{ success: true, data: <updated lead>, message: \"Lead marked Qualified\" }`."
+              }
+            },
+            {
+              "name": "Escalate to SLC",
+              "request": {
+                "method": "POST",
+                "url": {
+                  "raw": "{{baseUrl}}/leads/{{leadId}}/escalate-to-slc",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "{{leadId}}",
+                    "escalate-to-slc"
+                  ]
+                },
+                "description": "Requires permission: `leads.escalate`. No body. Moves a lead from `FLC` to `SLC` - a pure stage move, ownership unchanged. 422 if the lead isn't currently at `FLC`. Response: `{ success: true, data: <updated lead>, message: \"Escalated to SLC\" }`."
+              }
+            },
+            {
+              "name": "Get Swap Candidates",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/leads/{{leadId}}/swap-candidates",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "{{leadId}}",
+                    "swap-candidates"
+                  ]
+                },
+                "description": "Requires permission: `leads.reassign`. Lists the Field Sales employees who cover this lead's pincode - used to populate the picker before Send to Field or Reassign when more than one person covers the area. Response: `{ success: true, data: [...] }`."
+              }
+            },
+            {
+              "name": "Send to Field Sales",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"ownerId\": \"\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/leads/{{leadId}}/send-to-field",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "{{leadId}}",
+                    "send-to-field"
+                  ]
+                },
+                "description": "Requires permission: `leads.send_to_field`. `ownerId` (uuid) is only required when more than one Field Sales employee covers the lead's pincode - see Get Swap Candidates above; omit it when there's exactly one obvious match. Hands the lead off from Call Center to Field Sales. The Call Center Executive who personally sends it keeps a permanent read-only share on it; every active Call Center Executive can still look it up (read-only) afterwards too. Response: `{ success: true, data: <updated lead>, message: \"Sent to Field Sales\" }`."
+              }
+            },
+            {
+              "name": "Reassign Lead",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"ownerId\": \"{{userId}}\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/leads/{{leadId}}/reassign",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "{{leadId}}",
+                    "reassign"
+                  ]
+                },
+                "description": "Requires permission: `leads.reassign`. `ownerId` (uuid) is required - the new owner. Response: `{ success: true, data: <updated lead>, message: \"Lead reassigned\" }`."
               }
             }
           ]
@@ -6346,6 +6700,80 @@
           }
         },
         {
+          "name": "Call Center Performance Report",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/reports/call-center-performance",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "call-center-performance"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-10-01",
+                  "disabled": true,
+                  "description": "YYYY-MM-DD"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-10-31",
+                  "disabled": true,
+                  "description": "YYYY-MM-DD"
+                },
+                {
+                  "key": "employeeIds",
+                  "value": "",
+                  "disabled": true,
+                  "description": "comma-separated user uuids, e.g. id1,id2"
+                }
+              ]
+            },
+            "description": "Requires permission: `reports.view`. All query params optional. Per-Call-Center-Executive funnel numbers (New/FLC/SLC throughput, calls logged, leads sent to Field) over the given date range. Response: `{ success: true, data: [...] }`."
+          }
+        },
+        {
+          "name": "Field Sales Performance Report",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/reports/field-sales-performance",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "reports",
+                "field-sales-performance"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-10-01",
+                  "disabled": true,
+                  "description": "YYYY-MM-DD"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-10-31",
+                  "disabled": true,
+                  "description": "YYYY-MM-DD"
+                },
+                {
+                  "key": "employeeIds",
+                  "value": "",
+                  "disabled": true,
+                  "description": "comma-separated user uuids, e.g. id1,id2"
+                }
+              ]
+            },
+            "description": "Requires permission: `reports.view`. All query params optional. Per-Field-Sales-employee numbers (leads received, opportunities, conversions) over the given date range. Response: `{ success: true, data: [...] }`."
+          }
+        },
+        {
           "name": "List Saved Report Views",
           "request": {
             "method": "GET",
@@ -6614,6 +7042,41 @@
       "name": "WhatsApp Integration",
       "item": [
         {
+          "name": "WhatsApp Webhook Verification",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/integrations/whatsapp/webhook?hub.mode=subscribe&hub.verify_token={{WHATSAPP_WEBHOOK_SECRET}}&hub.challenge=12345",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "integrations",
+                "whatsapp",
+                "webhook"
+              ],
+              "query": [
+                {
+                  "key": "hub.mode",
+                  "value": "subscribe"
+                },
+                {
+                  "key": "hub.verify_token",
+                  "value": "{{WHATSAPP_WEBHOOK_SECRET}}"
+                },
+                {
+                  "key": "hub.challenge",
+                  "value": "12345"
+                }
+              ]
+            },
+            "description": "`auth: noauth` - the one-time subscription handshake Meta's WhatsApp Cloud API console calls when (re-)saving the webhook URL, not something the mobile app or K3 ever call. Echoes back `hub.challenge` as plain text (200) only if `hub.mode=subscribe` and `hub.verify_token` matches the server's `WHATSAPP_WEBHOOK_SECRET`; otherwise 403. Included here for completeness only."
+          }
+        },
+        {
           "name": "WhatsApp Inbound Webhook",
           "request": {
             "auth": {
@@ -6669,6 +7132,25 @@
               ]
             },
             "description": "Requires: valid access token (no specific permission). Org-wide (env-configured) status for the WhatsApp and Smartflo integrations only - both are set via server environment variables, not a UI toggle. Microsoft 365 is per-user OAuth and has its own `/integrations/microsoft/status` above. Response: `{ success: true, data: { whatsapp: boolean, smartflo: boolean } }`."
+          }
+        },
+        {
+          "name": "Health Check",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            },
+            "description": "`auth: noauth` - plain liveness check, no auth required, lives at the API root (not under any module). Useful for the mobile app to confirm the server is reachable before attempting login. Response: `{ success: true, message: \"FieldForce API is running\" }`."
           }
         }
       ]
