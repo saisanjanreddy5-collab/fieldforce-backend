@@ -138,6 +138,73 @@ export async function isActivityInOwnerScope(activityId: string, userId: string)
   return (result.rowCount ?? 0) > 0;
 }
 
+// Mirrors the frontend's TYPE_LABEL (utils/activity-shared.tsx) just well
+// enough to name the conflicting activity in a clear error message below -
+// not meant to be the source of truth for display labels anywhere else.
+const TYPE_LABEL: Record<string, string> = {
+  call: "call",
+  email: "email",
+  teams_meeting: "meeting",
+  site_visit: "site visit",
+  whatsapp: "WhatsApp message",
+  internal: "internal action",
+};
+
+// Two different field reps getting independently assigned to visit (or
+// call) the same lead at the same time is wasted effort, not a feature -
+// this is the one place both createActivityForLead and
+// createActivityForOpportunity funnel through, so the check lives here
+// once rather than being duplicated per entry point. Scoped to same
+// lead/opportunity + same activity type + a time window, not an exact
+// timestamp match, since "10:00" and "10:05" are the same real conflict and
+// exact-match would be trivial to dodge by a few seconds. Terminal
+// activities (completed/cancelled) never count as a conflict - they're not
+// occupying a slot anymore.
+const DUPLICATE_WINDOW_MINUTES = 15;
+
+async function assertNoSchedulingConflict(
+  input: ActivityInput,
+  leadId: string | null,
+  opportunityId: string | null
+): Promise<void> {
+  const status = input.status ?? "pending";
+  if (!input.dueDate || status === "completed" || status === "cancelled") return;
+
+  const scopeColumn = leadId ? "lead_id" : "opportunity_id";
+  const scopeId = leadId ?? opportunityId;
+  if (!scopeId) return;
+
+  const conflict = await pool.query<{ due_date: string; assigned_to_name: string | null }>(
+    `SELECT a.due_date, u.name AS assigned_to_name
+     FROM activities a
+     LEFT JOIN users u ON u.id = a.assigned_to
+     WHERE a.${scopeColumn} = $1
+       AND a.type = $2
+       AND a.is_deleted = false
+       AND a.status NOT IN ('completed', 'cancelled')
+       AND a.due_date IS NOT NULL
+       AND a.due_date BETWEEN $3::timestamptz - (INTERVAL '1 minute' * ${DUPLICATE_WINDOW_MINUTES})
+                           AND $3::timestamptz + (INTERVAL '1 minute' * ${DUPLICATE_WINDOW_MINUTES})
+     LIMIT 1`,
+    [scopeId, input.type, input.dueDate]
+  );
+
+  if ((conflict.rowCount ?? 0) > 0) {
+    const existing = conflict.rows[0];
+    const when = new Date(existing.due_date).toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+    const label = TYPE_LABEL[input.type ?? ""] ?? input.type;
+    const forWhom = existing.assigned_to_name ? ` for ${existing.assigned_to_name}` : "";
+    throw new ApiError(
+      409,
+      `This ${leadId ? "lead" : "opportunity"} already has a ${label} scheduled${forWhom} around ${when} - cancel or reschedule it before adding another at the same time.`
+    );
+  }
+}
+
 async function insertActivity(
   input: ActivityInput,
   requestingUserId: string,
@@ -147,6 +214,8 @@ async function insertActivity(
   if (!input.type) {
     throw new ApiError(422, "Activity type is required");
   }
+
+  await assertNoSchedulingConflict(input, leadId, opportunityId);
 
   const result = await pool.query<ActivityRow>(
     `INSERT INTO activities (
