@@ -235,6 +235,23 @@ export async function pushToOnboardingApp(leadId: string, requestingUserId: stri
     throw new ApiError(403, "You do not have access to this lead");
   }
 
+  const leadResult = await pool.query<{ full_name: string; phone: string | null; push_status: string; pushed_at: string | null }>(
+    "SELECT full_name, phone, push_status, pushed_at FROM leads WHERE id = $1",
+    [leadId]
+  );
+  const lead = leadResult.rows[0];
+  // Client-confirmed: the same person legitimately owns many franchises (one
+  // lead each, one push each) - that's fine and must stay fine. What's never
+  // fine is THIS one lead being pushed a second time - nothing here used to
+  // check that, so clicking the button again re-sent the same phone number
+  // to SKIA FOFO, which correctly rejected it as already registered. That
+  // external rejection was real, just surfaced far too late (after a full
+  // approval chain) and far too confusingly for what is actually a simple,
+  // locally-known fact.
+  if (lead?.push_status === "pushed") {
+    throw new ApiError(422, `This lead was already pushed to the onboarding app on ${new Date(lead.pushed_at!).toLocaleDateString()}`);
+  }
+
   const steps = await pool.query<ApprovalStepRow>("SELECT * FROM lead_approval_steps WHERE lead_id = $1", [leadId]);
   if (steps.rows.some((s) => s.status === "rejected")) {
     throw new ApiError(422, "This handoff has a rejected approval step and cannot be pushed");
@@ -243,11 +260,6 @@ export async function pushToOnboardingApp(leadId: string, requestingUserId: stri
     throw new ApiError(422, "All approval steps must be approved before pushing");
   }
 
-  const leadResult = await pool.query<{ full_name: string; phone: string | null }>(
-    "SELECT full_name, phone FROM leads WHERE id = $1",
-    [leadId]
-  );
-  const lead = leadResult.rows[0];
   if (!lead?.phone) {
     throw new ApiError(422, "This lead has no phone number on file - required to register the store app user");
   }
