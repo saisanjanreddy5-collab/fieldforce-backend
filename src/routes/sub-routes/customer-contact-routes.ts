@@ -12,5 +12,6 @@ router.use(requireAuth);
 // router only handles update/delete by the contact's own id.
 router.patch("/:id", requirePermission("customers.update"), validateBody(updateContactSchema), customerContactController.update);
 router.delete("/:id", requirePermission("customers.update"), customerContactController.remove);
+router.patch("/:id/restore", requirePermission("customers.update"), customerContactController.restore);
 
 export default router;

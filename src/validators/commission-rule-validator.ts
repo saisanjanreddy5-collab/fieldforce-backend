@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { paginationQuerySchema } from "./pagination";
 
+// Query-string booleans arrive as the literal strings "true"/"false" (or are
+// absent) - same reasoning lead-validator.ts's own queryBoolean documents.
+const queryBoolean = z
+  .enum(["true", "false"])
+  .optional()
+  .transform((v) => v === "true");
+
 export const createCommissionRuleSchema = z.object({
   incentivePlanId: z.string().uuid(),
   name: z.string().min(1, "Name is required"),
@@ -20,4 +27,5 @@ export const updateCommissionRuleSchema = z.object({
 
 export const listCommissionRulesQuerySchema = paginationQuerySchema.extend({
   incentivePlanId: z.string().uuid().optional(),
+  archived: queryBoolean,
 });

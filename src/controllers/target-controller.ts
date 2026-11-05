@@ -4,7 +4,7 @@ import { sendSuccess } from "../utils/response";
 import * as targetService from "../services/target-service";
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
-  const query = req.validatedQuery as unknown as { userId?: string; page: number; limit: number };
+  const query = req.validatedQuery as unknown as { userId?: string; archived?: boolean; page: number; limit: number };
   const result = await targetService.listTargets(req.user!.id, req.user!.role, query);
   sendSuccess(res, result);
 });
@@ -27,4 +27,9 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   await targetService.deleteTarget(String(req.params.id));
   sendSuccess(res, null, "Target deleted");
+});
+
+export const restore = asyncHandler(async (req: Request, res: Response) => {
+  await targetService.restoreTarget(String(req.params.id));
+  sendSuccess(res, null, "Target restored");
 });

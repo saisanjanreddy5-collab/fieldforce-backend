@@ -19,5 +19,6 @@ router.use(requireAuth);
 router.get("/", requirePermission("incentive_plans.view"), validateQuery(listUserIncentivePlansQuerySchema), userIncentivePlanController.list);
 router.post("/", requirePermission("incentive_plans.create"), validateBody(createUserIncentivePlanSchema), userIncentivePlanController.create);
 router.delete("/:id", requirePermission("incentive_plans.delete"), userIncentivePlanController.remove);
+router.patch("/:id/restore", requirePermission("incentive_plans.delete"), userIncentivePlanController.restore);
 
 export default router;

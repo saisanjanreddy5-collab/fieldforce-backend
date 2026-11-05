@@ -4,7 +4,7 @@ import { sendSuccess } from "../utils/response";
 import * as delegationService from "../services/delegation-service";
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
-  const query = req.validatedQuery as unknown as { page: number; limit: number };
+  const query = req.validatedQuery as unknown as { archived?: boolean; page: number; limit: number };
   const result = await delegationService.listDelegations(query);
   sendSuccess(res, result);
 });
@@ -17,4 +17,9 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   await delegationService.deleteDelegation(String(req.params.id));
   sendSuccess(res, null, "Delegation removed");
+});
+
+export const restore = asyncHandler(async (req: Request, res: Response) => {
+  await delegationService.restoreDelegation(String(req.params.id));
+  sendSuccess(res, null, "Delegation restored");
 });

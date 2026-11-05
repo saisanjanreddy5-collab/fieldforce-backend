@@ -171,6 +171,104 @@ export async function getDocumentFile(documentId: string): Promise<{ filePath: s
   return { filePath: row.file_path, originalFilename: row.original_filename };
 }
 
+interface DocumentArchiveRow {
+  id: string;
+  lead_id: string;
+  doc_type: DocumentType;
+  file_path: string;
+  original_filename: string | null;
+  uploaded_by: string | null;
+  uploaded_at: string | null;
+  archived_reason: "deleted" | "replaced";
+  archived_at: string;
+}
+
+function toPublicArchiveEntry(row: DocumentArchiveRow) {
+  return {
+    id: row.id,
+    leadId: row.lead_id,
+    docType: row.doc_type,
+    label: DOCUMENT_TYPE_LABELS[row.doc_type],
+    originalFilename: row.original_filename,
+    uploadedBy: row.uploaded_by,
+    uploadedAt: row.uploaded_at,
+    archivedReason: row.archived_reason,
+    archivedAt: row.archived_at,
+  };
+}
+
+// Every past version of this one lead+doc-type slot, newest first - these
+// rows are never deleted or restored-away, only ever appended to (see
+// saveUploadedFile/deleteDocumentFile above) - restoring one below just
+// pulls its file back into the live slot, it doesn't remove the log entry.
+export async function listArchivedDocuments(leadId: string, docType: string) {
+  const result = await pool.query<DocumentArchiveRow>(
+    "SELECT * FROM lead_document_archive WHERE lead_id = $1 AND doc_type = $2 ORDER BY archived_at DESC",
+    [leadId, docType]
+  );
+  return result.rows.map(toPublicArchiveEntry);
+}
+
+export async function getArchivedDocumentLeadId(archiveId: string): Promise<string> {
+  const result = await pool.query<{ lead_id: string }>("SELECT lead_id FROM lead_document_archive WHERE id = $1", [archiveId]);
+  if (result.rows.length === 0) {
+    throw new ApiError(404, "Archived document not found");
+  }
+  return result.rows[0].lead_id;
+}
+
+export async function getArchivedDocumentFile(archiveId: string): Promise<{ filePath: string; originalFilename: string }> {
+  const result = await pool.query<{ file_path: string; original_filename: string | null }>(
+    "SELECT file_path, original_filename FROM lead_document_archive WHERE id = $1",
+    [archiveId]
+  );
+  if (result.rows.length === 0) {
+    throw new ApiError(404, "Archived document not found");
+  }
+  const row = result.rows[0];
+  return { filePath: row.file_path, originalFilename: row.original_filename ?? "document" };
+}
+
+// Pulls an old version back into the live slot. Whatever is currently live
+// (if anything) is archived first with reason 'replaced', same as a normal
+// re-upload - nothing is ever silently overwritten and lost, even here.
+export async function restoreArchivedDocument(archiveId: string) {
+  const archiveResult = await pool.query<DocumentArchiveRow>("SELECT * FROM lead_document_archive WHERE id = $1", [archiveId]);
+  if (archiveResult.rows.length === 0) {
+    throw new ApiError(404, "Archived document not found");
+  }
+  const archived = archiveResult.rows[0];
+
+  const liveResult = await pool.query<{
+    file_path: string | null;
+    original_filename: string | null;
+    uploaded_by: string | null;
+    uploaded_at: string | null;
+  }>(
+    "SELECT file_path, original_filename, uploaded_by, uploaded_at FROM lead_documents WHERE lead_id = $1 AND doc_type = $2",
+    [archived.lead_id, archived.doc_type]
+  );
+  const live = liveResult.rows[0];
+  if (live?.file_path) {
+    await pool.query(
+      `INSERT INTO lead_document_archive (lead_id, doc_type, file_path, original_filename, uploaded_by, uploaded_at, archived_reason)
+       VALUES ($1, $2, $3, $4, $5, $6, 'replaced')`,
+      [archived.lead_id, archived.doc_type, live.file_path, live.original_filename, live.uploaded_by, live.uploaded_at]
+    );
+  }
+
+  const result = await pool.query<DocumentRow>(
+    `UPDATE lead_documents SET status = 'in_review', file_path = $1, original_filename = $2, uploaded_by = $3, uploaded_at = $4, updated_at = now()
+     WHERE lead_id = $5 AND doc_type = $6
+     RETURNING *`,
+    [archived.file_path, archived.original_filename, archived.uploaded_by, archived.uploaded_at, archived.lead_id, archived.doc_type]
+  );
+  if (result.rows.length === 0) {
+    throw new ApiError(404, "Document not found");
+  }
+  return toPublicDocument(result.rows[0]);
+}
+
 export async function deleteDocumentFile(documentId: string) {
   const row = await getDocumentRow(documentId);
   // Archived (logged + kept on disk), never unlinked - same "never destroy

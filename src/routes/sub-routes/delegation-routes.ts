@@ -12,5 +12,6 @@ router.use(requireAuth);
 router.get("/", requirePermission("delegations.view"), validateQuery(listDelegationsQuerySchema), delegationController.list);
 router.post("/", requirePermission("delegations.create"), validateBody(createDelegationSchema), delegationController.create);
 router.delete("/:id", requirePermission("delegations.delete"), delegationController.remove);
+router.patch("/:id/restore", requirePermission("delegations.delete"), delegationController.restore);
 
 export default router;

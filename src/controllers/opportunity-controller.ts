@@ -28,6 +28,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     territory?: string;
     salesTeamId?: string;
     search?: string;
+    archived?: boolean;
     page: number;
     limit: number;
   };
@@ -48,6 +49,11 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   await opportunityService.deleteOpportunity(String(req.params.id), req.user!.id);
   sendSuccess(res, null, "Opportunity deleted");
+});
+
+export const restore = asyncHandler(async (req: Request, res: Response) => {
+  await opportunityService.restoreOpportunity(String(req.params.id), req.user!.id);
+  sendSuccess(res, null, "Opportunity restored");
 });
 
 export const getHistory = asyncHandler(async (req: Request, res: Response) => {

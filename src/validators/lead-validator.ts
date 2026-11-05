@@ -191,6 +191,7 @@ export const listLeadsQuerySchema = z.object({
   overdueOnly: queryBoolean,
   highScoreOnly: queryBoolean,
   unassignedOnly: queryBoolean,
+  archived: queryBoolean,
   // When the lead actually came into the CRM (created_at), not any later
   // activity - a plain calendar date, inclusive on both ends (createdTo's
   // whole day counts, not just midnight).

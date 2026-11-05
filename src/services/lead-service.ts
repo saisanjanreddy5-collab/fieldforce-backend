@@ -233,6 +233,11 @@ export interface ListLeadsFilters {
   // dates (YYYY-MM-DD), inclusive on both ends.
   createdFrom?: string;
   createdTo?: string;
+  // Flips the list from "active leads" to "archived leads" - the two are
+  // deliberately never mixed together in one result set, matching how the
+  // Archived toggle on the Leads page works (one view or the other, not both
+  // interleaved).
+  archived?: boolean;
   page: number;
   limit: number;
 }
@@ -994,7 +999,7 @@ export function buildLeadFilterConditions(
   requestingUserId: string,
   filters: Omit<ListLeadsFilters, "page" | "limit">
 ): { conditions: string[]; params: unknown[] } {
-  const conditions: string[] = ["l.is_deleted = false"];
+  const conditions: string[] = [filters.archived ? "l.is_deleted = true" : "l.is_deleted = false"];
   const params: unknown[] = [requestingUserId];
 
   conditions.push(`(
@@ -1716,6 +1721,52 @@ export async function deleteLead(leadId: string, requestingUserId: string, ipAdd
       summary: `Lead deleted - ${leadResult.rows[0].full_name}`,
       oldValue: "Active",
       newValue: "Deleted",
+      actorId: requestingUserId,
+      actorName: actorResult.rows[0]?.name ?? null,
+      ipAddress,
+    });
+  }
+}
+
+// Mirrors deleteLead's own owner-scope check, but against archived leads
+// (is_deleted = true) rather than isLeadInOwnerScope's active-only one -
+// that helper would always report "not in scope" for something already
+// archived, which would make restoring it impossible for exactly the person
+// who's allowed to.
+export async function restoreLead(leadId: string, requestingUserId: string, ipAddress?: string | null): Promise<void> {
+  const scopeCheck = await pool.query(
+    `${SUBTREE_CTE}
+     SELECT 1 FROM leads l
+     WHERE l.id = $2
+       AND l.is_deleted = true
+       AND (
+         l.owner_id IN (SELECT id FROM subtree)
+         ${UNASSIGNED_ADMIN_CLAUSE}
+         ${TIER_TEAMMATE_CLAUSE}
+       )`,
+    [requestingUserId, leadId]
+  );
+  if ((scopeCheck.rowCount ?? 0) === 0) {
+    throw new ApiError(403, "You do not have access to this archived lead");
+  }
+
+  const leadResult = await pool.query<{ full_name: string }>("SELECT full_name FROM leads WHERE id = $1", [leadId]);
+  const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
+
+  await pool.query(
+    "UPDATE leads SET is_deleted = false, updated_by = $1, updated_at = now() WHERE id = $2",
+    [requestingUserId, leadId]
+  );
+
+  if (leadResult.rows[0]) {
+    await recordAuditEvent({
+      entityType: "lead",
+      entityId: leadId,
+      entityLabel: leadResult.rows[0].full_name,
+      action: "restored",
+      summary: `Lead restored - ${leadResult.rows[0].full_name}`,
+      oldValue: "Deleted",
+      newValue: "Active",
       actorId: requestingUserId,
       actorName: actorResult.rows[0]?.name ?? null,
       ipAddress,

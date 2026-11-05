@@ -12,5 +12,6 @@ router.use(requireAuth);
 router.get("/", requirePermission("user_commissions.view"), validateQuery(listUserCommissionsQuerySchema), userCommissionController.list);
 router.post("/", requirePermission("user_commissions.create"), validateBody(createUserCommissionSchema), userCommissionController.create);
 router.delete("/:id", requirePermission("user_commissions.delete"), userCommissionController.remove);
+router.patch("/:id/restore", requirePermission("user_commissions.delete"), userCommissionController.restore);
 
 export default router;

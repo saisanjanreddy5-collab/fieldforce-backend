@@ -4,7 +4,7 @@ import { sendSuccess } from "../utils/response";
 import * as approvalBandService from "../services/approval-band-service";
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
-  const query = req.validatedQuery as unknown as { page: number; limit: number };
+  const query = req.validatedQuery as unknown as { archived?: boolean; page: number; limit: number };
   const result = await approvalBandService.listApprovalBands(query);
   sendSuccess(res, result);
 });
@@ -22,4 +22,9 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   await approvalBandService.deleteApprovalBand(String(req.params.id));
   sendSuccess(res, null, "Approval band deleted");
+});
+
+export const restore = asyncHandler(async (req: Request, res: Response) => {
+  await approvalBandService.restoreApprovalBand(String(req.params.id));
+  sendSuccess(res, null, "Approval band restored");
 });

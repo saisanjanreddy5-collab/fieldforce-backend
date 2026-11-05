@@ -59,18 +59,22 @@ function toPublicBand(row: ApprovalBandRow) {
 // escalate anything, because FieldForce has no request/workflow system
 // anywhere else to enforce it against (see Phase 8 note in models/model.ts).
 export interface ListApprovalBandsFilters {
+  // Shows archived bands instead of active ones - never both mixed, same
+  // convention as leads/opportunities' own archived toggle.
+  archived?: boolean;
   page: number;
   limit: number;
 }
 
 export async function listApprovalBands(filters: ListApprovalBandsFilters) {
-  const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM approval_bands WHERE is_deleted = false");
+  const isDeleted = filters.archived ? "true" : "false";
+  const countResult = await pool.query<{ count: string }>(`SELECT COUNT(*) FROM approval_bands WHERE is_deleted = ${isDeleted}`);
 
   const limit = filters.limit;
   const offset = (filters.page - 1) * filters.limit;
 
   const result = await pool.query<ApprovalBandRow>(
-    "SELECT * FROM approval_bands WHERE is_deleted = false ORDER BY request_type ASC, sort_order ASC, range_from ASC LIMIT $1 OFFSET $2",
+    `SELECT * FROM approval_bands WHERE is_deleted = ${isDeleted} ORDER BY request_type ASC, sort_order ASC, range_from ASC LIMIT $1 OFFSET $2`,
     [limit, offset]
   );
   return { approvalBands: result.rows.map(toPublicBand), total: Number(countResult.rows[0].count) };
@@ -159,5 +163,12 @@ export async function deleteApprovalBand(id: string): Promise<void> {
   const result = await pool.query("UPDATE approval_bands SET is_deleted = true WHERE id = $1 AND is_deleted = false", [id]);
   if (result.rowCount === 0) {
     throw new ApiError(404, "Approval band not found");
+  }
+}
+
+export async function restoreApprovalBand(id: string): Promise<void> {
+  const result = await pool.query("UPDATE approval_bands SET is_deleted = false WHERE id = $1 AND is_deleted = true", [id]);
+  if (result.rowCount === 0) {
+    throw new ApiError(404, "Approval band not found or not archived");
   }
 }

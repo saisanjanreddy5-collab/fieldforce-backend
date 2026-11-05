@@ -55,3 +55,35 @@ export const deleteDocument = asyncHandler(async (req: Request, res: Response) =
   const document = await leadDocumentService.deleteDocumentFile(String(req.params.documentId));
   sendSuccess(res, document, "Document removed");
 });
+
+export const listDocumentHistory = asyncHandler(async (req: Request, res: Response) => {
+  const leadId = String(req.params.leadId);
+  const visible = await leadService.isLeadVisibleToUser(leadId, req.user!.id);
+  if (!visible) {
+    throw new ApiError(403, "You do not have access to this lead");
+  }
+  const history = await leadDocumentService.listArchivedDocuments(leadId, String(req.params.docType));
+  sendSuccess(res, history);
+});
+
+export const downloadArchivedDocument = asyncHandler(async (req: Request, res: Response) => {
+  const archiveId = String(req.params.archiveId);
+  const leadId = await leadDocumentService.getArchivedDocumentLeadId(archiveId);
+  const visible = await leadService.isLeadVisibleToUser(leadId, req.user!.id);
+  if (!visible) {
+    throw new ApiError(403, "You do not have access to this document");
+  }
+  const { filePath, originalFilename } = await leadDocumentService.getArchivedDocumentFile(archiveId);
+  res.download(filePath, originalFilename);
+});
+
+export const restoreArchivedDocument = asyncHandler(async (req: Request, res: Response) => {
+  const archiveId = String(req.params.archiveId);
+  const leadId = await leadDocumentService.getArchivedDocumentLeadId(archiveId);
+  const visible = await leadService.isLeadVisibleToUser(leadId, req.user!.id);
+  if (!visible) {
+    throw new ApiError(403, "You do not have access to this document");
+  }
+  const document = await leadDocumentService.restoreArchivedDocument(archiveId);
+  sendSuccess(res, document, "Document restored");
+});

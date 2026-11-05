@@ -2,6 +2,13 @@ import { z } from "zod";
 import { REQUEST_TYPES } from "../services/approval-band-service";
 import { paginationQuerySchema } from "./pagination";
 
+// Query-string booleans arrive as the literal strings "true"/"false" (or are
+// absent) - same reasoning lead-validator.ts's own queryBoolean documents.
+const queryBoolean = z
+  .enum(["true", "false"])
+  .optional()
+  .transform((v) => v === "true");
+
 export const createApprovalBandSchema = z.object({
   requestType: z.enum(REQUEST_TYPES),
   bandName: z.string().min(1, "Band name is required"),
@@ -23,5 +30,6 @@ export const updateApprovalBandSchema = z.object({
   sortOrder: z.number().int().optional(),
 });
 
-// No filters yet - just the shared page/limit pagination contract.
-export const listApprovalBandsQuerySchema = paginationQuerySchema;
+export const listApprovalBandsQuerySchema = paginationQuerySchema.extend({
+  archived: queryBoolean,
+});
