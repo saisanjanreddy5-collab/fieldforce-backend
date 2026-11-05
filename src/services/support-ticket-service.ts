@@ -190,6 +190,19 @@ export async function createTicketForLead(
   // also gives us the lead's email to hand Frappe as raised_by.
   const lead = await getLeadById(leadId, requestingUserId);
 
+  // A support ticket is for someone who's already a real prospect/customer,
+  // not a brand-new, not-yet-worked lead - "Qualified" is the point a lead
+  // is confirmed real and handed to Field Sales (it stays "Qualified" even
+  // once Field Sales owns it - see lead-call-center-service.ts), and
+  // "Converted" is an actual won customer. New/FLC/SLC are excluded.
+  const TICKET_ELIGIBLE_LEAD_STATUSES = ["Qualified", "Converted"];
+  if (!TICKET_ELIGIBLE_LEAD_STATUSES.includes(lead.status)) {
+    throw new ApiError(
+      422,
+      "Support tickets can only be raised for a lead that has reached the Qualified stage (or already became a customer) - this lead is still being worked by Call Center."
+    );
+  }
+
   // `||`, not `??` - a lead with email set to "" (not null) must still be
   // treated as "no email", same as it would be for any other falsy-but-not-
   // nullish value here.
