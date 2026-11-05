@@ -4,6 +4,7 @@ import { WHATSAPP_BASE_URL, isWhatsappConfigured } from "../config/whatsapp";
 import { env } from "../config/env";
 import { createActivityForLead } from "./activity-service";
 import { getLeadById, findLeadIdByPhone, isLeadInOwnerScope } from "./lead-service";
+import * as messageTemplateService from "./message-template-service";
 
 interface SendMessageApiResponse {
   messages?: { id: string }[];
@@ -50,29 +51,18 @@ function requestHeaders(): Record<string, string> {
   };
 }
 
-export async function sendTextMessage(leadId: string, body: string, requestingUserId: string) {
-  assertConfigured();
-
-  // Strict owner-scope, not getLeadById's own broader visibility check - see
-  // smartflo-service.ts's initiateCallForLead for the full reasoning.
-  // listMessagesForLead below deliberately keeps the broader check (reading
-  // past messages is a view, not an action).
-  const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
-  if (!inScope) {
-    throw new ApiError(403, "You do not have access to this lead");
-  }
-
-  const lead = await getLeadById(leadId, requestingUserId);
-  if (!lead.phone) {
-    throw new ApiError(422, "This lead has no phone number on file");
-  }
-
+// The actual "send to K3 + log it" mechanics, shared by a human composing a
+// message (sendTextMessage) and the system auto-sending a welcome message
+// right after lead creation (sendWelcomeMessageForLead) - the latter has no
+// requesting user to scope-check against (the creator's own insert already
+// establishes access), so that check stays in sendTextMessage, not here.
+async function postWhatsappMessage(leadId: string, phone: string, body: string, sentBy: string, activitySubject: string) {
   // Leads are entered as plain 10-digit Indian mobile numbers with no
   // country code (same assumption normalizePhone in lead-service.ts makes),
   // but WhatsApp's API needs the full international MSISDN - a bare
   // 10-digit number silently fails to actually deliver even though the API
   // accepts the request and returns a message id.
-  const digits = lead.phone.replace(/\D/g, "");
+  const digits = phone.replace(/\D/g, "");
   const to = digits.length === 10 ? `91${digits}` : digits;
   const response = await fetch(`${WHATSAPP_BASE_URL}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
     method: "POST",
@@ -97,16 +87,58 @@ export async function sendTextMessage(leadId: string, body: string, requestingUs
     `INSERT INTO whatsapp_messages (lead_id, direction, body, status, wa_message_id, sent_by)
      VALUES ($1, 'outbound', $2, 'sent', $3, $4)
      RETURNING *`,
-    [leadId, body, waMessageId, requestingUserId]
+    [leadId, body, waMessageId, sentBy]
   );
 
   // Same "log a real activity" convention as email (microsoft-service.ts)
   // and calls (smartflo-service.ts) - without this, a WhatsApp send was
   // invisible on the lead's Activity timeline and uncounted in any
   // activity-based stat, even though the message itself was really sent.
-  await createActivityForLead(leadId, { type: "whatsapp", subject: "WhatsApp message", status: "completed", details: { body } }, requestingUserId);
+  await createActivityForLead(leadId, { type: "whatsapp", subject: activitySubject, status: "completed", details: { body } }, sentBy);
 
   return toPublicMessage(result.rows[0]);
+}
+
+export async function sendTextMessage(leadId: string, body: string, requestingUserId: string) {
+  assertConfigured();
+
+  // Strict owner-scope, not getLeadById's own broader visibility check - see
+  // smartflo-service.ts's initiateCallForLead for the full reasoning.
+  // listMessagesForLead below deliberately keeps the broader check (reading
+  // past messages is a view, not an action).
+  const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
+  if (!inScope) {
+    throw new ApiError(403, "You do not have access to this lead");
+  }
+
+  const lead = await getLeadById(leadId, requestingUserId);
+  if (!lead.phone) {
+    throw new ApiError(422, "This lead has no phone number on file");
+  }
+
+  return postWhatsappMessage(leadId, lead.phone, body, requestingUserId, "WhatsApp message");
+}
+
+// Fire-and-forget from createLead right after insert (see its own call site)
+// - never throws out to the caller, since a WhatsApp outage must never fail
+// lead creation itself. Returns whether it actually sent, so createLead can
+// flip welcome_message_sent only on a real success. "Not configured" is a
+// silent no-op (plenty of deployments have no WhatsApp integration wired up
+// at all), not a logged error - a real send failure still gets logged, since
+// that one's worth knowing about.
+export async function sendWelcomeMessageForLead(leadId: string, phone: string, fullName: string, creatorId: string): Promise<boolean> {
+  if (!isWhatsappConfigured()) return false;
+  try {
+    const template = await messageTemplateService.getActiveTemplateByKey("lead_welcome", "whatsapp");
+    if (!template) return false;
+    const firstName = fullName.trim().split(" ")[0] || fullName.trim();
+    const body = template.replace(/\{\{(\w+)\}\}/g, (_, key: string) => (key === "firstName" ? firstName : ""));
+    await postWhatsappMessage(leadId, phone, body, creatorId, "Welcome message");
+    return true;
+  } catch (err) {
+    console.error(`Welcome message failed for lead ${leadId}:`, err);
+    return false;
+  }
 }
 
 export async function listMessagesForLead(leadId: string, requestingUserId: string) {

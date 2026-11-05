@@ -1332,7 +1332,9 @@ To keep you updated on your enquiry, we need your consent to contact you by phon
 
 Please reply "confirm" to this email to record your consent.
 
-Regards,', 'active', 4)
+Regards,', 'active', 4),
+      ('lead_welcome', 'Lead welcome message', 'whatsapp', 'Auto-sent on lead creation (manual/queue/QR/website - never on a bulk import)', NULL,
+       'Hi {{firstName}}, thanks for reaching out! Our team has received your enquiry and will be in touch with you shortly.', 'active', 5)
     ON CONFLICT (key) DO NOTHING`,
     `INSERT INTO role_permissions (role, permission) VALUES
       ('admin','message_templates.view'), ('admin','message_templates.manage')

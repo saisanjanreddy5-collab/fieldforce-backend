@@ -64,6 +64,18 @@ export async function listMessageTemplates(filters: ListMessageTemplatesFilters)
   return { messageTemplates: result.rows.map(toPublicTemplate), total: Number(countResult.rows[0].count) };
 }
 
+// For a system-triggered send (the Lead welcome message) rather than a human
+// picking one from Settings > Templates - returns null (not a throw) for a
+// missing/draft template, since the caller treats "no real template
+// configured yet" as a no-op, not an error.
+export async function getActiveTemplateByKey(key: string, channel: TemplateChannel): Promise<string | null> {
+  const result = await pool.query<MessageTemplateRow>("SELECT * FROM message_templates WHERE key = $1 AND channel = $2 AND status = 'active'", [
+    key,
+    channel,
+  ]);
+  return result.rows[0]?.body ?? null;
+}
+
 export interface CreateMessageTemplateInput {
   key: string;
   name: string;

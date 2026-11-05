@@ -4,6 +4,7 @@ import { recordAuditEvent, listAuditLogForEntity } from "./audit-log-service";
 import { bulkImportRowSchema } from "../validators/lead-validator";
 import { createCustomerFromLead, syncCustomerOwnerFromLead } from "./customer-service";
 import { listActivitiesForLead, listCommentsForActivities } from "./activity-service";
+import * as whatsappService from "./whatsapp-service";
 
 // Rule A (hierarchy-based visibility): a lead is visible to its owner and to
 // everyone directly above the owner in the reporting chain. Walking UP from a
@@ -265,6 +266,7 @@ function toPublicLead(row: LeadRow) {
     leadScore: row.lead_score === null ? null : Number(row.lead_score),
     phone: row.phone,
     altPhone: row.alt_phone,
+    welcomeMessageSent: row.welcome_message_sent ?? false,
     email: row.email,
     website: row.website,
     preferredLanguage: row.preferred_language,
@@ -653,6 +655,11 @@ export interface CreateLeadOptions {
   // Every other requiresQualification caller (bulk import, website form, QR
   // campaign) leaves this unset and keeps the round-robin behavior.
   assignToCreator?: boolean;
+  // Set only by bulkImportLeads - a welcome WhatsApp blast on a 500-row
+  // import is not wanted, unlike every other (single-lead) entry point this
+  // function serves (manual form, Call Center's own queue lead, QR capture,
+  // website capture), which all leave this unset and get the real send.
+  skipWelcomeMessage?: boolean;
 }
 
 export async function createLead(
@@ -796,6 +803,18 @@ export async function createLead(
     }
   }
 
+  // Fire-and-forget: sendWelcomeMessageForLead never throws (it swallows and
+  // logs its own failures) - a WhatsApp outage or missing/unconfigured
+  // integration must never fail lead creation itself. welcome_message_sent
+  // only flips true on a real confirmed send, never optimistically.
+  if (lead.phone && !options?.skipWelcomeMessage) {
+    const sent = await whatsappService.sendWelcomeMessageForLead(lead.id, lead.phone, lead.full_name, creatorId);
+    if (sent) {
+      await pool.query("UPDATE leads SET welcome_message_sent = true WHERE id = $1", [lead.id]);
+      lead.welcome_message_sent = true;
+    }
+  }
+
   return toPublicLead(lead);
 }
 
@@ -866,7 +885,7 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
         { ...row, ownerId: assignedOwnerId ?? undefined },
         creatorId,
         undefined,
-        { requiresQualification: true }
+        { requiresQualification: true, skipWelcomeMessage: true }
       );
       result.created++;
     } catch (err) {

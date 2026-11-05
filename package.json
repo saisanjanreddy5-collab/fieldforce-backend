@@ -39,7 +39,11 @@
     "test:delegation-target-archive": "ts-node src/scripts/testDelegationTargetArchive.ts",
     "test:user-commission-incentive-plan-archive": "ts-node src/scripts/testUserCommissionIncentivePlanArchive.ts",
     "test:customer-contact-address-archive": "ts-node src/scripts/testCustomerContactAddressArchive.ts",
-    "test:document-archive-restore": "ts-node src/scripts/testDocumentArchiveRestore.ts"
+    "test:document-archive-restore": "ts-node src/scripts/testDocumentArchiveRestore.ts",
+    "test:pincode-gst-aadhaar-validation": "ts-node src/scripts/testPincodeGstAadhaarValidation.ts",
+    "test:expense-receipt-filename": "ts-node src/scripts/testExpenseReceiptFilename.ts",
+    "test:approval-history": "ts-node src/scripts/testApprovalHistory.ts",
+    "test:welcome-message-and-skia-already-registered": "ts-node src/scripts/testWelcomeMessageAndSkiaAlreadyRegistered.ts"
   },
   "keywords": [],
   "author": "",
