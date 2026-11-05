@@ -18,6 +18,15 @@ export const updateTargetSchema = z.object({
   unitTarget: z.string().optional(),
 });
 
+// Query-string booleans arrive as the literal strings "true"/"false" (or are
+// absent) - z.coerce.boolean() would treat "false" as truthy, same reasoning
+// lead-validator.ts's own queryBoolean already documents.
+const queryBoolean = z
+  .enum(["true", "false"])
+  .optional()
+  .transform((v) => v === "true");
+
 export const listTargetsQuerySchema = paginationQuerySchema.extend({
   userId: z.string().uuid().optional(),
+  archived: queryBoolean,
 });

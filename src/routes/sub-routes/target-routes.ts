@@ -14,5 +14,6 @@ router.get("/:id", requirePermission("targets.view"), targetController.getById);
 router.post("/", requirePermission("targets.create"), validateBody(createTargetSchema), targetController.create);
 router.patch("/:id", requirePermission("targets.update"), validateBody(updateTargetSchema), targetController.update);
 router.delete("/:id", requirePermission("targets.delete"), targetController.remove);
+router.patch("/:id/restore", requirePermission("targets.delete"), targetController.restore);
 
 export default router;

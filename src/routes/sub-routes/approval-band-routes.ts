@@ -27,5 +27,6 @@ router.get(
 router.post("/", requirePermission("approval_bands.create"), validateBody(createApprovalBandSchema), approvalBandController.create);
 router.patch("/:id", requirePermission("approval_bands.update"), validateBody(updateApprovalBandSchema), approvalBandController.update);
 router.delete("/:id", requirePermission("approval_bands.delete"), approvalBandController.remove);
+router.patch("/:id/restore", requirePermission("approval_bands.delete"), approvalBandController.restore);
 
 export default router;

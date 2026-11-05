@@ -10,5 +10,6 @@ router.use(requireAuth);
 
 router.patch("/:id", requirePermission("customers.update"), validateBody(updateAddressSchema), customerAddressController.update);
 router.delete("/:id", requirePermission("customers.update"), customerAddressController.remove);
+router.patch("/:id/restore", requirePermission("customers.update"), customerAddressController.restore);
 
 export default router;

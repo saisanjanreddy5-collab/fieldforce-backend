@@ -50,16 +50,20 @@ function toPublicRule(row: CommissionRuleRow) {
 
 export interface ListCommissionRulesFilters {
   incentivePlanId?: string;
+  // Shows archived rules instead of active ones - never both mixed, same
+  // convention as leads/opportunities' own archived toggle.
+  archived?: boolean;
   page: number;
   limit: number;
 }
 
 export async function listCommissionRules(filters: ListCommissionRulesFilters) {
   const params: unknown[] = [];
-  let where = "WHERE is_deleted = false";
+  const isDeleted = filters.archived ? "true" : "false";
+  let where = `WHERE is_deleted = ${isDeleted}`;
   if (filters.incentivePlanId) {
     params.push(filters.incentivePlanId);
-    where = "WHERE incentive_plan_id = $1 AND is_deleted = false";
+    where = `WHERE incentive_plan_id = $1 AND is_deleted = ${isDeleted}`;
   }
 
   const countResult = await pool.query<{ count: string }>(`SELECT COUNT(*) FROM commission_rules ${where}`, params);
@@ -172,5 +176,12 @@ export async function deleteCommissionRule(id: string): Promise<void> {
   const result = await pool.query("UPDATE commission_rules SET is_deleted = true WHERE id = $1 AND is_deleted = false", [id]);
   if (result.rowCount === 0) {
     throw new ApiError(404, "Commission rule not found");
+  }
+}
+
+export async function restoreCommissionRule(id: string): Promise<void> {
+  const result = await pool.query("UPDATE commission_rules SET is_deleted = false WHERE id = $1 AND is_deleted = true", [id]);
+  if (result.rowCount === 0) {
+    throw new ApiError(404, "Commission rule not found or not archived");
   }
 }

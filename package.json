@@ -32,7 +32,14 @@
     "test:multi-status-filter-and-pagination": "ts-node src/scripts/testMultiStatusFilterAndPagination.ts",
     "test:fofo-repush-guard": "ts-node src/scripts/testFofoRepushGuard.ts",
     "test:activity-scheduling-conflict": "ts-node src/scripts/testActivitySchedulingConflict.ts",
-    "test:support-ticket-eligibility": "ts-node src/scripts/testSupportTicketEligibility.ts"
+    "test:support-ticket-eligibility": "ts-node src/scripts/testSupportTicketEligibility.ts",
+    "test:support-ticket-assignee-role": "ts-node src/scripts/testSupportTicketAssigneeRole.ts",
+    "test:archive-restore": "ts-node src/scripts/testArchiveRestore.ts",
+    "test:approval-band-commission-rule-archive": "ts-node src/scripts/testApprovalBandCommissionRuleArchive.ts",
+    "test:delegation-target-archive": "ts-node src/scripts/testDelegationTargetArchive.ts",
+    "test:user-commission-incentive-plan-archive": "ts-node src/scripts/testUserCommissionIncentivePlanArchive.ts",
+    "test:customer-contact-address-archive": "ts-node src/scripts/testCustomerContactAddressArchive.ts",
+    "test:document-archive-restore": "ts-node src/scripts/testDocumentArchiveRestore.ts"
   },
   "keywords": [],
   "author": "",

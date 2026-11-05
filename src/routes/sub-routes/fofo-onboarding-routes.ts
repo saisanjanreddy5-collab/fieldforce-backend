@@ -44,4 +44,20 @@ router.patch(
 );
 router.delete("/documents/:documentId", requirePermission("fofo_onboarding.upload_document"), fofoOnboardingController.deleteDocument);
 
+router.get(
+  "/:leadId/documents/:docType/history",
+  requirePermission("fofo_onboarding.view"),
+  fofoOnboardingController.listDocumentHistory
+);
+router.get(
+  "/documents/archive/:archiveId/file",
+  requirePermission("fofo_onboarding.view"),
+  fofoOnboardingController.downloadArchivedDocument
+);
+router.patch(
+  "/documents/archive/:archiveId/restore",
+  requirePermission("fofo_onboarding.upload_document"),
+  fofoOnboardingController.restoreArchivedDocument
+);
+
 export default router;

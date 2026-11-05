@@ -4,7 +4,8 @@ import { sendSuccess } from "../utils/response";
 import * as customerContactService from "../services/customer-contact-service";
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
-  const contacts = await customerContactService.listContacts(String(req.params.customerId), req.user!.id);
+  const archived = req.query.archived === "true";
+  const contacts = await customerContactService.listContacts(String(req.params.customerId), req.user!.id, archived);
   sendSuccess(res, contacts);
 });
 
@@ -21,4 +22,9 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   await customerContactService.deleteContact(String(req.params.id), req.user!.id);
   sendSuccess(res, null, "Contact removed");
+});
+
+export const restore = asyncHandler(async (req: Request, res: Response) => {
+  await customerContactService.restoreContact(String(req.params.id), req.user!.id);
+  sendSuccess(res, null, "Contact restored");
 });

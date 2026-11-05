@@ -4,7 +4,7 @@ import { sendSuccess } from "../utils/response";
 import * as commissionRuleService from "../services/commission-rule-service";
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
-  const query = req.validatedQuery as unknown as { incentivePlanId?: string; page: number; limit: number };
+  const query = req.validatedQuery as unknown as { incentivePlanId?: string; archived?: boolean; page: number; limit: number };
   const result = await commissionRuleService.listCommissionRules(query);
   sendSuccess(res, result);
 });
@@ -27,4 +27,9 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   await commissionRuleService.deleteCommissionRule(String(req.params.id));
   sendSuccess(res, null, "Commission rule deleted");
+});
+
+export const restore = asyncHandler(async (req: Request, res: Response) => {
+  await commissionRuleService.restoreCommissionRule(String(req.params.id));
+  sendSuccess(res, null, "Commission rule restored");
 });

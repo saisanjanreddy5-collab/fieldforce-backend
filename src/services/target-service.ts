@@ -125,6 +125,9 @@ const ACHIEVED_JOIN = `
 
 export interface ListTargetsFilters {
   userId?: string;
+  // Flips the list from "active" to "archived" - never mixed in one result
+  // set, same convention leads/opportunities use.
+  archived?: boolean;
   page: number;
   limit: number;
 }
@@ -132,13 +135,14 @@ export interface ListTargetsFilters {
 export async function listTargets(requestingUserId: string, requestingRole: Role, filters: ListTargetsFilters) {
   const limit = filters.limit;
   const offset = (filters.page - 1) * filters.limit;
+  const isDeleted = filters.archived ? "true" : "false";
 
   if (requestingRole === ROLES.ADMIN) {
     const params: unknown[] = [];
-    let where = "WHERE t.is_deleted = false";
+    let where = `WHERE t.is_deleted = ${isDeleted}`;
     if (filters.userId) {
       params.push(filters.userId);
-      where = "WHERE t.is_deleted = false AND t.user_id = $1";
+      where = `WHERE t.is_deleted = ${isDeleted} AND t.user_id = $1`;
     }
 
     const countResult = await pool.query<{ count: string }>(`SELECT COUNT(*) FROM targets t ${where}`, params);
@@ -166,7 +170,7 @@ export async function listTargets(requestingUserId: string, requestingRole: Role
   const countResult = await pool.query<{ count: string }>(
     `${SUBTREE_CTE}
      SELECT COUNT(*) FROM targets t
-     WHERE t.is_deleted = false AND t.user_id IN (SELECT id FROM subtree) ${extraFilter}`,
+     WHERE t.is_deleted = ${isDeleted} AND t.user_id IN (SELECT id FROM subtree) ${extraFilter}`,
     params
   );
 
@@ -176,7 +180,7 @@ export async function listTargets(requestingUserId: string, requestingRole: Role
      SELECT t.*, achieved.total AS achieved_amount
      FROM targets t
      ${ACHIEVED_JOIN}
-     WHERE t.is_deleted = false AND t.user_id IN (SELECT id FROM subtree) ${extraFilter}
+     WHERE t.is_deleted = ${isDeleted} AND t.user_id IN (SELECT id FROM subtree) ${extraFilter}
      ORDER BY t.period_start DESC
      LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
     listParams
@@ -282,5 +286,15 @@ export async function deleteTarget(id: string): Promise<void> {
   const result = await pool.query("UPDATE targets SET is_deleted = true WHERE id = $1 AND is_deleted = false", [id]);
   if (result.rowCount === 0) {
     throw new ApiError(404, "Target not found");
+  }
+}
+
+// Mirrors deleteTarget's own shape exactly - no owner-scope check either,
+// same as the delete it undoes (the route's targets.delete permission is
+// the only gate on both).
+export async function restoreTarget(id: string): Promise<void> {
+  const result = await pool.query("UPDATE targets SET is_deleted = false WHERE id = $1 AND is_deleted = true", [id]);
+  if (result.rowCount === 0) {
+    throw new ApiError(404, "Archived target not found");
   }
 }

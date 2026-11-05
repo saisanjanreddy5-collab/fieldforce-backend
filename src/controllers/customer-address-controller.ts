@@ -4,7 +4,8 @@ import { sendSuccess } from "../utils/response";
 import * as customerAddressService from "../services/customer-address-service";
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
-  const addresses = await customerAddressService.listAddresses(String(req.params.customerId), req.user!.id);
+  const archived = req.query.archived === "true";
+  const addresses = await customerAddressService.listAddresses(String(req.params.customerId), req.user!.id, archived);
   sendSuccess(res, addresses);
 });
 
@@ -21,4 +22,9 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   await customerAddressService.deleteAddress(String(req.params.id), req.user!.id);
   sendSuccess(res, null, "Address removed");
+});
+
+export const restore = asyncHandler(async (req: Request, res: Response) => {
+  await customerAddressService.restoreAddress(String(req.params.id), req.user!.id);
+  sendSuccess(res, null, "Address restored");
 });

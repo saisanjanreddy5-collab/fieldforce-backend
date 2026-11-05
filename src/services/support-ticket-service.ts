@@ -338,9 +338,14 @@ export async function assignTicket(ticketId: string, assigneeId: string | null, 
 
   let assigneeName: string | null = null;
   if (assigneeId) {
-    const assignee = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [assigneeId]);
+    const assignee = await pool.query<{ name: string; role: string }>("SELECT name, role FROM users WHERE id = $1", [assigneeId]);
     if (assignee.rows.length === 0) {
       throw new ApiError(404, "That user doesn't exist");
+    }
+    // Call Center has no support_tickets.view at all - assigning to one
+    // would hand the ticket to someone who can never see or act on it.
+    if (assignee.rows[0].role === "call_center") {
+      throw new ApiError(422, "Tickets can't be assigned to a Call Center role - they don't have access to Support Tickets");
     }
     assigneeName = assignee.rows[0].name;
   }

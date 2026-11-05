@@ -61,6 +61,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     unassignedOnly?: boolean;
     createdFrom?: string;
     createdTo?: string;
+    archived?: boolean;
     page: number;
     limit: number;
   };
@@ -102,6 +103,11 @@ export const update = asyncHandler(async (req: Request, res: Response) => {
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   await leadService.deleteLead(String(req.params.id), req.user!.id, req.ip);
   sendSuccess(res, null, "Lead deleted");
+});
+
+export const restore = asyncHandler(async (req: Request, res: Response) => {
+  await leadService.restoreLead(String(req.params.id), req.user!.id, req.ip);
+  sendSuccess(res, null, "Lead restored");
 });
 
 export const share = asyncHandler(async (req: Request, res: Response) => {

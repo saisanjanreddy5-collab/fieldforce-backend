@@ -52,6 +52,8 @@ export interface ListOpportunitiesFilters {
   territory?: string;
   salesTeamId?: string;
   search?: string;
+  // Same "one view or the other, never mixed" archived toggle as Leads.
+  archived?: boolean;
   page: number;
   limit: number;
 }
@@ -251,7 +253,7 @@ export async function listOpportunitiesForLead(leadId: string, requestingUserId:
 }
 
 export async function listOpportunitiesForUser(requestingUserId: string, filters: ListOpportunitiesFilters) {
-  const conditions: string[] = ["o.is_deleted = false", "l.is_deleted = false"];
+  const conditions: string[] = [filters.archived ? "o.is_deleted = true" : "o.is_deleted = false", "l.is_deleted = false"];
   const params: unknown[] = [requestingUserId];
 
   conditions.push(`(
@@ -463,6 +465,34 @@ export async function deleteOpportunity(id: string, requestingUserId: string): P
 
   await pool.query(
     "UPDATE opportunities SET is_deleted = true, updated_by = $1, updated_at = now() WHERE id = $2",
+    [requestingUserId, id]
+  );
+}
+
+// Mirrors deleteOpportunity's own owner-scope check, but against archived
+// opportunities (is_deleted = true) rather than isOpportunityInOwnerScope's
+// active-only one - that helper would always report "not in scope" for
+// something already archived.
+export async function restoreOpportunity(id: string, requestingUserId: string): Promise<void> {
+  const scopeCheck = await pool.query(
+    `${SUBTREE_CTE}
+     SELECT 1 FROM opportunities o
+     JOIN leads l ON l.id = o.lead_id
+     WHERE o.id = $2
+       AND o.is_deleted = true
+       AND l.is_deleted = false
+       AND (
+         l.owner_id IN (SELECT id FROM subtree)
+         OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin')
+       )`,
+    [requestingUserId, id]
+  );
+  if ((scopeCheck.rowCount ?? 0) === 0) {
+    throw new ApiError(403, "You do not have access to this archived opportunity");
+  }
+
+  await pool.query(
+    "UPDATE opportunities SET is_deleted = false, updated_by = $1, updated_at = now() WHERE id = $2",
     [requestingUserId, id]
   );
 }

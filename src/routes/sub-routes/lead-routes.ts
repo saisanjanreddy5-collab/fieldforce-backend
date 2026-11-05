@@ -77,6 +77,7 @@ router.get("/export", requirePermission("leads.export"), validateQuery(listLeads
 router.get("/:id", requireAnyPermission("leads.view", "leads.queue_view"), leadController.getById);
 router.patch("/:id", requirePermission("leads.update"), validateBody(updateLeadSchema), leadController.update);
 router.delete("/:id", requirePermission("leads.delete"), leadController.remove);
+router.patch("/:id/restore", requirePermission("leads.delete"), leadController.restore);
 
 router.get("/:id/shares", requirePermission("leads.view"), leadController.listShares);
 router.post("/:id/share", requirePermission("leads.share"), validateBody(shareLeadSchema), leadController.share);

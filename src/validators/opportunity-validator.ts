@@ -35,6 +35,13 @@ export const listOpportunitiesQuerySchema = z.object({
   territory: z.string().optional(),
   salesTeamId: z.string().uuid().optional(),
   search: z.string().optional(),
+  // Query-string booleans arrive as the literal strings "true"/"false" (or
+  // are absent) - z.coerce.boolean() would treat "false" as truthy, same
+  // reasoning lead-validator.ts's own queryBoolean already documents.
+  archived: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((v) => v === "true"),
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(500).default(200),
 });

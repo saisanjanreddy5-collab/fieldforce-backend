@@ -18,5 +18,6 @@ router.get("/:id", requirePermission("commission_rules.view"), commissionRuleCon
 router.post("/", requirePermission("commission_rules.create"), validateBody(createCommissionRuleSchema), commissionRuleController.create);
 router.patch("/:id", requirePermission("commission_rules.update"), validateBody(updateCommissionRuleSchema), commissionRuleController.update);
 router.delete("/:id", requirePermission("commission_rules.delete"), commissionRuleController.remove);
+router.patch("/:id/restore", requirePermission("commission_rules.delete"), commissionRuleController.restore);
 
 export default router;

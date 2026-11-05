@@ -17,6 +17,7 @@ router.get("/team-rollup", requirePermission("opportunities.view"), opportunityC
 router.get("/:id", requirePermission("opportunities.view"), opportunityController.getById);
 router.patch("/:id", requirePermission("opportunities.update"), validateBody(updateOpportunitySchema), opportunityController.update);
 router.delete("/:id", requirePermission("opportunities.delete"), opportunityController.remove);
+router.patch("/:id/restore", requirePermission("opportunities.delete"), opportunityController.restore);
 
 router.get("/:id/activities", requirePermission("activities.view"), activityController.listForOpportunity);
 router.post(
