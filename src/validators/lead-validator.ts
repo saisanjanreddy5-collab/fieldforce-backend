@@ -45,7 +45,15 @@ export const createLeadSchema = z.object({
   // employee_pincodes (that side already trims - see auth-validator.ts/
   // user-validator.ts), silently breaking Send to Field Sales's matching
   // and triggering the fallback-to-random-employee path with no warning.
-  pincode: z.string().trim().optional(),
+  // Blank is fine, but a non-blank value must be a real 6-digit Indian
+  // pincode - same reasoning as tenDigitPhone/panNumber below: this field
+  // is matched byte-for-byte against employee_pincodes for field-sales
+  // routing, so letters or a wrong length would silently break that match.
+  pincode: z
+    .string()
+    .trim()
+    .refine((v) => v === "" || /^\d{6}$/.test(v), "Enter a valid 6-digit pincode")
+    .optional(),
   zoneId: uuid.optional(),
   stateId: uuid.optional(),
   districtId: uuid.optional(),
@@ -81,7 +89,17 @@ export const createLeadSchema = z.object({
   investmentCapacity: z.coerce.number().optional(),
   existingBusiness: z.string().optional(),
   expectedOpening: z.string().optional(),
-  gstNumber: z.string().optional(),
+  // Blank is fine, but a non-blank value must be a real GSTIN: 2-digit
+  // state code + the 10-char PAN format + a 1-char entity number + a
+  // literal 'Z' + a 1-char checksum (15 chars total) - same convention as
+  // panNumber below, case-insensitive on entry but always stored uppercase.
+  gstNumber: z
+    .union([
+      z.literal(""),
+      z.string().regex(/^\d{2}[A-Za-z]{5}\d{4}[A-Za-z][A-Za-z0-9][Zz][A-Za-z0-9]$/, "Enter a valid GSTIN"),
+    ])
+    .transform((v) => (v ? v.toUpperCase() : v))
+    .optional(),
   // Blank is fine, but a non-blank value must be a real PAN: 5 letters, 4
   // digits, 1 letter (e.g. ABCDE1234F) - the standard format every Indian
   // PAN follows, case-insensitive on entry but always stored uppercase.
@@ -94,7 +112,12 @@ export const createLeadSchema = z.object({
 
   // FOFO onboarding handoff
   entityType: z.string().optional(),
-  aadhaarNumber: z.string().optional(),
+  // Blank is fine, but a non-blank value must be a real 12-digit Aadhaar
+  // number - UIDAI never issues one starting with 0 or 1, same tier of
+  // check as tenDigitPhone/panNumber/gstNumber above.
+  aadhaarNumber: z
+    .union([z.literal(""), z.string().regex(/^[2-9]\d{11}$/, "Enter a valid 12-digit Aadhaar number")])
+    .optional(),
   // Free text by design ("Baner - 6.2 km" mixes a store name with a
   // distance) - not worth splitting into separate fields, but a negative
   // number anywhere in it is never legitimate.

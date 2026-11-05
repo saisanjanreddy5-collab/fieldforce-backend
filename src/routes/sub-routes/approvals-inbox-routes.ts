@@ -1,6 +1,8 @@
 import { Router } from "express";
 import * as approvalsInboxController from "../../controllers/approvals-inbox-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
+import { validateQuery } from "../../middleware/validate-middleware";
+import { paginationQuerySchema } from "../../validators/pagination";
 
 const router = Router();
 
@@ -14,5 +16,8 @@ router.use(requireAuth);
 // holding none of those three simply gets an empty inbox, same as if they'd
 // hit each real source endpoint directly.
 router.get("/inbox", approvalsInboxController.getInbox);
+// Same self-scoping reasoning as /inbox above - every decided item returned
+// is one this requesting user personally decided.
+router.get("/history", validateQuery(paginationQuerySchema), approvalsInboxController.getHistory);
 
 export default router;

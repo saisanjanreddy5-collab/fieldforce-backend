@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "b7e4f1a2-9c3d-4e5f-8a1b-2c3d4e5f6a7b",
     "name": "FieldForce CRM - All APIs",
-    "description": "Complete scope: every API endpoint in the FieldForce backend, generated directly from the live backend route/validator source, originally on 2026-10-23 and refreshed on 2026-11-02 to catch up with the Call Center lifecycle rework. Every endpoint below is real and currently deployed - nothing here is guessed.\n\n- Base URL points at production: https://devcrm.nextechltd.in/api\n- All endpoints (except Login/Refresh/Logout/Register, and the handful of genuinely public or webhook endpoints noted in their own folder/description) require `Authorization: Bearer <accessToken>`. This collection handles that for you via the `accessToken` collection variable - just run \"Login\" first and every other request will auto-use the token.\n- Every response is wrapped as `{ success: boolean, data: ..., message?: string }`. On error: `{ success: false, message: string, errors?: ... }` with a 4xx/5xx status code.\n- Most endpoints are gated by a permission string (shown in each request's description, e.g. `leads.view`). If a user's role doesn't have that permission, the API returns 403.\n- A few folders (Public QR, Public Website Leads, Frappe Webhooks, and specific webhook routes inside the Integrations folders) are genuinely NOT behind a user token - their descriptions explain the real mechanism (rate limiting only, or a shared-secret/HMAC signature header). Those are marked `noauth` and are mostly not relevant to a mobile app's own login flow.\n- This collection folds in and supersedes FieldForce-Login-Leads.postman_collection.json (Auth + Leads folders are unchanged / reused here) and adds every other module in the CRM.\n\n**2026-11-02 update - newly added since the last version:** `POST /auth/change-password`; `POST /leads/queue` (Call Center's own \"Add lead\"); `GET /leads/sources`, `GET /leads/handed-off`, `GET /leads/export`, `GET /leads/{id}/timeline` (these existed on the backend before but were missing from this collection); the whole new \"Call Center Lifecycle\" folder under Leads - Log Call Disposition, Push to FLC, Pick Up This Lead, Qualify Lead, Escalate to SLC, Get Swap Candidates, Send to Field Sales, Reassign Lead; `createdFrom`/`createdTo` date-range filters on List Leads and Export Leads; `GET /reports/call-center-performance` and `GET /reports/field-sales-performance`; `GET /integrations/whatsapp/webhook` (verification handshake).",
+    "description": "Complete scope: every API endpoint in the FieldForce backend, generated directly from the live backend route/validator source, originally on 2026-10-23 and refreshed on 2026-11-02 to catch up with the Call Center lifecycle rework. Every endpoint below is real and currently deployed - nothing here is guessed.\n\n- Base URL points at production: https://devcrm.nextechltd.in/api\n- All endpoints (except Login/Refresh/Logout/Register, and the handful of genuinely public or webhook endpoints noted in their own folder/description) require `Authorization: Bearer <accessToken>`. This collection handles that for you via the `accessToken` collection variable - just run \"Login\" first and every other request will auto-use the token.\n- Every response is wrapped as `{ success: boolean, data: ..., message?: string }`. On error: `{ success: false, message: string, errors?: ... }` with a 4xx/5xx status code.\n- Most endpoints are gated by a permission string (shown in each request's description, e.g. `leads.view`). If a user's role doesn't have that permission, the API returns 403.\n- A few folders (Public QR, Public Website Leads, Frappe Webhooks, and specific webhook routes inside the Integrations folders) are genuinely NOT behind a user token - their descriptions explain the real mechanism (rate limiting only, or a shared-secret/HMAC signature header). Those are marked `noauth` and are mostly not relevant to a mobile app's own login flow.\n- This collection folds in and supersedes FieldForce-Login-Leads.postman_collection.json (Auth + Leads folders are unchanged / reused here) and adds every other module in the CRM.\n\n**2026-11-05 update - the \"never permanently delete\" pass:** a full audit found 10 modules whose Delete button quietly hard-deleted the row (or, for Leads/Opportunities, had no archive view/restore at all even though they already soft-deleted). All 10 are fixed the same way - delete is now always archive (soft, recoverable), with a matching Restore endpoint and an `archived=true` query param on the List endpoint to see what's archived. Newly added: `PATCH /leads/{id}/restore`, `PATCH /opportunities/{id}/restore`, `PATCH /delegations/{id}/restore`, `PATCH /approval-bands/{id}/restore`, `PATCH /targets/{id}/restore`, `PATCH /commission-rules/{id}/restore`, `PATCH /user-incentive-plans/{id}/restore`, `PATCH /user-commissions/{id}/restore`, `PATCH /customer-contacts/{id}/restore`, `PATCH /customer-addresses/{id}/restore`. Plus a FOFO-document-specific version of the same idea (old uploads were already being archived on replace/remove, but nothing ever read that log back): `GET /fofo-onboarding/{leadId}/documents/{docType}/history`, `GET /fofo-onboarding/documents/archive/{archiveId}/file`, `PATCH /fofo-onboarding/documents/archive/{archiveId}/restore`. Also: Support Ticket creation now rejects leads that haven't reached Qualified/Converted stage yet (was previously open to any lead at any stage), and the ticket Assignee list now excludes Call Center accounts (they have no access to Support Tickets at all).\n\n**2026-11-02 update - newly added since the last version:** `POST /auth/change-password`; `POST /leads/queue` (Call Center's own \"Add lead\"); `GET /leads/sources`, `GET /leads/handed-off`, `GET /leads/export`, `GET /leads/{id}/timeline` (these existed on the backend before but were missing from this collection); the whole new \"Call Center Lifecycle\" folder under Leads - Log Call Disposition, Push to FLC, Pick Up This Lead, Qualify Lead, Escalate to SLC, Get Swap Candidates, Send to Field Sales, Reassign Lead; `createdFrom`/`createdTo` date-range filters on List Leads and Export Leads; `GET /reports/call-center-performance` and `GET /reports/field-sales-performance`; `GET /integrations/whatsapp/webhook` (verification handshake).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -276,6 +276,12 @@
       "value": "",
       "type": "string",
       "description": "Auto-filled after running 'Create Saved Report View', or paste an existing saved view's id here."
+    },
+    {
+      "key": "archiveId",
+      "value": "",
+      "type": "string",
+      "description": "A FOFO document's archive-log entry id, from List Document History's response."
     }
   ],
   "item": [
@@ -582,6 +588,12 @@
                       "value": "2026-11-30",
                       "disabled": true,
                       "description": "calendar date (YYYY-MM-DD), inclusive (whole day counts)"
+                    },
+                    {
+                      "key": "archived",
+                      "value": "true",
+                      "disabled": true,
+                      "description": "\"true\" or \"false\" (default false) - set true to see the archive (soft-deleted/removed items) instead of active ones."
                     }
                   ]
                 },
@@ -865,7 +877,25 @@
                     "{{leadId}}"
                   ]
                 },
-                "description": "Requires permission: `leads.delete`. Response: `{ success: true, data: null, message: \"Lead deleted\" }`."
+                "description": "Requires permission: `leads.delete`. This is a soft-delete (archive), not a permanent removal - the lead is hidden from normal lists but can be brought back with Restore Lead below. Response: `{ success: true, data: null, message: \"Lead deleted\" }`."
+              }
+            },
+            {
+              "name": "Restore Lead",
+              "request": {
+                "method": "PATCH",
+                "url": {
+                  "raw": "{{baseUrl}}/leads/{{leadId}}/restore",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "{{leadId}}",
+                    "restore"
+                  ]
+                },
+                "description": "Requires permission: `leads.delete`. Brings back a record previously removed via the Delete/Archive action above - nothing in this app is ever permanently deleted, \"Delete\" always means \"archive, hidden, fully recoverable\". Response: `{ success: true, data: null, message: \"Lead restored\" }`."
               }
             }
           ]
@@ -2981,6 +3011,12 @@
                   "key": "limit",
                   "value": "50",
                   "description": "max 200"
+                },
+                {
+                  "key": "archived",
+                  "value": "true",
+                  "disabled": true,
+                  "description": "\"true\" or \"false\" (default false) - set true to see the archive (soft-deleted/removed items) instead of active ones."
                 }
               ]
             },
@@ -3027,7 +3063,25 @@
                 "{{delegationId}}"
               ]
             },
-            "description": "Requires permission: `delegations.delete`. 404 if not found. Response: `{ success: true, data: null, message: \"Delegation removed\" }`."
+            "description": "Requires permission: `delegations.delete`. 404 if not found. This is a soft-delete (archive) - the delegation is hidden but can be brought back with Restore Delegation below. Response: `{ success: true, data: null, message: \"Delegation removed\" }`."
+          }
+        },
+        {
+          "name": "Restore Delegation",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{baseUrl}}/delegations/{{delegationId}}/restore",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "delegations",
+                "{{delegationId}}",
+                "restore"
+              ]
+            },
+            "description": "Requires permission: `delegations.delete`. Brings back a record previously removed via the Delete/Archive action above - nothing in this app is ever permanently deleted, \"Delete\" always means \"archive, hidden, fully recoverable\". Response: `{ success: true, data: null, message: \"Delegation restored\" }`."
           }
         }
       ]
@@ -3056,6 +3110,12 @@
                   "key": "limit",
                   "value": "50",
                   "description": "max 200"
+                },
+                {
+                  "key": "archived",
+                  "value": "true",
+                  "disabled": true,
+                  "description": "\"true\" or \"false\" (default false) - set true to see the archive (soft-deleted/removed items) instead of active ones."
                 }
               ]
             },
@@ -3129,7 +3189,25 @@
                 "{{approvalBandId}}"
               ]
             },
-            "description": "Requires permission: `approval_bands.delete`. Response: `{ success: true, data: null, message: \"Approval band deleted\" }`."
+            "description": "Requires permission: `approval_bands.delete`. This is a soft-delete (archive) - the band is hidden but can be brought back with Restore Approval Band below. Response: `{ success: true, data: null, message: \"Approval band deleted\" }`."
+          }
+        },
+        {
+          "name": "Restore Approval Band",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{baseUrl}}/approval-bands/{{approvalBandId}}/restore",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "approval-bands",
+                "{{approvalBandId}}",
+                "restore"
+              ]
+            },
+            "description": "Requires permission: `approval_bands.delete`. Brings back a record previously removed via the Delete/Archive action above - nothing in this app is ever permanently deleted, \"Delete\" always means \"archive, hidden, fully recoverable\". Response: `{ success: true, data: null, message: \"Approval band restored\" }`."
           }
         }
       ]
@@ -3499,7 +3577,67 @@
                 "{{documentId}}"
               ]
             },
-            "description": "Requires permission: `fofo_onboarding.upload_document`. Response: `{ success: true, data: <removed document record>, message: \"Document removed\" }`."
+            "description": "Requires permission: `fofo_onboarding.upload_document`. This does NOT delete the file off disk - it archives the current document into history (see List Document History below) and resets the live slot to \"not uploaded\". Response: `{ success: true, data: <removed document record>, message: \"Document removed\" }`."
+          }
+        },
+        {
+          "name": "List Document History",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/fofo-onboarding/{{leadId}}/documents/pan_card/history",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "fofo-onboarding",
+                "{{leadId}}",
+                "documents",
+                "pan_card",
+                "history"
+              ]
+            },
+            "description": "Requires permission: `fofo_onboarding.view`. `pan_card` in the path is the doc type - replace with any of: pan_card, gst_certificate, shop_photos, rent_agreement, cancelled_cheque, consent_form. Returns every past version of this one document slot (replaced on re-upload, or explicitly removed/archived), newest first - the \"where did it go, can I get it back\" view. Response: `{ success: true, data: [{ id, docType, originalFilename, archivedReason: \"deleted\" | \"replaced\", archivedAt, ... }] }`."
+          }
+        },
+        {
+          "name": "Download Archived Document",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/fofo-onboarding/documents/archive/{{archiveId}}/file",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "fofo-onboarding",
+                "documents",
+                "archive",
+                "{{archiveId}}",
+                "file"
+              ]
+            },
+            "description": "Requires permission: `fofo_onboarding.view`, plus the caller must have visibility on the document's parent lead (403 otherwise). `archiveId` comes from List Document History's response (each entry's `id`). Streams the archived file back as a download (not a JSON envelope)."
+          }
+        },
+        {
+          "name": "Restore Archived Document",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{baseUrl}}/fofo-onboarding/documents/archive/{{archiveId}}/restore",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "fofo-onboarding",
+                "documents",
+                "archive",
+                "{{archiveId}}",
+                "restore"
+              ]
+            },
+            "description": "Requires permission: `fofo_onboarding.upload_document`. Pulls this old version back into the live document slot. If something is currently live in that slot, it gets archived first (reason \"replaced\") so nothing is ever lost - a restore never silently overwrites. Response: `{ success: true, data: <document record, now live again>, message: \"Document restored\" }`."
           }
         }
       ]
@@ -3572,6 +3710,12 @@
                   "key": "search",
                   "value": "",
                   "disabled": true
+                },
+                {
+                  "key": "archived",
+                  "value": "true",
+                  "disabled": true,
+                  "description": "\"true\" or \"false\" (default false) - set true to see the archive (soft-deleted/removed items) instead of active ones."
                 }
               ]
             },
@@ -3653,7 +3797,25 @@
                 "{{opportunityId}}"
               ]
             },
-            "description": "Requires permission: `opportunities.delete`. Response: `{ success: true, data: null, message: \"Opportunity deleted\" }`."
+            "description": "Requires permission: `opportunities.delete`. This is a soft-delete (archive), not a permanent removal - the opportunity is hidden from normal lists but can be brought back with Restore Opportunity below. Response: `{ success: true, data: null, message: \"Opportunity deleted\" }`."
+          }
+        },
+        {
+          "name": "Restore Opportunity",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{baseUrl}}/opportunities/{{opportunityId}}/restore",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "opportunities",
+                "{{opportunityId}}",
+                "restore"
+              ]
+            },
+            "description": "Requires permission: `opportunities.delete`. Brings back a record previously removed via the Delete/Archive action above - nothing in this app is ever permanently deleted, \"Delete\" always means \"archive, hidden, fully recoverable\". Response: `{ success: true, data: null, message: \"Opportunity restored\" }`."
           }
         },
         {
@@ -4729,6 +4891,14 @@
                     "customers",
                     "{{customerId}}",
                     "contacts"
+                  ],
+                  "query": [
+                    {
+                      "key": "archived",
+                      "value": "true",
+                      "disabled": true,
+                      "description": "\"true\" or \"false\" (default false) - set true to see the archive (soft-deleted/removed items) instead of active ones."
+                    }
                   ]
                 },
                 "description": "Requires permission: `customers.view`. Response: `{ success: true, data: [...] }`."
@@ -4780,6 +4950,14 @@
                     "customers",
                     "{{customerId}}",
                     "addresses"
+                  ],
+                  "query": [
+                    {
+                      "key": "archived",
+                      "value": "true",
+                      "disabled": true,
+                      "description": "\"true\" or \"false\" (default false) - set true to see the archive (soft-deleted/removed items) instead of active ones."
+                    }
                   ]
                 },
                 "description": "Requires permission: `customers.view`. Response: `{ success: true, data: [...] }`."
@@ -5014,7 +5192,25 @@
                 "{{customerContactId}}"
               ]
             },
-            "description": "Requires permission: `customers.update`. Response: `{ success: true, data: null, message: \"Contact removed\" }`."
+            "description": "Requires permission: `customers.update`. This is a soft-delete (archive) - the contact is hidden but can be brought back with Restore Customer Contact below. Response: `{ success: true, data: null, message: \"Contact removed\" }`."
+          }
+        },
+        {
+          "name": "Restore Customer Contact",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{baseUrl}}/customer-contacts/{{customerContactId}}/restore",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "customer-contacts",
+                "{{customerContactId}}",
+                "restore"
+              ]
+            },
+            "description": "Requires permission: `customers.update`. Brings back a record previously removed via the Delete/Archive action above - nothing in this app is ever permanently deleted, \"Delete\" always means \"archive, hidden, fully recoverable\". Response: `{ success: true, data: null, message: \"Contact restored\" }`."
           }
         }
       ]
@@ -5063,7 +5259,25 @@
                 "{{customerAddressId}}"
               ]
             },
-            "description": "Requires permission: `customers.update`. Response: `{ success: true, data: null, message: \"Address removed\" }`."
+            "description": "Requires permission: `customers.update`. This is a soft-delete (archive) - the address is hidden but can be brought back with Restore Customer Address below. Response: `{ success: true, data: null, message: \"Address removed\" }`."
+          }
+        },
+        {
+          "name": "Restore Customer Address",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{baseUrl}}/customer-addresses/{{customerAddressId}}/restore",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "customer-addresses",
+                "{{customerAddressId}}",
+                "restore"
+              ]
+            },
+            "description": "Requires permission: `customers.update`. Brings back a record previously removed via the Delete/Archive action above - nothing in this app is ever permanently deleted, \"Delete\" always means \"archive, hidden, fully recoverable\". Response: `{ success: true, data: null, message: \"Address restored\" }`."
           }
         }
       ]
@@ -5961,6 +6175,12 @@
                   "value": "",
                   "disabled": true,
                   "description": "uuid, filter by target's assignee"
+                },
+                {
+                  "key": "archived",
+                  "value": "true",
+                  "disabled": true,
+                  "description": "\"true\" or \"false\" (default false) - set true to see the archive (soft-deleted/removed items) instead of active ones."
                 }
               ]
             },
@@ -6051,7 +6271,25 @@
                 "{{targetId}}"
               ]
             },
-            "description": "Requires permission: `targets.delete`. Response: `{ success: true, data: null }`."
+            "description": "Requires permission: `targets.delete`. This is a soft-delete (archive) - the target is hidden but can be brought back with Restore Target below. Response: `{ success: true, data: null }`."
+          }
+        },
+        {
+          "name": "Restore Target",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{baseUrl}}/targets/{{targetId}}/restore",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "targets",
+                "{{targetId}}",
+                "restore"
+              ]
+            },
+            "description": "Requires permission: `targets.delete`. Brings back a record previously removed via the Delete/Archive action above - nothing in this app is ever permanently deleted, \"Delete\" always means \"archive, hidden, fully recoverable\". Response: `{ success: true, data: null, message: \"Target restored\" }`."
           }
         }
       ]
@@ -6205,6 +6443,12 @@
                   "value": "",
                   "disabled": true,
                   "description": "uuid, filter by parent incentive plan"
+                },
+                {
+                  "key": "archived",
+                  "value": "true",
+                  "disabled": true,
+                  "description": "\"true\" or \"false\" (default false) - set true to see the archive (soft-deleted/removed items) instead of active ones."
                 }
               ]
             },
@@ -6295,7 +6539,25 @@
                 "{{commissionRuleId}}"
               ]
             },
-            "description": "Requires permission: `commission_rules.delete`. Response: `{ success: true, data: null }`."
+            "description": "Requires permission: `commission_rules.delete`. This is a soft-delete (archive) - the rule is hidden but can be brought back with Restore Commission Rule below. Response: `{ success: true, data: null }`."
+          }
+        },
+        {
+          "name": "Restore Commission Rule",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{baseUrl}}/commission-rules/{{commissionRuleId}}/restore",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "commission-rules",
+                "{{commissionRuleId}}",
+                "restore"
+              ]
+            },
+            "description": "Requires permission: `commission_rules.delete`. Brings back a record previously removed via the Delete/Archive action above - nothing in this app is ever permanently deleted, \"Delete\" always means \"archive, hidden, fully recoverable\". Response: `{ success: true, data: null, message: \"Commission rule restored\" }`."
           }
         }
       ]
@@ -6330,6 +6592,12 @@
                   "value": "",
                   "disabled": true,
                   "description": "uuid, filter by assigned user"
+                },
+                {
+                  "key": "archived",
+                  "value": "true",
+                  "disabled": true,
+                  "description": "\"true\" or \"false\" (default false) - set true to see the archive (soft-deleted/removed items) instead of active ones."
                 }
               ]
             },
@@ -6376,7 +6644,25 @@
                 "{{userIncentivePlanId}}"
               ]
             },
-            "description": "Requires permission: `incentive_plans.delete` (reused, same as above). Response: `{ success: true, data: null }`."
+            "description": "Requires permission: `incentive_plans.delete` (reused, same as above). This is a soft-delete (archive) - the assignment is hidden but can be brought back with Restore User Incentive Plan Assignment below. Response: `{ success: true, data: null }`."
+          }
+        },
+        {
+          "name": "Restore User Incentive Plan Assignment",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{baseUrl}}/user-incentive-plans/{{userIncentivePlanId}}/restore",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user-incentive-plans",
+                "{{userIncentivePlanId}}",
+                "restore"
+              ]
+            },
+            "description": "Requires permission: `incentive_plans.delete`. Brings back a record previously removed via the Delete/Archive action above - nothing in this app is ever permanently deleted, \"Delete\" always means \"archive, hidden, fully recoverable\". Permission is reused from the delete action, same as the rest of this foundation-only module. Response: `{ success: true, data: null, message: \"Assignment restored\" }`."
           }
         }
       ]
@@ -6411,6 +6697,12 @@
                   "value": "",
                   "disabled": true,
                   "description": "uuid, filter by assigned user"
+                },
+                {
+                  "key": "archived",
+                  "value": "true",
+                  "disabled": true,
+                  "description": "\"true\" or \"false\" (default false) - set true to see the archive (soft-deleted/removed items) instead of active ones."
                 }
               ]
             },
@@ -6457,7 +6749,25 @@
                 "{{userCommissionId}}"
               ]
             },
-            "description": "Requires permission: `user_commissions.delete`. Response: `{ success: true, data: null }`."
+            "description": "Requires permission: `user_commissions.delete`. This is a soft-delete (archive) - the arrangement is hidden but can be brought back with Restore User Commission below. Response: `{ success: true, data: null }`."
+          }
+        },
+        {
+          "name": "Restore User Commission",
+          "request": {
+            "method": "PATCH",
+            "url": {
+              "raw": "{{baseUrl}}/user-commissions/{{userCommissionId}}/restore",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "user-commissions",
+                "{{userCommissionId}}",
+                "restore"
+              ]
+            },
+            "description": "Requires permission: `user_commissions.delete`. Brings back a record previously removed via the Delete/Archive action above - nothing in this app is ever permanently deleted, \"Delete\" always means \"archive, hidden, fully recoverable\". Response: `{ success: true, data: null, message: \"Commission arrangement restored\" }`."
           }
         }
       ]

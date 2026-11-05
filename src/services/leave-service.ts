@@ -385,6 +385,25 @@ export async function listPendingApprovals(userId: string) {
 // For the Approvals inbox's "approved this week" stat - every decision this
 // user personally made (as either tier) in the last 7 days, real timestamps
 // only, no synthetic data.
+// For the Approvals History tab - every decision this user personally made
+// (as either tier), full history rather than listDecidedThisWeek's 7-day
+// window (that one stays as-is, used only for the inbox's aggregate stat).
+// Capped, not truly unbounded - one manager's own approval history isn't
+// expected to run into the thousands.
+export async function listDecidedByUser(userId: string) {
+  const result = await pool.query<LeaveRequestRow>(
+    `${REQUEST_SELECT}
+     WHERE (
+       (lr.approver_id = $1 AND lr.approver_decision IS NOT NULL)
+       OR (lr.second_approver_id = $1 AND lr.second_approver_decision IS NOT NULL)
+     )
+     ORDER BY COALESCE(lr.second_approver_decided_at, lr.approver_decided_at) DESC
+     LIMIT 300`,
+    [userId]
+  );
+  return result.rows.map(toPublicLeaveRequest);
+}
+
 export async function listDecidedThisWeek(userId: string) {
   const result = await pool.query<{ created_at: string; decided_at: string }>(
     `SELECT created_at, approver_decided_at AS decided_at FROM leave_requests

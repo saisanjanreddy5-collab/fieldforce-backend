@@ -24,8 +24,8 @@ export const decideStep = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const push = asyncHandler(async (req: Request, res: Response) => {
-  const handoff = await fofoOnboardingService.pushToOnboardingApp(String(req.params.leadId), req.user!.id, req.user!.role);
-  sendSuccess(res, handoff, "Pushed to onboarding app");
+  const { handoff, message } = await fofoOnboardingService.pushToOnboardingApp(String(req.params.leadId), req.user!.id, req.user!.role);
+  sendSuccess(res, handoff, message);
 });
 
 export const uploadDocument = asyncHandler(async (req: Request, res: Response) => {

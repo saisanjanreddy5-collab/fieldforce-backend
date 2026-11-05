@@ -112,6 +112,10 @@ function toPublicExpenseClaim(row: ExpenseClaimRow) {
     linkedOpportunityId: row.linked_opportunity_id,
     linkedOpportunityLabel: row.opportunity_name ?? null,
     hasReceipt: row.receipt_file_path !== null,
+    // Needed so the frontend's download trigger can save the file under its
+    // real name+extension instead of inventing one - an extension-less
+    // synthetic name made the OS/Notepad render the binary as garbage text.
+    receiptOriginalFilename: row.receipt_original_filename,
     isPolicyBreach: row.is_policy_breach,
     policyLimitAtSubmission: row.policy_limit_at_submission === null ? null : Number(row.policy_limit_at_submission),
     status: row.status,
@@ -338,6 +342,24 @@ export async function listPendingApprovals(userId: string) {
 }
 
 // For the Approvals inbox's "approved this week" stat - see leave-service's
+// For the Approvals History tab - full decision history, not just the last
+// 7 days (see listDecidedThisWeek below, used only for the inbox's
+// aggregate stat). Same reasoning/cap as leave-service's own
+// listDecidedByUser.
+export async function listDecidedByUser(userId: string) {
+  const result = await pool.query<ExpenseClaimRow>(
+    `${CLAIM_SELECT}
+     WHERE (
+       (ec.approver_id = $1 AND ec.approver_decision IS NOT NULL)
+       OR (ec.second_approver_id = $1 AND ec.second_approver_decision IS NOT NULL)
+     )
+     ORDER BY COALESCE(ec.second_approver_decided_at, ec.approver_decided_at) DESC
+     LIMIT 300`,
+    [userId]
+  );
+  return result.rows.map(toPublicExpenseClaim);
+}
+
 // listDecidedThisWeek, same shape.
 export async function listDecidedThisWeek(userId: string) {
   const result = await pool.query<{ created_at: string; decided_at: string }>(

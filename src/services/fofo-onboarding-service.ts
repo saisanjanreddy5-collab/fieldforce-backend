@@ -264,7 +264,7 @@ export async function pushToOnboardingApp(leadId: string, requestingUserId: stri
     throw new ApiError(422, "This lead has no phone number on file - required to register the store app user");
   }
 
-  await registerFofoUser({ userName: lead.full_name, phoneNumber: lead.phone });
+  const registration = await registerFofoUser({ userName: lead.full_name, phoneNumber: lead.phone });
 
   const onboardingAppId = `FOFO-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
   await pool.query(
@@ -272,7 +272,11 @@ export async function pushToOnboardingApp(leadId: string, requestingUserId: stri
     [onboardingAppId, leadId]
   );
 
-  return getHandoff(leadId, requestingUserId, requestingRole);
+  const handoff = await getHandoff(leadId, requestingUserId, requestingRole);
+  const message = registration.alreadyRegistered
+    ? "Pushed to onboarding app - this phone already had a SKIA FOFO account from another franchise, now linked to this store too"
+    : "Pushed to onboarding app";
+  return { handoff, message };
 }
 
 const LIST_COLUMNS = `
@@ -361,6 +365,43 @@ export async function listPendingApprovalStepsForUser(userId: string) {
     roleLabel: row.role_label,
     conditionNote: row.condition_note,
     createdAt: row.created_at,
+  }));
+}
+
+// For the Approvals History tab - full decision history on steps this user
+// personally decided, not just the last 7 days (see listDecidedStepsThisWeek
+// below, used only for the inbox's aggregate stat). Same cap reasoning as
+// leave-service's own listDecidedByUser.
+export async function listDecidedStepsByUser(userId: string) {
+  const result = await pool.query<
+    PendingStepRow & { decided_at: string; status: "approved" | "rejected" }
+  >(
+    `SELECT s.id AS step_id, s.lead_id, l.lead_number, l.full_name, l.store_name, l.store_city,
+       u.name AS owner_name, l.expected_value, s.step_order, s.role_label, s.condition_note, s.created_at,
+       s.decided_at, s.status
+     FROM lead_approval_steps s
+     JOIN leads l ON l.id = s.lead_id
+     LEFT JOIN users u ON u.id = l.owner_id
+     WHERE s.decided_by = $1 AND s.status IN ('approved', 'rejected')
+     ORDER BY s.decided_at DESC
+     LIMIT 300`,
+    [userId]
+  );
+  return result.rows.map((row) => ({
+    stepId: row.step_id,
+    leadId: row.lead_id,
+    leadNumber: row.lead_number,
+    fullName: row.full_name,
+    storeName: row.store_name,
+    storeCity: row.store_city,
+    ownerName: row.owner_name,
+    expectedValue: row.expected_value === null ? null : Number(row.expected_value),
+    stepOrder: row.step_order,
+    roleLabel: row.role_label,
+    conditionNote: row.condition_note,
+    createdAt: row.created_at,
+    decidedAt: row.decided_at,
+    status: row.status,
   }));
 }
 
