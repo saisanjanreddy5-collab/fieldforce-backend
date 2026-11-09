@@ -43,15 +43,29 @@ async function main(): Promise<void> {
 
   try {
     // --- PAN validation ---
-    assertTrue("PAN rejects a garbage value", !createLeadSchema.safeParse({ fullName: "X", panNumber: "notapan" }).success);
-    assertTrue("PAN rejects a too-short value", !createLeadSchema.safeParse({ fullName: "X", panNumber: "ABCDE123F" }).success);
-    assertTrue("PAN accepts a real PAN", createLeadSchema.safeParse({ fullName: "X", panNumber: "ABCDE1234F" }).success);
-    const lowerCaseParsed = createLeadSchema.safeParse({ fullName: "X", panNumber: "abcde1234f" });
+    // (phone included on every case below purely to satisfy the now-mandatory
+    // phone field and isolate the actual thing each assertion is testing)
+    assertTrue(
+      "PAN rejects a garbage value",
+      !createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", panNumber: "notapan" }).success
+    );
+    assertTrue(
+      "PAN rejects a too-short value",
+      !createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", panNumber: "ABCDE123F" }).success
+    );
+    assertTrue(
+      "PAN accepts a real PAN",
+      createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", panNumber: "ABCDE1234F" }).success
+    );
+    const lowerCaseParsed = createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", panNumber: "abcde1234f" });
     assertTrue("PAN accepts lowercase input", lowerCaseParsed.success);
     if (lowerCaseParsed.success) {
       assertEqual("PAN is normalized to uppercase", lowerCaseParsed.data.panNumber, "ABCDE1234F");
     }
-    assertTrue("PAN still optional (blank is fine)", createLeadSchema.safeParse({ fullName: "X", panNumber: "" }).success);
+    assertTrue(
+      "PAN still optional (blank is fine)",
+      createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", panNumber: "" }).success
+    );
 
     // --- Inquiry Category: QR capture ---
     const campaign = await qrCampaignService.createCampaign(

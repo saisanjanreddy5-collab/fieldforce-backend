@@ -48,50 +48,55 @@ async function main(): Promise<void> {
       createLeadSchema.safeParse({ fullName: "X", phone: "9876543210" }).success
     );
     assertTrue(
-      "Lead phone still optional (blank is fine)",
-      createLeadSchema.safeParse({ fullName: "X", phone: "" }).success
+      // Superseded by a later fix in this same engagement: phone is now
+      // mandatory on lead creation (was "blank is fine" when this test was
+      // first written) - updated here instead of left stale/failing.
+      "Lead phone is now mandatory - blank is rejected",
+      !createLeadSchema.safeParse({ fullName: "X", phone: "" }).success
     );
 
     // --- Carpet area / Frontage: now real numbers, reject negative ---
+    // (phone included on every case below purely to satisfy the now-required
+    // field and isolate the actual thing each assertion is testing)
     assertTrue(
       "Carpet area rejects a negative number",
-      !createLeadSchema.safeParse({ fullName: "X", carpetArea: -50 }).success
+      !createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", carpetArea: -50 }).success
     );
     assertTrue(
       "Carpet area accepts a real positive number",
-      createLeadSchema.safeParse({ fullName: "X", carpetArea: 620 }).success
+      createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", carpetArea: 620 }).success
     );
     assertTrue(
       "Frontage rejects a negative number",
-      !createLeadSchema.safeParse({ fullName: "X", frontage: -5 }).success
+      !createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", frontage: -5 }).success
     );
 
     // --- Payment days: now a real non-negative integer ---
     assertTrue(
       "Payment days rejects a negative number",
-      !createLeadSchema.safeParse({ fullName: "X", paymentTerms: -21 }).success
+      !createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", paymentTerms: -21 }).success
     );
     assertTrue(
       "Payment days accepts a real positive integer",
-      createLeadSchema.safeParse({ fullName: "X", paymentTerms: 21 }).success
+      createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", paymentTerms: 21 }).success
     );
 
     // --- Nearest COCO store / Margin slab: stay free text, just can't embed a negative number ---
     assertTrue(
       "Nearest COCO store rejects an embedded negative number",
-      !createLeadSchema.safeParse({ fullName: "X", nearestCocoStore: "Baner - -6.2 km" }).success
+      !createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", nearestCocoStore: "Baner - -6.2 km" }).success
     );
     assertTrue(
       "Nearest COCO store still accepts its normal free-text shape",
-      createLeadSchema.safeParse({ fullName: "X", nearestCocoStore: "Baner - 6.2 km" }).success
+      createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", nearestCocoStore: "Baner - 6.2 km" }).success
     );
     assertTrue(
       "Margin slab rejects an embedded negative number",
-      !createLeadSchema.safeParse({ fullName: "X", marginSlab: "Slab B — -22%" }).success
+      !createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", marginSlab: "Slab B — -22%" }).success
     );
     assertTrue(
       "Margin slab still accepts its normal free-text shape",
-      createLeadSchema.safeParse({ fullName: "X", marginSlab: "Slab B — 22%" }).success
+      createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", marginSlab: "Slab B — 22%" }).success
     );
 
     // --- User mobile number (Create User + Update User) ---
