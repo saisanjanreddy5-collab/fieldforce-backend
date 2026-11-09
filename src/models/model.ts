@@ -1435,6 +1435,38 @@ Regards,', 'active', 4),
       ('agent','lead_categories.view')
     ON CONFLICT (role, permission) DO NOTHING`,
 
+    // Inquiry Category/Source (the Lead form's "Inquiry details" section) had
+    // zero master list behind them - free text for every manual-entry lead,
+    // which fragments into junk over time ("Insta"/"Instagram"/"IG" all being
+    // different values, making the fields useless for reporting). QR/Website
+    // leads already get these two auto-filled and locked by qr-campaign-
+    // service.ts/website-lead-service.ts - untouched by this change, those
+    // values are real campaign/form names, not meant to come from this list.
+    // Seeded only with the two values the system itself already produces for
+    // QR/Website leads, so the dropdown is consistent with what auto-captured
+    // leads show too - every other value is for an admin to add for real.
+    `CREATE TABLE IF NOT EXISTS lead_inquiry_options (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      field_type VARCHAR(20) NOT NULL CHECK (field_type IN ('category','source')),
+      label VARCHAR(150) NOT NULL,
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (field_type, label)
+    )`,
+    `INSERT INTO lead_inquiry_options (field_type, label) VALUES
+      ('category', 'QR Code'),
+      ('category', 'Website')
+    ON CONFLICT (field_type, label) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('admin','lead_inquiry_options.view'), ('admin','lead_inquiry_options.manage')
+    ON CONFLICT (role, permission) DO NOTHING`,
+    `INSERT INTO role_permissions (role, permission) VALUES
+      ('manager','lead_inquiry_options.view'),
+      ('agent','lead_inquiry_options.view'),
+      ('call_center','lead_inquiry_options.view')
+    ON CONFLICT (role, permission) DO NOTHING`,
+
     // Settings > Assignment rules - real admin CRUD on top of the
     // assignment_rules table lead-service.ts's resolveAutoAssignee has
     // already been reading for auto-assignment since before this Settings

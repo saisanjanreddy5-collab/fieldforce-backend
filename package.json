@@ -41,6 +41,9 @@
     "test:customer-contact-address-archive": "ts-node src/scripts/testCustomerContactAddressArchive.ts",
     "test:document-archive-restore": "ts-node src/scripts/testDocumentArchiveRestore.ts",
     "test:pincode-gst-aadhaar-validation": "ts-node src/scripts/testPincodeGstAadhaarValidation.ts",
+    "test:customer-address-pincode-validation": "ts-node src/scripts/testCustomerAddressPincodeValidation.ts",
+    "test:lead-inquiry-options": "ts-node src/scripts/testLeadInquiryOptions.ts",
+    "test:phone-pincode-document-fixes": "ts-node src/scripts/testPhonePincodeDocumentFixes.ts",
     "test:expense-receipt-filename": "ts-node src/scripts/testExpenseReceiptFilename.ts",
     "test:approval-history": "ts-node src/scripts/testApprovalHistory.ts",
     "test:welcome-message-and-skia-already-registered": "ts-node src/scripts/testWelcomeMessageAndSkiaAlreadyRegistered.ts"

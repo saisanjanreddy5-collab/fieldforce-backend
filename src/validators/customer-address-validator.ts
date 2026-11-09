@@ -9,7 +9,13 @@ export const createAddressSchema = z.object({
   addressLine2: z.string().trim().max(255).optional(),
   city: z.string().trim().max(100).optional(),
   state: z.string().trim().max(100).optional(),
-  pincode: z.string().trim().max(20).optional(),
+  // Same reasoning as lead-validator.ts's own pincode field: blank is fine,
+  // but a non-blank value must be a real 6-digit Indian pincode.
+  pincode: z
+    .string()
+    .trim()
+    .refine((v) => v === "" || /^\d{6}$/.test(v), "Enter a valid 6-digit pincode")
+    .optional(),
 });
 
 export const updateAddressSchema = createAddressSchema.partial();

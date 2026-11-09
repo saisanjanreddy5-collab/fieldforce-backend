@@ -28,48 +28,48 @@ async function main(): Promise<void> {
 
   try {
     // --- Pincode: must be blank or a real 6-digit number ---
-    assertTrue("Pincode rejects letters", !createLeadSchema.safeParse({ fullName: "X", pincode: "ABC123" }).success);
-    assertTrue("Pincode rejects 5 digits", !createLeadSchema.safeParse({ fullName: "X", pincode: "56000" }).success);
-    assertTrue("Pincode rejects 7 digits", !createLeadSchema.safeParse({ fullName: "X", pincode: "5600011" }).success);
-    assertTrue("Pincode accepts a real 6-digit value", createLeadSchema.safeParse({ fullName: "X", pincode: "560001" }).success);
-    assertTrue("Pincode still optional (blank is fine)", createLeadSchema.safeParse({ fullName: "X", pincode: "" }).success);
+    assertTrue("Pincode rejects letters", !createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", pincode: "ABC123" }).success);
+    assertTrue("Pincode rejects 5 digits", !createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", pincode: "56000" }).success);
+    assertTrue("Pincode rejects 7 digits", !createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", pincode: "5600011" }).success);
+    assertTrue("Pincode accepts a real 6-digit value", createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", pincode: "560001" }).success);
+    assertTrue("Pincode still optional (blank is fine)", createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", pincode: "" }).success);
     assertTrue(
       "Pincode still trims surrounding whitespace before checking",
-      createLeadSchema.safeParse({ fullName: "X", pincode: "  560001  " }).success
+      createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", pincode: "  560001  " }).success
     );
 
     // --- GST number: must be blank or a real 15-char GSTIN ---
     assertTrue(
       "GSTIN rejects plain digits (wrong shape)",
-      !createLeadSchema.safeParse({ fullName: "X", gstNumber: "123456789012345" }).success
+      !createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", gstNumber: "123456789012345" }).success
     );
     assertTrue(
       "GSTIN rejects a value missing the 14th-position 'Z'",
-      !createLeadSchema.safeParse({ fullName: "X", gstNumber: "22AAAAA0000A1X5" }).success
+      !createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", gstNumber: "22AAAAA0000A1X5" }).success
     );
     assertTrue(
       "GSTIN accepts a real-shaped value and uppercases it",
-      createLeadSchema.safeParse({ fullName: "X", gstNumber: "22aaaaa0000a1z5" }).success &&
-        createLeadSchema.parse({ fullName: "X", gstNumber: "22aaaaa0000a1z5" }).gstNumber === "22AAAAA0000A1Z5"
+      createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", gstNumber: "22aaaaa0000a1z5" }).success &&
+        createLeadSchema.parse({ fullName: "X", phone: "9876543210", gstNumber: "22aaaaa0000a1z5" }).gstNumber === "22AAAAA0000A1Z5"
     );
-    assertTrue("GST number still optional (blank is fine)", createLeadSchema.safeParse({ fullName: "X", gstNumber: "" }).success);
+    assertTrue("GST number still optional (blank is fine)", createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", gstNumber: "" }).success);
 
     // --- Aadhaar number: must be blank or a real 12-digit number starting 2-9 ---
     assertTrue(
       "Aadhaar rejects 11 digits",
-      !createLeadSchema.safeParse({ fullName: "X", aadhaarNumber: "23456789012" }).success
+      !createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", aadhaarNumber: "23456789012" }).success
     );
     assertTrue(
       "Aadhaar rejects a number starting with 0 or 1 (UIDAI never issues these)",
-      !createLeadSchema.safeParse({ fullName: "X", aadhaarNumber: "123456789012" }).success
+      !createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", aadhaarNumber: "123456789012" }).success
     );
     assertTrue(
       "Aadhaar accepts a real-shaped 12-digit value",
-      createLeadSchema.safeParse({ fullName: "X", aadhaarNumber: "234567890123" }).success
+      createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", aadhaarNumber: "234567890123" }).success
     );
     assertTrue(
       "Aadhaar number still optional (blank is fine)",
-      createLeadSchema.safeParse({ fullName: "X", aadhaarNumber: "" }).success
+      createLeadSchema.safeParse({ fullName: "X", phone: "9876543210", aadhaarNumber: "" }).success
     );
 
     // --- Real end-to-end round-trip: valid values still save/read correctly ---
@@ -79,6 +79,7 @@ async function main(): Promise<void> {
     // value (skipping that middleware) would never uppercase it.
     const parsedInput = createLeadSchema.parse({
       fullName: "Pincode GST Aadhaar Round-Trip Test",
+      phone: "9876543210",
       pincode: "560001",
       gstNumber: "22aaaaa0000a1z5",
       aadhaarNumber: "234567890123",

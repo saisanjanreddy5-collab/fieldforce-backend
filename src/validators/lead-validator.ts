@@ -10,6 +10,16 @@ const tenDigitPhone = z
   .union([z.literal(""), z.string().regex(/^\d{10}$/, "Enter a 10-digit mobile number")])
   .optional();
 
+// Phone is how every other flow in this app actually reaches a lead
+// (Smartflo dialing, WhatsApp welcome message, SMS) - unlike altPhone, which
+// stays genuinely optional, this one is now mandatory on manual creation.
+// `.partial()` on updateLeadSchema below still makes it optional on edit, so
+// updating an unrelated field on an existing lead is never blocked by it.
+const requiredTenDigitPhone = z
+  .string()
+  .min(1, "Phone number is required")
+  .regex(/^\d{10}$/, "Enter a 10-digit mobile number");
+
 const consentInputSchema = z.object({
   captured: z.boolean().optional(),
   method: z.string().optional(),
@@ -34,7 +44,7 @@ export const createLeadSchema = z.object({
   leadScore: z.coerce.number().min(0).max(100).optional(),
 
   // Contact tab
-  phone: tenDigitPhone,
+  phone: requiredTenDigitPhone,
   altPhone: tenDigitPhone,
   email: z.string().email().optional(),
   website: z.string().optional(),
@@ -80,7 +90,13 @@ export const createLeadSchema = z.object({
   hasStoreLocation: z.boolean().optional(),
   storeName: z.string().optional(),
   storeAddress: z.string().optional(),
-  storePincode: z.string().optional(),
+  // Same 6-digit rule as the Contact tab's own pincode field above - this one
+  // was missed when that fix went in, despite being the exact same shape.
+  storePincode: z
+    .string()
+    .trim()
+    .refine((v) => v === "" || /^\d{6}$/.test(v), "Enter a valid 6-digit pincode")
+    .optional(),
   storeCity: z.string().optional(),
   storeState: z.string().optional(),
   carpetArea: z.coerce.number().min(0).optional(),
