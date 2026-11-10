@@ -55,6 +55,10 @@ async function main(): Promise<void> {
     // --- Real end-to-end round-trip through the actual service, not just the schema ---
     const lead = await createLead({ fullName: "Customer Address Pincode Round-Trip Test" }, testadminId, undefined, {});
     createdLeadIds.push(lead.id);
+    // Opportunity creation now requires the lead to have reached Qualified -
+    // this test is about Customer Address pincode validation, not the Call
+    // Center pipeline.
+    await pool.query("UPDATE leads SET status = 'Qualified' WHERE id = $1", [lead.id]);
     await convertLeadToOpportunity(lead.id, {}, testadminId);
 
     const customerResult = await pool.query<{ id: string }>("SELECT id FROM customers WHERE lead_id = $1", [lead.id]);

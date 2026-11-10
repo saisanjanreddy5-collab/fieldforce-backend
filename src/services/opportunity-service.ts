@@ -1,8 +1,17 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
-import { isLeadInOwnerScope, isLeadVisibleToUser } from "./lead-service";
+import { isLeadInOwnerScope, isLeadVisibleToUser, FLC_STAGE, SLC_STAGE } from "./lead-service";
 import { createCustomerFromLead } from "./customer-service";
 import { recordAuditEvent, listAuditLogForEntity } from "./audit-log-service";
+
+// Still Call Center's own floor (New/FLC/SLC) - matches
+// lead-call-center-service.ts's own isCallCenterTierStage, duplicated here
+// rather than imported since that one's a private (non-exported) helper and
+// this check is trivial enough not to warrant exporting it across modules.
+const NEW_STAGE = "New";
+function isCallCenterTierStage(stage: string): boolean {
+  return stage === NEW_STAGE || stage === FLC_STAGE || stage === SLC_STAGE;
+}
 
 // Reuses the same "subtree" idea as leads: an opportunity is visible to a
 // user exactly when the lead it belongs to is visible to that user (Rule A
@@ -158,6 +167,23 @@ export async function convertLeadToOpportunity(leadId: string, input: Opportunit
     throw new ApiError(403, "You do not have access to this lead");
   }
 
+  // The real fix for "Opportunity creation allowed for a Lead still in Call
+  // Center Stage 1" - there was no stage check here at all, so even Admin
+  // could create one against a brand-new/FLC/SLC lead that Call Center
+  // hasn't even qualified yet. qualifyLead (lead-call-center-service.ts) is
+  // the one deliberate checkpoint that hands a lead to Field Sales - an
+  // Opportunity (Field Sales' own pipeline) must never exist before that.
+  const stageCheck = await pool.query<{ status: string }>("SELECT status FROM leads WHERE id = $1", [leadId]);
+  if (stageCheck.rows.length === 0) {
+    throw new ApiError(404, "Lead not found");
+  }
+  if (isCallCenterTierStage(stageCheck.rows[0].status)) {
+    throw new ApiError(
+      422,
+      `This lead must reach the Qualified stage (currently "${stageCheck.rows[0].status}") before an opportunity can be created`
+    );
+  }
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -227,6 +253,33 @@ export async function convertLeadToOpportunity(leadId: string, input: Opportunit
       await createCustomerFromLead(leadResult.rows[0]);
     } catch (err) {
       console.error(`Failed to auto-create customer for converted lead ${leadId}:`, err);
+    }
+
+    // The real fix for "Opportunity History doesn't show who created it" -
+    // the created_by column on the row itself was always correct, but
+    // History only ever reads from audit_log, and nothing wrote a row there
+    // for the creation event (only updateOpportunity's own stage-change
+    // entries below do). No new column needed - role is just folded into
+    // the free-text summary, same as stage_changed's own summary string.
+    try {
+      const actor = await pool.query<{ name: string; role: string }>("SELECT name, role FROM users WHERE id = $1", [
+        requestingUserId,
+      ]);
+      const actorName = actor.rows[0]?.name ?? "Someone";
+      const actorRole = actor.rows[0]?.role ?? "unknown";
+      await recordAuditEvent({
+        entityType: "opportunity",
+        entityId: result.rows[0].id,
+        entityLabel: input.name ?? leadResult.rows[0].full_name,
+        action: "created",
+        summary: `Opportunity created by ${actorName} (${actorRole})`,
+        oldValue: null,
+        newValue: null,
+        actorId: requestingUserId,
+        actorName,
+      });
+    } catch (err) {
+      console.error(`Failed to record creation audit event for opportunity ${result.rows[0].id}:`, err);
     }
 
     return toPublicOpportunity(result.rows[0]);

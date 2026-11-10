@@ -1,6 +1,6 @@
 import { pool } from "../config/db";
 import { createLead, isLeadVisibleToUser, listLeadsHandedOffByUser } from "../services/lead-service";
-import { escalateToSlc, qualifyLead, sendToField } from "../services/lead-call-center-service";
+import { escalateToSlc, qualifyLead, sendToField, logCallDisposition } from "../services/lead-call-center-service";
 import { globalSearch } from "../services/global-search-service";
 
 // Verifies the client-confirmed, explicit follow-up to today's "universal
@@ -42,6 +42,7 @@ async function main(): Promise<void> {
     createdLeadIds.push(lead.id);
     assertEqual("assignToCreator lands directly at FLC", lead.status, "FLC");
     await escalateToSlc(lead.id, cc1Id);
+    await logCallDisposition(lead.id, { disposition: "Call Done And Interested" }, cc1Id);
     await qualifyLead(lead.id, cc1Id);
     await sendToField(lead.id, cc1Id, undefined);
     const ownerCheck = await pool.query<{ role: string }>(

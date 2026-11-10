@@ -25,6 +25,10 @@ async function main(): Promise<void> {
   try {
     const lead = await createLead({ fullName: "Customer Contact/Address Archive Test" }, testadminId, undefined, {});
     createdLeadIds.push(lead.id);
+    // Opportunity creation now requires the lead to have reached Qualified -
+    // this test is about Customer Contact/Address archiving, not the Call
+    // Center pipeline.
+    await pool.query("UPDATE leads SET status = 'Qualified' WHERE id = $1", [lead.id]);
     await convertLeadToOpportunity(lead.id, {}, testadminId);
 
     const customerResult = await pool.query<{ id: string }>("SELECT id FROM customers WHERE lead_id = $1", [lead.id]);

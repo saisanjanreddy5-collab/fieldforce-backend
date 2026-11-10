@@ -1,6 +1,6 @@
 import { pool } from "../config/db";
 import { createLead } from "../services/lead-service";
-import { qualifyLead, escalateToSlc } from "../services/lead-call-center-service";
+import { qualifyLead, escalateToSlc, logCallDisposition } from "../services/lead-call-center-service";
 import { ApiError } from "../utils/ApiError";
 
 // Verifies the client's "remove TLC" revision actually took effect end to
@@ -45,6 +45,11 @@ async function main(): Promise<void> {
 
   const cc2 = await pool.query<{ id: string }>("SELECT id FROM users WHERE email = 'cc2@test.local'");
   const slcOwnerId = cc2.rows[0].id;
+  // Qualify now also requires a real "Call Done And Interested" call logged
+  // first (see lead-call-center-service.ts's own fix for the "auto-converts
+  // on any call outcome, even Not Reachable" bug) - this lead needs that
+  // logged before it can satisfy the real SLC -> Qualified precondition.
+  await logCallDisposition(lead.id, { disposition: "Call Done And Interested" }, slcOwnerId);
   const afterQualify = await qualifyLead(lead.id, slcOwnerId);
   assertEqual("Qualify from SLC succeeds", afterQualify.status, "Qualified");
 

@@ -50,6 +50,11 @@ async function main(): Promise<void> {
   assertEqual("Admin B's own Leads list includes it too", adminBList.leads.some((l) => l.id === lead.id), true);
 
   console.log("\n--- Opportunities: same check, one tier up ---");
+  // Opportunity creation now requires the lead to have reached Qualified
+  // (see opportunity-service.ts's own stage-gate fix) - this test is about
+  // visibility, not the Call Center pipeline, so bump the stage directly
+  // rather than walking the real New->FLC->SLC->Qualified escalation chain.
+  await pool.query("UPDATE leads SET status = 'Qualified' WHERE id = $1", [lead.id]);
   const opp = await convertLeadToOpportunity(lead.id, {}, managerUnderAId);
   assertEqual("Admin A (same branch) can see the opportunity", await isOpportunityVisibleToUser(opp.id, adminAId), true);
   assertEqual("Admin B (unrelated branch) can ALSO see the opportunity", await isOpportunityVisibleToUser(opp.id, adminBId), true);

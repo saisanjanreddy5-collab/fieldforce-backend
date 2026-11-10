@@ -46,6 +46,9 @@ async function main(): Promise<void> {
     assertTrue("Lead no longer appears in the archived list after restoring", !archivedAfterRestore.leads.some((l) => l.id === lead.id));
 
     // --- Opportunities ---
+    // Opportunity creation now requires the lead to have reached Qualified -
+    // this test is about archive/restore, not the Call Center pipeline.
+    await pool.query("UPDATE leads SET status = 'Qualified' WHERE id = $1", [lead.id]);
     const opp = await convertLeadToOpportunity(lead.id, {}, testadminId);
 
     const oppActiveBefore = await listOpportunitiesForUser(testadminId, { page: 1, limit: 100 });
