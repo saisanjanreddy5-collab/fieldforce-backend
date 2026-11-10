@@ -61,11 +61,15 @@ interface LeadAssignmentFacts {
   // showing "Qualified" while the field rep works it, same as any other
   // lead at that stage) - owner_id is the one thing that actually changes.
   ownerRole: string | null;
+  // The real business disposition from the most recent logCallDisposition
+  // call (not Smartflo's own telephony outcome) - qualifyLead's own check
+  // below is the only consumer of this today.
+  lastCallOutcome: string | null;
 }
 
 async function getLeadAssignmentFacts(leadId: string): Promise<LeadAssignmentFacts> {
   const result = await pool.query<LeadAssignmentFacts>(
-    `SELECT l.status, l.pincode, l.category, u.role AS "ownerRole"
+    `SELECT l.status, l.pincode, l.category, u.role AS "ownerRole", l.last_call_outcome AS "lastCallOutcome"
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
      WHERE l.id = $1`,
@@ -220,6 +224,20 @@ export async function qualifyLead(leadId: string, requestingUserId: string, ipAd
   const facts = await getLeadAssignmentFacts(leadId);
   if (facts.status !== SLC_STAGE) {
     throw new ApiError(422, `Only a lead in the "${SLC_STAGE}" stage can be marked Qualified`);
+  }
+  // The real fix for "qualifying" a lead that was never actually reached -
+  // this button used to be available regardless of what the last logged
+  // call outcome was (or even if no call was ever logged at all), so a
+  // "Not Reachable"/"Call Done And Not Interested" lead could still be
+  // marked Qualified and handed to Field Sales by mistake. "Call Done And
+  // Interested" is the one disposition that's actually a judgment that this
+  // lead is worth pursuing - every other outcome means stay at this tier
+  // and keep calling.
+  if (facts.lastCallOutcome !== "Call Done And Interested") {
+    throw new ApiError(
+      422,
+      "This lead can only be marked Qualified after a call is logged with the outcome 'Call Done And Interested'"
+    );
   }
 
   // Whoever actually marks this Qualified becomes its owner at that exact

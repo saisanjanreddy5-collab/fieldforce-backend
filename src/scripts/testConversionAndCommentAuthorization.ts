@@ -98,6 +98,10 @@ async function main(): Promise<void> {
 
   console.log("\n--- Scenario A: shared-but-not-owned lead cannot be converted ---");
   const leadA = await createLead({ fullName: "P3Cfix Conversion Test Lead A" }, ids.owner);
+  // Opportunity creation now requires the lead to have reached Qualified -
+  // this test is about ownership/authorization, not the Call Center
+  // pipeline, so bump the stage directly rather than escalating for real.
+  await pool.query("UPDATE leads SET status = 'Qualified' WHERE id = $1", [leadA.id]);
   await shareLead(leadA.id, ids.peer, ids.owner);
   assertEqual("peer can view the shared lead", await isLeadVisibleToUser(leadA.id, ids.peer), true);
   assertEqual("peer is NOT in owner scope for the shared lead", await isLeadInOwnerScope(leadA.id, ids.peer), false);
@@ -111,6 +115,7 @@ async function main(): Promise<void> {
   );
 
   const leadB = await createLead({ fullName: "P3Cfix Conversion Test Lead B" }, ids.owner);
+  await pool.query("UPDATE leads SET status = 'Qualified' WHERE id = $1", [leadB.id]);
   await assertSucceeds("manager (subtree, not direct owner) can convert a subordinate's lead", () =>
     convertLeadToOpportunity(leadB.id, { name: "P3Cfix Opp B" }, ids.manager)
   );
