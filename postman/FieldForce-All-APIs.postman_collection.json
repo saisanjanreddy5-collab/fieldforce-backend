@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "b7e4f1a2-9c3d-4e5f-8a1b-2c3d4e5f6a7b",
     "name": "FieldForce CRM - All APIs",
-    "description": "Complete scope: every API endpoint in the FieldForce backend, generated directly from the live backend route/validator source, originally on 2026-10-23 and refreshed on 2026-11-02 to catch up with the Call Center lifecycle rework. Every endpoint below is real and currently deployed - nothing here is guessed.\n\n- Base URL points at production: https://devcrm.nextechltd.in/api\n- All endpoints (except Login/Refresh/Logout/Register, and the handful of genuinely public or webhook endpoints noted in their own folder/description) require `Authorization: Bearer <accessToken>`. This collection handles that for you via the `accessToken` collection variable - just run \"Login\" first and every other request will auto-use the token.\n- Every response is wrapped as `{ success: boolean, data: ..., message?: string }`. On error: `{ success: false, message: string, errors?: ... }` with a 4xx/5xx status code.\n- Most endpoints are gated by a permission string (shown in each request's description, e.g. `leads.view`). If a user's role doesn't have that permission, the API returns 403.\n- A few folders (Public QR, Public Website Leads, Frappe Webhooks, and specific webhook routes inside the Integrations folders) are genuinely NOT behind a user token - their descriptions explain the real mechanism (rate limiting only, or a shared-secret/HMAC signature header). Those are marked `noauth` and are mostly not relevant to a mobile app's own login flow.\n- This collection folds in and supersedes FieldForce-Login-Leads.postman_collection.json (Auth + Leads folders are unchanged / reused here) and adds every other module in the CRM.\n\n**2026-11-05 update - the \"never permanently delete\" pass:** a full audit found 10 modules whose Delete button quietly hard-deleted the row (or, for Leads/Opportunities, had no archive view/restore at all even though they already soft-deleted). All 10 are fixed the same way - delete is now always archive (soft, recoverable), with a matching Restore endpoint and an `archived=true` query param on the List endpoint to see what's archived. Newly added: `PATCH /leads/{id}/restore`, `PATCH /opportunities/{id}/restore`, `PATCH /delegations/{id}/restore`, `PATCH /approval-bands/{id}/restore`, `PATCH /targets/{id}/restore`, `PATCH /commission-rules/{id}/restore`, `PATCH /user-incentive-plans/{id}/restore`, `PATCH /user-commissions/{id}/restore`, `PATCH /customer-contacts/{id}/restore`, `PATCH /customer-addresses/{id}/restore`. Plus a FOFO-document-specific version of the same idea (old uploads were already being archived on replace/remove, but nothing ever read that log back): `GET /fofo-onboarding/{leadId}/documents/{docType}/history`, `GET /fofo-onboarding/documents/archive/{archiveId}/file`, `PATCH /fofo-onboarding/documents/archive/{archiveId}/restore`. Also: Support Ticket creation now rejects leads that haven't reached Qualified/Converted stage yet (was previously open to any lead at any stage), and the ticket Assignee list now excludes Call Center accounts (they have no access to Support Tickets at all).\n\n**2026-11-02 update - newly added since the last version:** `POST /auth/change-password`; `POST /leads/queue` (Call Center's own \"Add lead\"); `GET /leads/sources`, `GET /leads/handed-off`, `GET /leads/export`, `GET /leads/{id}/timeline` (these existed on the backend before but were missing from this collection); the whole new \"Call Center Lifecycle\" folder under Leads - Log Call Disposition, Push to FLC, Pick Up This Lead, Qualify Lead, Escalate to SLC, Get Swap Candidates, Send to Field Sales, Reassign Lead; `createdFrom`/`createdTo` date-range filters on List Leads and Export Leads; `GET /reports/call-center-performance` and `GET /reports/field-sales-performance`; `GET /integrations/whatsapp/webhook` (verification handshake).",
+    "description": "Complete scope: every API endpoint in the FieldForce backend, generated directly from the live backend route/validator source, originally on 2026-10-23 and refreshed on 2026-11-02 to catch up with the Call Center lifecycle rework. Every endpoint below is real and currently deployed - nothing here is guessed.\n\n- Base URL points at production: https://devcrm.nextechltd.in/api\n- All endpoints (except Login/Refresh/Logout/Register, and the handful of genuinely public or webhook endpoints noted in their own folder/description) require `Authorization: Bearer <accessToken>`. This collection handles that for you via the `accessToken` collection variable - just run \"Login\" first and every other request will auto-use the token.\n- Every response is wrapped as `{ success: boolean, data: ..., message?: string }`. On error: `{ success: false, message: string, errors?: ... }` with a 4xx/5xx status code.\n- Most endpoints are gated by a permission string (shown in each request's description, e.g. `leads.view`). If a user's role doesn't have that permission, the API returns 403.\n- A few folders (Public QR, Public Website Leads, Frappe Webhooks, and specific webhook routes inside the Integrations folders) are genuinely NOT behind a user token - their descriptions explain the real mechanism (rate limiting only, or a shared-secret/HMAC signature header). Those are marked `noauth` and are mostly not relevant to a mobile app's own login flow.\n- This collection folds in and supersedes FieldForce-Login-Leads.postman_collection.json (Auth + Leads folders are unchanged / reused here) and adds every other module in the CRM.\n\n**2026-11-11 update - two more QA fixes:** Qualify Lead no longer requires a specific logged call outcome (client decision - the earlier \"Call Done And Interested\" requirement was removed). Convert Lead to Opportunity's gate is now stricter and more accurate: Qualified alone is no longer enough - the lead must actually be owned by a field employee (i.e. really sent to Field Sales, not just Qualified and still sitting with Call Center) before an opportunity can be created against it. See both requests' own descriptions below for the exact new error messages.\n\n**2026-11-10 update - QA bug-fix pass (two rounds, 33 + 12 items):** new `Leads > Documents` folder - `GET /leads/{leadId}/documents`, `POST /leads/{leadId}/documents`, `GET /leads/documents/{documentId}/file`, `DELETE /leads/documents/{documentId}` (generic per-lead document upload, reusing FOFO Onboarding's own table/files, gated by `leads.view`/`leads.update` instead of a FOFO-specific permission - built for the Consent tab's evidence upload but usable for any lead). Validation tightened on Create Lead: `phone` is now mandatory (10 digits); `pincode`/`storePincode` (if given) must be 6 digits; `gstNumber` (if given) must be a valid GSTIN. New business-rule gates (both 422, both detailed in their own request descriptions below): Qualify Lead now requires the lead's last logged call disposition to be \"Call Done And Interested\"; Convert Lead to Opportunity now requires the lead to have already reached Qualified stage (was previously allowed from any stage, including brand-new leads). Get Opportunity History now includes a \"created\" entry it previously omitted entirely.\n\n**2026-11-05 update - the \"never permanently delete\" pass:** a full audit found 10 modules whose Delete button quietly hard-deleted the row (or, for Leads/Opportunities, had no archive view/restore at all even though they already soft-deleted). All 10 are fixed the same way - delete is now always archive (soft, recoverable), with a matching Restore endpoint and an `archived=true` query param on the List endpoint to see what's archived. Newly added: `PATCH /leads/{id}/restore`, `PATCH /opportunities/{id}/restore`, `PATCH /delegations/{id}/restore`, `PATCH /approval-bands/{id}/restore`, `PATCH /targets/{id}/restore`, `PATCH /commission-rules/{id}/restore`, `PATCH /user-incentive-plans/{id}/restore`, `PATCH /user-commissions/{id}/restore`, `PATCH /customer-contacts/{id}/restore`, `PATCH /customer-addresses/{id}/restore`. Plus a FOFO-document-specific version of the same idea (old uploads were already being archived on replace/remove, but nothing ever read that log back): `GET /fofo-onboarding/{leadId}/documents/{docType}/history`, `GET /fofo-onboarding/documents/archive/{archiveId}/file`, `PATCH /fofo-onboarding/documents/archive/{archiveId}/restore`. Also: Support Ticket creation now rejects leads that haven't reached Qualified/Converted stage yet (was previously open to any lead at any stage), and the ticket Assignee list now excludes Call Center accounts (they have no access to Support Tickets at all).\n\n**2026-11-02 update - newly added since the last version:** `POST /auth/change-password`; `POST /leads/queue` (Call Center's own \"Add lead\"); `GET /leads/sources`, `GET /leads/handed-off`, `GET /leads/export`, `GET /leads/{id}/timeline` (these existed on the backend before but were missing from this collection); the whole new \"Call Center Lifecycle\" folder under Leads - Log Call Disposition, Push to FLC, Pick Up This Lead, Qualify Lead, Escalate to SLC, Get Swap Candidates, Send to Field Sales, Reassign Lead; `createdFrom`/`createdTo` date-range filters on List Leads and Export Leads; `GET /reports/call-center-performance` and `GET /reports/field-sales-performance`; `GET /integrations/whatsapp/webhook` (verification handshake).",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -125,7 +125,7 @@
       "key": "documentId",
       "value": "",
       "type": "string",
-      "description": "A FOFO onboarding document's id, from Get Handoff or Upload Onboarding Document."
+      "description": "A document's id - shared by both FOFO Onboarding's documents (from Get Handoff or Upload Onboarding Document) and the generic Lead Documents endpoints under Leads > Documents (from List Lead Documents or Upload Lead Document). Same underlying records either way."
     },
     {
       "key": "opportunityId",
@@ -623,7 +623,7 @@
                     "leads"
                   ]
                 },
-                "description": "Requires permission: `leads.create`. Only `fullName` is required - every other field is optional (there are ~50 optional fields across Customer/Contact/Inquiry/Store/FOFO/Consent tabs; the body above shows commonly-used ones). Response 201: `{ success: true, data: <new lead>, message: \"Lead created\" }`."
+                "description": "Requires permission: `leads.create`. Only `fullName` and `phone` are required - every other field is optional (there are ~50 optional fields across Customer/Contact/Inquiry/Store/FOFO/Consent tabs; the body above shows commonly-used ones). **2026-11-10 update**: `phone` is now mandatory (10 digits) - blank -> 422 \"Phone number is required\", wrong format -> 422 \"Enter a 10-digit mobile number\". If provided (non-blank), `pincode` and `storePincode` must each be a real 6-digit number -> 422 \"Enter a valid 6-digit pincode\"; `gstNumber` must be a valid 15-char GSTIN -> 422 \"Enter a valid GSTIN\" (auto-uppercased). None of these three are required on Update Lead - editing one field on an existing lead is never blocked by them. Response 201: `{ success: true, data: <new lead>, message: \"Lead created\" }`."
               },
               "event": [
                 {
@@ -1016,7 +1016,7 @@
                     "convert"
                   ]
                 },
-                "description": "Requires permission: `opportunities.create`. Every field in the body is optional. Response: `{ success: true, data: <new opportunity> }`."
+                "description": "Requires permission: `opportunities.create`. Every field in the body is optional. The lead must have already reached Qualified stage AND actually be owned by a field employee (not just Qualified) - still New/FLC/SLC -> 422 `This lead must reach the Qualified stage (currently \"<status>\") before an opportunity can be created`; Qualified but still owned by Call Center (not yet sent to Field Sales) -> 422 \"This lead must be sent to Field Sales before an opportunity can be created\" (**2026-11-11 update** - previously Qualified alone was enough, which wrongly allowed an opportunity before the lead ever reached Field Sales). Qualify the lead first, then Send to Field Sales, if either message appears. Response: `{ success: true, data: <new opportunity> }`."
               }
             },
             {
@@ -1140,6 +1140,116 @@
           ]
         },
         {
+          "name": "Documents",
+          "description": "Generic per-lead document upload (new 2026-11-10) - a second, more appropriately-scoped front door onto the exact same lead_documents table/files the FOFO Onboarding module already uses, gated by the general `leads.view`/`leads.update` permissions instead of a FOFO-specific one. Use this set (not the FOFO Onboarding one) for any lead that is not in FOFO onboarding yet - e.g. the Consent tab's \"consent_form\" evidence upload. `documentId` is shared with the FOFO Onboarding module's documents (same underlying records).",
+          "item": [
+            {
+              "name": "List Lead Documents",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/leads/{{leadId}}/documents",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "{{leadId}}",
+                    "documents"
+                  ]
+                },
+                "description": "Requires permission: `leads.view`. Auto-creates the 6 standard document slots for this lead on first call if they do not exist yet (pan_card, gst_certificate, shop_photos, rent_agreement, cancelled_cheque, consent_form), so this always returns all 6 even before anything is uploaded. Response: `{ success: true, data: [ { id, leadId, docType, label, status: \"not_uploaded\"|\"in_review\"|\"verified\"|\"missing\", originalFilename, uploadedBy, uploadedAt, notes, hasFile }, ... ] }`."
+              }
+            },
+            {
+              "name": "Upload Lead Document",
+              "request": {
+                "method": "POST",
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "docType",
+                      "value": "consent_form",
+                      "type": "text",
+                      "description": "required - one of: pan_card, gst_certificate, shop_photos, rent_agreement, cancelled_cheque, consent_form"
+                    },
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": [],
+                      "description": "required - JPG, PNG, WEBP or PDF only, max 10MB"
+                    }
+                  ]
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/leads/{{leadId}}/documents",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "{{leadId}}",
+                    "documents"
+                  ]
+                },
+                "description": "Requires permission: `leads.update`. IMPORTANT: this is multipart/form-data, not JSON - do not switch the body mode to raw JSON. `docType` (text field) and `file` are both required. Re-uploading onto a slot that already has a file archives the old one (never deleted). Wrong file type -> 422 \"Only JPG, PNG, WEBP or PDF files are accepted\". Unknown docType -> 422 \"Unknown document type\". Response 201: `{ success: true, data: <document record>, message: \"Document uploaded\" }`."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const json = pm.response.json();",
+                      "if (json && json.success && json.data && json.data.id) {",
+                      "    pm.collectionVariables.set('documentId', json.data.id);",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Download Lead Document File",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/leads/documents/{{documentId}}/file",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "documents",
+                    "{{documentId}}",
+                    "file"
+                  ]
+                },
+                "description": "Requires permission: `leads.view`, plus the caller must have visibility on the document's parent lead (403 otherwise). Streams the uploaded file back as a download (not a JSON envelope) - response content-type/body is the raw file, with its real original filename."
+              }
+            },
+            {
+              "name": "Remove Lead Document",
+              "request": {
+                "method": "DELETE",
+                "url": {
+                  "raw": "{{baseUrl}}/leads/documents/{{documentId}}",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "leads",
+                    "documents",
+                    "{{documentId}}"
+                  ]
+                },
+                "description": "Requires permission: `leads.update`. This does NOT delete the file off disk - it archives the current document and resets the live slot to not_uploaded (status returns to that and hasFile: false). Response: `{ success: true, data: <document record>, message: \"Document removed\" }`."
+              }
+            }
+          ]
+        },
+        {
           "name": "Call Center Lifecycle",
           "item": [
             {
@@ -1221,7 +1331,7 @@
                     "qualify"
                   ]
                 },
-                "description": "Requires permission: `leads.qualify`. No body. Moves a lead from `SLC` to `Qualified` and sets its owner to the caller (whoever marks a lead Qualified becomes the one who can immediately Send to Field). Response: `{ success: true, data: <updated lead>, message: \"Lead marked Qualified\" }`."
+                "description": "Requires permission: `leads.qualify`. No body. Moves a lead from SLC to Qualified and sets its owner to the caller (whoever marks a lead Qualified becomes the one who can immediately Send to Field). Lead must currently be in SLC stage -> 422 `Only a lead in the \"SLC\" stage can be marked Qualified` otherwise. **2026-11-11 update**: the earlier requirement that the lead's last logged call disposition be \"Call Done And Interested\" has been removed (client decision) - Qualify is now available from SLC regardless of any logged call outcome. Response: `{ success: true, data: <updated lead>, message: \"Lead marked Qualified\" }`."
               }
             },
             {
@@ -3897,7 +4007,7 @@
                 "history"
               ]
             },
-            "description": "Requires permission: `opportunities.view`. Returns the audit/change history for this opportunity (e.g. stage changes). Response: `{ success: true, data: [...] }`."
+            "description": "Requires permission: `opportunities.view`. Returns the audit/change history for this opportunity (e.g. stage changes). Response: `{ success: true, data: [...] }`. **2026-11-10 update**: the list now also includes a \"created\" entry at the point the opportunity was first created (action: \"created\", summary: \"Opportunity created by <name> (<role>)\", oldValue/newValue both null) - previously creation wrote nothing here at all. Branch on action === \"created\" to render it distinctly if wanted; the response shape is otherwise unchanged."
           }
         }
       ]

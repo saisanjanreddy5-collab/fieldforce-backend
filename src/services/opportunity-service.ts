@@ -170,18 +170,28 @@ export async function convertLeadToOpportunity(leadId: string, input: Opportunit
   // The real fix for "Opportunity creation allowed for a Lead still in Call
   // Center Stage 1" - there was no stage check here at all, so even Admin
   // could create one against a brand-new/FLC/SLC lead that Call Center
-  // hasn't even qualified yet. qualifyLead (lead-call-center-service.ts) is
-  // the one deliberate checkpoint that hands a lead to Field Sales - an
-  // Opportunity (Field Sales' own pipeline) must never exist before that.
-  const stageCheck = await pool.query<{ status: string }>("SELECT status FROM leads WHERE id = $1", [leadId]);
+  // hasn't even qualified yet. Checking the owner's role rather than just the
+  // stage name: sendToField (lead-call-center-service.ts) deliberately never
+  // changes status, so "Qualified" alone doesn't mean a lead has actually
+  // left Call Center - owner_id's role is the one real signal for that (same
+  // reasoning as LeadAssignmentFacts.ownerRole there). An Opportunity (Field
+  // Sales' own pipeline) must never exist before a lead is genuinely with a
+  // field employee, not merely Qualified and still sitting with Call Center.
+  const stageCheck = await pool.query<{ status: string; ownerRole: string | null }>(
+    `SELECT l.status, u.role AS "ownerRole" FROM leads l LEFT JOIN users u ON u.id = l.owner_id WHERE l.id = $1`,
+    [leadId]
+  );
   if (stageCheck.rows.length === 0) {
     throw new ApiError(404, "Lead not found");
   }
-  if (isCallCenterTierStage(stageCheck.rows[0].status)) {
-    throw new ApiError(
-      422,
-      `This lead must reach the Qualified stage (currently "${stageCheck.rows[0].status}") before an opportunity can be created`
-    );
+  if (stageCheck.rows[0].ownerRole !== "agent") {
+    if (isCallCenterTierStage(stageCheck.rows[0].status)) {
+      throw new ApiError(
+        422,
+        `This lead must reach the Qualified stage (currently "${stageCheck.rows[0].status}") before an opportunity can be created`
+      );
+    }
+    throw new ApiError(422, "This lead must be sent to Field Sales before an opportunity can be created");
   }
 
   const client = await pool.connect();

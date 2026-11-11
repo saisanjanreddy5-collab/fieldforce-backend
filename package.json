@@ -43,7 +43,6 @@
     "test:pincode-gst-aadhaar-validation": "ts-node src/scripts/testPincodeGstAadhaarValidation.ts",
     "test:customer-address-pincode-validation": "ts-node src/scripts/testCustomerAddressPincodeValidation.ts",
     "test:lead-inquiry-options": "ts-node src/scripts/testLeadInquiryOptions.ts",
-    "test:qualify-requires-interested-call": "ts-node src/scripts/testQualifyRequiresInterestedCall.ts",
     "test:opportunity-stage-gate": "ts-node src/scripts/testOpportunityStageGate.ts",
     "test:opportunity-creation-history": "ts-node src/scripts/testOpportunityCreationHistory.ts",
     "test:phone-pincode-document-fixes": "ts-node src/scripts/testPhonePincodeDocumentFixes.ts",

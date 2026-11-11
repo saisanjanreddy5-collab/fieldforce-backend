@@ -50,11 +50,21 @@ async function main(): Promise<void> {
   assertEqual("Admin B's own Leads list includes it too", adminBList.leads.some((l) => l.id === lead.id), true);
 
   console.log("\n--- Opportunities: same check, one tier up ---");
-  // Opportunity creation now requires the lead to have reached Qualified
-  // (see opportunity-service.ts's own stage-gate fix) - this test is about
-  // visibility, not the Call Center pipeline, so bump the stage directly
-  // rather than walking the real New->FLC->SLC->Qualified escalation chain.
-  await pool.query("UPDATE leads SET status = 'Qualified' WHERE id = $1", [lead.id]);
+  // Opportunity creation now requires the lead to actually be with Field
+  // Sales (owner's role = agent, not just stage = Qualified - see
+  // opportunity-service.ts's own stage/owner-role gate) - this test is about
+  // visibility, not the Call Center pipeline, so bump both directly rather
+  // than walking the real New->FLC->SLC->Qualified->Send to Field chain. The
+  // new owner must stay under Admin A's branch (a subordinate of
+  // managerUnderAId) so the conversion call below (by managerUnderAId) still
+  // passes its own owner-scope check.
+  const fieldAgentUnderAId = await findOrCreateUser(
+    "field-agent-under-a-globaltest@test.local",
+    "Field Agent Under A",
+    "agent",
+    managerUnderAId
+  );
+  await pool.query("UPDATE leads SET status = 'Qualified', owner_id = $1 WHERE id = $2", [fieldAgentUnderAId, lead.id]);
   const opp = await convertLeadToOpportunity(lead.id, {}, managerUnderAId);
   assertEqual("Admin A (same branch) can see the opportunity", await isOpportunityVisibleToUser(opp.id, adminAId), true);
   assertEqual("Admin B (unrelated branch) can ALSO see the opportunity", await isOpportunityVisibleToUser(opp.id, adminBId), true);
@@ -64,7 +74,7 @@ async function main(): Promise<void> {
 
   console.log(`\n${failures === 0 ? "ALL ASSERTIONS PASSED" : `${failures} ASSERTION(S) FAILED`}`);
 
-  // Clean up the ephemeral lead/opportunity this run created; the 3 fixture
+  // Clean up the ephemeral lead/opportunity this run created; the 4 fixture
   // users are kept as permanent, reusable accounts for future runs.
   await pool.query("DELETE FROM audit_log WHERE entity_type IN ('lead', 'opportunity') AND entity_id IN ($1, $2)", [lead.id, opp.id]);
   await pool.query("DELETE FROM activities WHERE lead_id = $1 OR opportunity_id = $2", [lead.id, opp.id]);

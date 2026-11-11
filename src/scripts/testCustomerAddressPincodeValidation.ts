@@ -55,10 +55,13 @@ async function main(): Promise<void> {
     // --- Real end-to-end round-trip through the actual service, not just the schema ---
     const lead = await createLead({ fullName: "Customer Address Pincode Round-Trip Test" }, testadminId, undefined, {});
     createdLeadIds.push(lead.id);
-    // Opportunity creation now requires the lead to have reached Qualified -
-    // this test is about Customer Address pincode validation, not the Call
-    // Center pipeline.
-    await pool.query("UPDATE leads SET status = 'Qualified' WHERE id = $1", [lead.id]);
+    // Opportunity creation now requires the lead to actually be with Field
+    // Sales (owner's role = agent, not just stage = Qualified) - this test
+    // is about Customer Address pincode validation, not the Call Center
+    // pipeline. testadminId (role admin) bypasses the owner-scope check
+    // regardless of who owns the lead, so any active agent works here.
+    const fieldAgent = await pool.query<{ id: string }>("SELECT id FROM users WHERE role = 'agent' AND is_active = true LIMIT 1");
+    await pool.query("UPDATE leads SET status = 'Qualified', owner_id = $1 WHERE id = $2", [fieldAgent.rows[0].id, lead.id]);
     await convertLeadToOpportunity(lead.id, {}, testadminId);
 
     const customerResult = await pool.query<{ id: string }>("SELECT id FROM customers WHERE lead_id = $1", [lead.id]);

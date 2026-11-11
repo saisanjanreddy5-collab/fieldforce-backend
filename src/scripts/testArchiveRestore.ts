@@ -46,9 +46,13 @@ async function main(): Promise<void> {
     assertTrue("Lead no longer appears in the archived list after restoring", !archivedAfterRestore.leads.some((l) => l.id === lead.id));
 
     // --- Opportunities ---
-    // Opportunity creation now requires the lead to have reached Qualified -
-    // this test is about archive/restore, not the Call Center pipeline.
-    await pool.query("UPDATE leads SET status = 'Qualified' WHERE id = $1", [lead.id]);
+    // Opportunity creation now requires the lead to actually be with Field
+    // Sales (owner's role = agent, not just stage = Qualified) - this test
+    // is about archive/restore, not the Call Center pipeline. testadminId
+    // (role admin) bypasses the owner-scope check regardless of who owns
+    // the lead, so any active agent works here.
+    const fieldAgent = await pool.query<{ id: string }>("SELECT id FROM users WHERE role = 'agent' AND is_active = true LIMIT 1");
+    await pool.query("UPDATE leads SET status = 'Qualified', owner_id = $1 WHERE id = $2", [fieldAgent.rows[0].id, lead.id]);
     const opp = await convertLeadToOpportunity(lead.id, {}, testadminId);
 
     const oppActiveBefore = await listOpportunitiesForUser(testadminId, { page: 1, limit: 100 });
