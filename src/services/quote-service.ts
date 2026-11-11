@@ -2,6 +2,7 @@ import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { isLeadVisibleToUser } from "./lead-service";
 import { isOpportunityVisibleToUser } from "./opportunity-service";
+import { recordAuditEvent } from "./audit-log-service";
 
 export interface QuoteLineItemInput {
   description: string;
@@ -93,6 +94,11 @@ function quoteLabel(quoteNumber: number): string {
   return `Q-${String(quoteNumber).padStart(5, "0")}`;
 }
 
+async function fetchActorName(userId: string): Promise<string | null> {
+  const result = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [userId]);
+  return result.rows[0]?.name ?? null;
+}
+
 function toPublicQuote(row: QuoteRow) {
   return {
     id: row.id,
@@ -174,6 +180,29 @@ export async function createQuote(input: CreateQuoteInput, requestingUserId: str
       [quote.id, JSON.stringify(computed), subtotal, taxTotal, grandTotal, input.notes ?? null, requestingUserId]
     );
     await client.query("COMMIT");
+
+    // Quotes have no History tab of their own yet (unlike Opportunities) - a
+    // Lead's own History is the only place this is ever seen, so it's
+    // recorded against the lead, not the quote. Never let a failure here
+    // undo an already-committed quote - same "audit logging can't break the
+    // real feature" rule opportunity-service.ts's own creation event follows.
+    try {
+      const actorName = await fetchActorName(requestingUserId);
+      await recordAuditEvent({
+        entityType: "lead",
+        entityId: input.leadId,
+        entityLabel: null,
+        action: "quote_created",
+        summary: `Quote ${quoteLabel(quote.quote_number)} created by ${actorName ?? "someone"} - ₹${grandTotal}`,
+        oldValue: null,
+        newValue: null,
+        actorId: requestingUserId,
+        actorName,
+      });
+    } catch (err) {
+      console.error(`Failed to record creation audit event for quote ${quote.id}:`, err);
+    }
+
     return { quote: toPublicQuote(quote), version: toPublicQuoteVersion(versionResult.rows[0]) };
   } catch (err) {
     await client.query("ROLLBACK");
@@ -212,6 +241,26 @@ export async function updateQuote(quoteId: string, input: UpdateQuoteInput, requ
       [nextVersion, quoteId]
     );
     await client.query("COMMIT");
+
+    try {
+      const actorName = await fetchActorName(requestingUserId);
+      await recordAuditEvent({
+        entityType: "lead",
+        entityId: quote.lead_id,
+        entityLabel: null,
+        action: "quote_revised",
+        summary: `Quote ${quoteLabel(quote.quote_number)} revised to v${nextVersion} by ${actorName ?? "someone"}${
+          input.changeSummary ? ` - ${input.changeSummary}` : ""
+        } - ₹${grandTotal}`,
+        oldValue: `v${quote.current_version}`,
+        newValue: `v${nextVersion}`,
+        actorId: requestingUserId,
+        actorName,
+      });
+    } catch (err) {
+      console.error(`Failed to record revision audit event for quote ${quoteId}:`, err);
+    }
+
     return { quote: toPublicQuote(quoteResult.rows[0]), version: toPublicQuoteVersion(versionResult.rows[0]) };
   } catch (err) {
     await client.query("ROLLBACK");
@@ -222,11 +271,29 @@ export async function updateQuote(quoteId: string, input: UpdateQuoteInput, requ
 }
 
 export async function updateQuoteStatus(quoteId: string, status: string, requestingUserId: string) {
-  await getQuoteRow(quoteId, requestingUserId);
+  const quote = await getQuoteRow(quoteId, requestingUserId);
   const result = await pool.query<QuoteRow>(
     `UPDATE quotes SET status = $1, updated_at = now() WHERE id = $2 RETURNING *`,
     [status, quoteId]
   );
+
+  try {
+    const actorName = await fetchActorName(requestingUserId);
+    await recordAuditEvent({
+      entityType: "lead",
+      entityId: quote.lead_id,
+      entityLabel: null,
+      action: "quote_status_changed",
+      summary: `Quote ${quoteLabel(quote.quote_number)} status changed by ${actorName ?? "someone"}`,
+      oldValue: quote.status,
+      newValue: status,
+      actorId: requestingUserId,
+      actorName,
+    });
+  } catch (err) {
+    console.error(`Failed to record status-change audit event for quote ${quoteId}:`, err);
+  }
+
   return toPublicQuote(result.rows[0]);
 }
 

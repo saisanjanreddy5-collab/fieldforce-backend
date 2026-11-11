@@ -34,7 +34,11 @@ async function main(): Promise<void> {
   let tempFilePath: string | null = null;
 
   try {
-    // --- Phone: mandatory on both create and edit (client decision) ---
+    // --- Phone: mandatory on create; on edit, the Edit Lead drawer's own
+    // frontend form requires it, but the backend schema stays partial so
+    // other partial-save callers (e.g. FOFO onboarding's own step saves)
+    // that never touch phone at all keep working - see updateLeadSchema's
+    // own comment for the real incident this covers. ---
     assertTrue(
       "createLeadSchema rejects a lead with no phone at all",
       !createLeadSchema.safeParse({ fullName: "X" }).success
@@ -52,11 +56,29 @@ async function main(): Promise<void> {
       createLeadSchema.safeParse({ fullName: "X", phone: "9876543210" }).success
     );
     assertTrue(
-      "updateLeadSchema rejects omitting phone entirely - also mandatory on edit now",
-      !updateLeadSchema.safeParse({ fullName: "Renamed, phone untouched" }).success
+      "updateLeadSchema (partial) still allows omitting phone entirely - other partial-save callers depend on this",
+      updateLeadSchema.safeParse({ fullName: "Renamed, phone untouched" }).success
     );
     assertTrue(
-      "updateLeadSchema still allows every other field to stay optional",
+      "updateLeadSchema still rejects an explicitly blank/invalid phone if one IS submitted",
+      !updateLeadSchema.safeParse({ fullName: "Renamed", phone: "" }).success
+    );
+    assertTrue(
+      "updateLeadSchema accepts the real FOFO onboarding 'Store information' step payload (no phone key at all - the actual reported incident)",
+      updateLeadSchema.safeParse({
+        hasStoreLocation: true,
+        storeName: "zota store A",
+        storeAddress: "testtt",
+        storeCity: "mysore",
+        storeState: "karnataka",
+        storePincode: "571124",
+        carpetArea: 400,
+        frontage: 400,
+        ownership: "Leased",
+      }).success
+    );
+    assertTrue(
+      "updateLeadSchema accepts a real phone when one is submitted",
       updateLeadSchema.safeParse({ fullName: "Renamed", phone: "9876543210" }).success
     );
     assertTrue(

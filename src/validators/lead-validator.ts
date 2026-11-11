@@ -12,11 +12,21 @@ const tenDigitPhone = z
 
 // Phone is how every other flow in this app actually reaches a lead
 // (Smartflo dialing, WhatsApp welcome message, SMS) - unlike altPhone, which
-// stays genuinely optional, this one is mandatory on both create and edit
-// (client decision - an older lead saved before this rule existed must get a
-// real phone number added the next time anyone touches it, not keep sliding
-// by indefinitely). updateLeadSchema below re-applies this explicitly after
-// .partial(), so every other field on edit stays optional except this one.
+// stays genuinely optional, this one is mandatory on create. Deliberately
+// NOT re-applied as a required key on updateLeadSchema below (even though
+// the Edit Lead drawer's own frontend form requires it, same client
+// decision as create) - PATCH /leads/:id is also the generic partial-save
+// endpoint several other flows use for their own unrelated subset of fields
+// (e.g. FofoHandoffDetail's own step-by-step onboarding saves, which never
+// include phone in their payload at all). A real past incident: forcing
+// phone to be a present key on every partial update broke those saves with
+// "Invalid input: expected string, received undefined" even though phone
+// was never meant to be part of that request. updateLeadSchema's own
+// .partial() already covers the real requirement correctly either way: if
+// a caller (like the Edit Lead form) DOES submit phone, it must still be a
+// real 10-digit number, not blank - this schema is only ever skipped for a
+// caller that omits the key entirely, which is exactly the case that must
+// keep working.
 const requiredTenDigitPhone = z
   .string()
   .min(1, "Phone number is required")
@@ -155,7 +165,7 @@ export const createLeadSchema = z.object({
   consent: consentInputSchema.optional(),
 });
 
-export const updateLeadSchema = createLeadSchema.partial().extend({ phone: requiredTenDigitPhone });
+export const updateLeadSchema = createLeadSchema.partial();
 
 // Deliberately separate from createLeadSchema, not a subset of it - that
 // one uses z.string().email() etc. for a human typing one lead directly,
