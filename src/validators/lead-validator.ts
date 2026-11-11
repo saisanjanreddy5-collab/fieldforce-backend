@@ -12,9 +12,11 @@ const tenDigitPhone = z
 
 // Phone is how every other flow in this app actually reaches a lead
 // (Smartflo dialing, WhatsApp welcome message, SMS) - unlike altPhone, which
-// stays genuinely optional, this one is now mandatory on manual creation.
-// `.partial()` on updateLeadSchema below still makes it optional on edit, so
-// updating an unrelated field on an existing lead is never blocked by it.
+// stays genuinely optional, this one is mandatory on both create and edit
+// (client decision - an older lead saved before this rule existed must get a
+// real phone number added the next time anyone touches it, not keep sliding
+// by indefinitely). updateLeadSchema below re-applies this explicitly after
+// .partial(), so every other field on edit stays optional except this one.
 const requiredTenDigitPhone = z
   .string()
   .min(1, "Phone number is required")
@@ -153,7 +155,7 @@ export const createLeadSchema = z.object({
   consent: consentInputSchema.optional(),
 });
 
-export const updateLeadSchema = createLeadSchema.partial();
+export const updateLeadSchema = createLeadSchema.partial().extend({ phone: requiredTenDigitPhone });
 
 // Deliberately separate from createLeadSchema, not a subset of it - that
 // one uses z.string().email() etc. for a human typing one lead directly,
