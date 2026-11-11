@@ -1519,17 +1519,39 @@ export async function updateLead(
   // handing a lead to Field Sales loses owner-scope on their own very next
   // action). Same mirror of isLeadInOwnerScope as getLeadById/
   // listLeadsForUser use.
+  // The UPDATE's own RETURNING only ever had leads' own columns - owner_name/
+  // owner_role/duplicate_of_full_name/duplicate_of_lead_number (all joined
+  // columns toPublicLead expects, same as getLeadById's own query builds
+  // them) came back undefined from here, on every single updateLead call,
+  // not just an owner change. Harmless as long as the caller re-fetches
+  // afterward (the old frontend's full-page reload masked it completely),
+  // but sendToField/reassignLead/qualifyLead/escalateToSlc/startFlc all
+  // return this object directly to the frontend as the real, current lead -
+  // a caller that (correctly) trusts that response instead of re-fetching
+  // would show a just-reassigned lead as "Owner: Unassigned" with its old
+  // action button still enabled. Added via a writable CTE (not folded into
+  // the UPDATE's own RETURNING, which can't reach other tables) so the
+  // existing in_owner_scope computation above - deliberately narrower than
+  // isLeadVisibleToUser's, see this function's own comment on why - stays
+  // exactly as it is.
   const result = await pool.query<LeadRow>(
     `WITH RECURSIVE subtree AS (
        SELECT id FROM users WHERE id = $${scopeUserIdx}
        UNION ALL
        SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
+     ),
+     updated AS (
+       UPDATE leads SET ${setClauses.join(", ")} WHERE id = $${leadIdIdx}
+       RETURNING *, (
+         COALESCE(owner_id IN (SELECT id FROM subtree), false)
+         OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $${scopeUserIdx} AND ru.role = 'admin')
+       ) AS in_owner_scope
      )
-     UPDATE leads SET ${setClauses.join(", ")} WHERE id = $${leadIdIdx}
-     RETURNING *, (
-       COALESCE(owner_id IN (SELECT id FROM subtree), false)
-       OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $${scopeUserIdx} AND ru.role = 'admin')
-     ) AS in_owner_scope`,
+     SELECT updated.*, u.name AS owner_name, u.role AS owner_role,
+       dl.full_name AS duplicate_of_full_name, dl.lead_number AS duplicate_of_lead_number
+     FROM updated
+     LEFT JOIN users u ON u.id = updated.owner_id
+     LEFT JOIN leads dl ON dl.id = updated.duplicate_of_lead_id`,
     params
   );
   const after = result.rows[0];
