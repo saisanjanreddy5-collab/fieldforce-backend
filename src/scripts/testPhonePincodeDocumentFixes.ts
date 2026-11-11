@@ -34,7 +34,7 @@ async function main(): Promise<void> {
   let tempFilePath: string | null = null;
 
   try {
-    // --- Phone: mandatory on create, still optional on partial update ---
+    // --- Phone: mandatory on both create and edit (client decision) ---
     assertTrue(
       "createLeadSchema rejects a lead with no phone at all",
       !createLeadSchema.safeParse({ fullName: "X" }).success
@@ -52,8 +52,12 @@ async function main(): Promise<void> {
       createLeadSchema.safeParse({ fullName: "X", phone: "9876543210" }).success
     );
     assertTrue(
-      "updateLeadSchema (partial) still allows omitting phone entirely",
-      updateLeadSchema.safeParse({ fullName: "Renamed, phone untouched" }).success
+      "updateLeadSchema rejects omitting phone entirely - also mandatory on edit now",
+      !updateLeadSchema.safeParse({ fullName: "Renamed, phone untouched" }).success
+    );
+    assertTrue(
+      "updateLeadSchema still allows every other field to stay optional",
+      updateLeadSchema.safeParse({ fullName: "Renamed", phone: "9876543210" }).success
     );
     assertTrue(
       "altPhone is still fully optional (not affected by the phone fix)",
