@@ -28,7 +28,12 @@ async function main(): Promise<void> {
   try {
     const lead = await createLead({ fullName: "Opportunity Creation History Test" }, testadminId, undefined, {});
     createdLeadIds.push(lead.id);
-    await pool.query("UPDATE leads SET status = 'Qualified' WHERE id = $1", [lead.id]);
+    // Opportunity creation now requires the lead to actually be with Field
+    // Sales (owner's role = agent, not just stage = Qualified). testadminId
+    // (role admin) bypasses the owner-scope check regardless of who owns
+    // the lead, so any active agent works here.
+    const fieldAgent = await pool.query<{ id: string }>("SELECT id FROM users WHERE role = 'agent' AND is_active = true LIMIT 1");
+    await pool.query("UPDATE leads SET status = 'Qualified', owner_id = $1 WHERE id = $2", [fieldAgent.rows[0].id, lead.id]);
 
     const opp = await convertLeadToOpportunity(lead.id, { name: "Creation History Test Opp" }, testadminId);
 
