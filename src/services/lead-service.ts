@@ -146,6 +146,13 @@ export interface CreateLeadInput {
   startDate?: string;
   qualifiedPerson?: string;
   financialStatus?: string;
+  // Internal-only override, read by createLead below - NOT a key the public
+  // create/update API accepts (createLeadSchema has no status field), so a
+  // real HTTP request's validated body can never carry this through. Exists
+  // purely so trusted server-side callers (today, only test fixtures that
+  // need to seed a lead already sitting at a specific stage) can skip
+  // straight past the normal New/FLC default without going through every
+  // real lifecycle action.
   status?: string;
   prospectStatus?: string;
   category?: string;
@@ -671,6 +678,9 @@ export async function createLead(
   const duplicateOfLeadId = input.phone ? await resolveDuplicateOfLeadId(input.phone) : null;
 
   let ownerId: string | null;
+  // input.status is only ever non-undefined for a trusted internal caller
+  // (see CreateLeadInput's own comment on that field) - every real
+  // HTTP-driven create omits it and gets the computed default below.
   let status = input.status;
   if (options?.requiresQualification && input.ownerId === undefined) {
     // assignToCreator (the Call Center workspace's own "Add lead" action)
@@ -1389,7 +1399,16 @@ function formatAuditFieldValue(value: unknown): string | null {
 
 export async function updateLead(
   leadId: string,
-  updates: Partial<CreateLeadInput>,
+  // Widened beyond the public schema's own Partial<CreateLeadInput> on
+  // purpose: status isn't a key the HTTP create/update endpoints accept
+  // (see lead-validator.ts), but the dedicated lifecycle actions in
+  // lead-call-center-service.ts (startFlc/escalateToSlc/qualifyLead/
+  // sendToField) call this same function directly with an internal-only
+  // { status } to actually perform their transition - that must keep
+  // working, since this one function is also where the combined
+  // status+owner "escalated" history entry and the auto-create-customer-
+  // on-Converted side effect both live.
+  updates: Partial<CreateLeadInput> & { status?: string },
   requestingUserId: string,
   ipAddress?: string | null
 ) {

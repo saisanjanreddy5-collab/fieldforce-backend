@@ -2,7 +2,7 @@ import { Router } from "express";
 import * as approvalsInboxController from "../../controllers/approvals-inbox-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
 import { validateQuery } from "../../middleware/validate-middleware";
-import { paginationQuerySchema } from "../../validators/pagination";
+import { approvalHistoryQuerySchema } from "../../validators/approvals-inbox-validator";
 
 const router = Router();
 
@@ -18,6 +18,6 @@ router.use(requireAuth);
 router.get("/inbox", approvalsInboxController.getInbox);
 // Same self-scoping reasoning as /inbox above - every decided item returned
 // is one this requesting user personally decided.
-router.get("/history", validateQuery(paginationQuerySchema), approvalsInboxController.getHistory);
+router.get("/history", validateQuery(approvalHistoryQuerySchema), approvalsInboxController.getHistory);
 
 export default router;

@@ -345,7 +345,8 @@ export async function listPendingApprovals(userId: string) {
 // For the Approvals History tab - full decision history, not just the last
 // 7 days (see listDecidedThisWeek below, used only for the inbox's
 // aggregate stat). Same reasoning/cap as leave-service's own
-// listDecidedByUser.
+// listDecidedByUser - a generous safety ceiling, not a business cap, since
+// every past decision must stay visible here.
 export async function listDecidedByUser(userId: string) {
   const result = await pool.query<ExpenseClaimRow>(
     `${CLAIM_SELECT}
@@ -354,7 +355,7 @@ export async function listDecidedByUser(userId: string) {
        OR (ec.second_approver_id = $1 AND ec.second_approver_decision IS NOT NULL)
      )
      ORDER BY COALESCE(ec.second_approver_decided_at, ec.approver_decided_at) DESC
-     LIMIT 300`,
+     LIMIT 10000`,
     [userId]
   );
   return result.rows.map(toPublicExpenseClaim);

@@ -451,10 +451,10 @@ export async function reassignLead(
 // campaign) - there was no way to log a contact who just called in directly.
 // ownerId/status are stripped and never taken from the request: this path
 // only ever means "I'm on the phone with this person right now, put them in
-// my own queue" - never a way to create a lead for, or as, someone else.
-// Reuses createLead's own duplicate-phone guard and every other validation
-// as-is; the only thing special here is who ends up owning it and which
-// stage it starts at.
+// my own queue" - never a way to create a lead for, or as, someone else, or
+// to skip straight to some other stage. Reuses createLead's own
+// duplicate-phone guard and every other validation as-is; the only thing
+// special here is who ends up owning it and which stage it starts at.
 export async function createOwnQueueLead(
   input: CreateLeadInput,
   requestingUserId: string,
