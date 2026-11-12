@@ -388,8 +388,10 @@ export async function listPendingApprovals(userId: string) {
 // For the Approvals History tab - every decision this user personally made
 // (as either tier), full history rather than listDecidedThisWeek's 7-day
 // window (that one stays as-is, used only for the inbox's aggregate stat).
-// Capped, not truly unbounded - one manager's own approval history isn't
-// expected to run into the thousands.
+// Client decision: every past decision must be visible here, not just the
+// most recent ones - so this is a generous safety ceiling against a runaway
+// query, not a real business cap. 10,000 comfortably covers a lifetime of
+// one manager's own approval history without ever silently dropping rows.
 export async function listDecidedByUser(userId: string) {
   const result = await pool.query<LeaveRequestRow>(
     `${REQUEST_SELECT}
@@ -398,7 +400,7 @@ export async function listDecidedByUser(userId: string) {
        OR (lr.second_approver_id = $1 AND lr.second_approver_decision IS NOT NULL)
      )
      ORDER BY COALESCE(lr.second_approver_decided_at, lr.approver_decided_at) DESC
-     LIMIT 300`,
+     LIMIT 10000`,
     [userId]
   );
   return result.rows.map(toPublicLeaveRequest);

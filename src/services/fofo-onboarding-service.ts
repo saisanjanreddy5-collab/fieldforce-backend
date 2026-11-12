@@ -371,7 +371,8 @@ export async function listPendingApprovalStepsForUser(userId: string) {
 // For the Approvals History tab - full decision history on steps this user
 // personally decided, not just the last 7 days (see listDecidedStepsThisWeek
 // below, used only for the inbox's aggregate stat). Same cap reasoning as
-// leave-service's own listDecidedByUser.
+// leave-service's own listDecidedByUser - a generous safety ceiling, not a
+// business cap, since every past decision must stay visible here.
 export async function listDecidedStepsByUser(userId: string) {
   const result = await pool.query<
     PendingStepRow & { decided_at: string; status: "approved" | "rejected" }
@@ -384,7 +385,7 @@ export async function listDecidedStepsByUser(userId: string) {
      LEFT JOIN users u ON u.id = l.owner_id
      WHERE s.decided_by = $1 AND s.status IN ('approved', 'rejected')
      ORDER BY s.decided_at DESC
-     LIMIT 300`,
+     LIMIT 10000`,
     [userId]
   );
   return result.rows.map((row) => ({

@@ -45,10 +45,29 @@ export const createLeadSchema = z.object({
   fullName: z.string().min(1, "Full name is required"),
   contactName: z.string().optional(),
   profession: z.string().optional(),
-  startDate: z.string().optional(),
+  // YYYY-MM-DD strings sort/compare correctly as plain strings, so this
+  // needs no date parsing - just rejects anything before today. Only
+  // enforced here, on create - NOT on every later edit (see
+  // updateLeadSchema below), same reasoning as closeDate in
+  // opportunity-validator.ts: a value that was valid on the day this lead
+  // was created naturally becomes "in the past" as time passes, and that
+  // must never block saving an unrelated field on an existing lead.
+  startDate: z
+    .string()
+    .optional()
+    .refine((v) => !v || v >= new Date().toISOString().slice(0, 10), {
+      message: "Start date can't be in the past",
+    }),
   qualifiedPerson: z.string().optional(),
   financialStatus: z.string().optional(),
-  status: z.string().optional(),
+  // Deliberately NOT settable through the public create/update API - status
+  // only ever moves through the dedicated lifecycle actions (startFlc,
+  // escalateToSlc, qualifyLead, sendToField, convertLeadToOpportunity),
+  // each gated by its own real business rule. Those call updateLead()
+  // directly with an internal-only { status } key that bypasses this schema
+  // entirely (see updateLead's own widened parameter type in
+  // lead-service.ts) - a plain create/edit can never jump a lead straight
+  // to Qualified or Converted.
   prospectStatus: z.string().optional(),
   category: z.string().optional(),
   ownerId: uuid.optional(),
@@ -165,7 +184,7 @@ export const createLeadSchema = z.object({
   consent: consentInputSchema.optional(),
 });
 
-export const updateLeadSchema = createLeadSchema.partial();
+export const updateLeadSchema = createLeadSchema.omit({ startDate: true }).partial().extend({ startDate: z.string().optional() });
 
 // Deliberately separate from createLeadSchema, not a subset of it - that
 // one uses z.string().email() etc. for a human typing one lead directly,
