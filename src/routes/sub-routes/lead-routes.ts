@@ -25,6 +25,7 @@ import { convertLeadSchema } from "../../validators/opportunity-validator";
 import { createActivitySchema } from "../../validators/activity-validator";
 import { createTeamsMeetingSchema, sendLeadEmailSchema } from "../../validators/microsoft-validator";
 import { sendWhatsappMessageSchema } from "../../validators/whatsapp-validator";
+import { attachmentUpload } from "../../services/whatsapp-service";
 import { callLeadSchema } from "../../validators/smartflo-validator";
 
 const router = Router();
@@ -138,6 +139,12 @@ router.post(
   requirePermission("whatsapp.send"),
   validateBody(sendWhatsappMessageSchema),
   whatsappController.sendForLead
+);
+router.post(
+  "/:id/whatsapp-messages/media",
+  requirePermission("whatsapp.send"),
+  attachmentUpload.single("file"),
+  whatsappController.sendMediaForLead
 );
 
 export default router;

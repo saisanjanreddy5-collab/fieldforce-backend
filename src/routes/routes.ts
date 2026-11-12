@@ -45,6 +45,7 @@ import auditConsentRoutes from "./sub-routes/audit-consent-routes";
 import teamDashboardRoutes from "./sub-routes/team-dashboard-routes";
 import websiteLeadSourceRoutes from "./sub-routes/website-lead-source-routes";
 import publicWebsiteLeadRoutes from "./sub-routes/public-website-lead-routes";
+import publicWhatsappMediaRoutes from "./sub-routes/public-whatsapp-media-routes";
 import quoteRoutes from "./sub-routes/quote-routes";
 import globalSearchRoutes from "./sub-routes/global-search-routes";
 import supportTicketRoutes from "./sub-routes/support-ticket-routes";
@@ -56,10 +57,12 @@ import customerAddressRoutes from "./sub-routes/customer-address-routes";
 import salesOrderRoutes from "./sub-routes/sales-order-routes";
 import invoiceRoutes from "./sub-routes/invoice-routes";
 import paymentRoutes from "./sub-routes/payment-routes";
+import ssoRoutes from "./sub-routes/sso-routes";
 
 const router = Router();
 
 router.use("/auth", authRoutes);
+router.use("/sso", ssoRoutes);
 router.use("/users", userRoutes);
 router.use("/integrations/microsoft", microsoftRoutes);
 router.use("/integrations/smartflo", smartfloRoutes);
@@ -106,6 +109,7 @@ router.use("/audit-consent", auditConsentRoutes);
 router.use("/team-dashboard", teamDashboardRoutes);
 router.use("/website-lead-sources", websiteLeadSourceRoutes);
 router.use("/public/website-leads", publicWebsiteLeadRoutes);
+router.use("/public/whatsapp-media", publicWhatsappMediaRoutes);
 router.use("/quotes", quoteRoutes);
 router.use("/search", globalSearchRoutes);
 router.use("/support-tickets", supportTicketRoutes);

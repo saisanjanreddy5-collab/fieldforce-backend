@@ -24,6 +24,14 @@ const envSchema = z.object({
   MS_REDIRECT_URI: z.string().default("http://localhost:8000/api/integrations/microsoft/callback"),
   FRONTEND_URL: z.string().default("http://localhost:5173"),
 
+  // This server's own public address, with no path. Needed wherever a
+  // third party has to fetch a file back from us over the open internet
+  // (K3 downloading a WhatsApp attachment we're sending) rather than us
+  // calling out to them - nothing else in this codebase has needed that
+  // before, since every other integration here is the client, not the
+  // server, from the third party's point of view.
+  PUBLIC_BACKEND_BASE_URL: z.string().default("http://localhost:8000"),
+
   // Smartflo (Tata Tele) click-to-call - a single static API token for the
   // whole account, not per-user like Microsoft 365. Optional for the same
   // reason as the MS_ vars above.
@@ -84,6 +92,26 @@ const envSchema = z.object({
   // while unset.
   SKIA_FOFO_REGISTRATION_URL: z.string().default("https://everydaycpos.nextechltd.in/api/cpos/app/user/registration"),
   SKIA_FOFO_CMR_TOKEN: z.string().optional(),
+
+  // SSO - FieldForce acts as the OAuth2 identity provider for Frappe
+  // Helpdesk's "Social Login Key" (provider type Custom), so field/admin
+  // employees and customers log in once here and Helpdesk trusts that
+  // session instead of asking for a second password. CLIENT_ID/SECRET are
+  // whatever we generate and hand to the Frappe admin to paste into that
+  // Social Login Key; REDIRECT_URI is the exact callback URL Frappe computes
+  // from the key's name (see adding-social-login-provider docs) - must match
+  // byte-for-byte or /sso/authorize rejects the request. TOKEN_SECRET signs
+  // the short-lived access token handed to Frappe at /sso/token - kept apart
+  // from JWT_SECRET/JWT_REFRESH_SECRET on purpose: those two are trusted by
+  // requireAuth() for every normal API call, so a leaked Frappe-side token
+  // must never verify against that secret and get treated as a real session.
+  // All optional so the app still boots before this is configured, same as
+  // every other integration above; the routes themselves fail closed with a
+  // clear error while unset, never silently.
+  SSO_FRAPPE_CLIENT_ID: z.string().optional(),
+  SSO_FRAPPE_CLIENT_SECRET: z.string().optional(),
+  SSO_FRAPPE_REDIRECT_URI: z.string().optional(),
+  SSO_TOKEN_SECRET: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

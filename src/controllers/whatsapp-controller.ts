@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { ApiError } from "../utils/ApiError";
 import { asyncHandler } from "../utils/asyncHandler";
 import { sendSuccess } from "../utils/response";
 import * as whatsappService from "../services/whatsapp-service";
@@ -6,6 +7,37 @@ import * as whatsappService from "../services/whatsapp-service";
 export const sendForLead = asyncHandler(async (req: Request, res: Response) => {
   const message = await whatsappService.sendTextMessage(String(req.params.id), req.body.body, req.user!.id);
   sendSuccess(res, message, "Message sent", 201);
+});
+
+// One route handles all three media types - the file's own mimetype (set by
+// attachmentUpload's fileFilter, already validated there) decides which of
+// image/video/document K3's send API is called with, rather than asking the
+// caller to also specify a type that has to agree with what was uploaded.
+export const sendMediaForLead = asyncHandler(async (req: Request, res: Response) => {
+  if (!req.file) {
+    throw new ApiError(400, "No file was uploaded");
+  }
+  const leadId = String(req.params.id);
+  const caption = typeof req.body.caption === "string" && req.body.caption.trim() ? req.body.caption.trim() : null;
+  const { filename, mimetype, originalname } = req.file;
+
+  const message = mimetype.startsWith("image/")
+    ? await whatsappService.sendImageMessage(leadId, filename, mimetype, originalname, caption, req.user!.id)
+    : mimetype.startsWith("video/")
+      ? await whatsappService.sendVideoMessage(leadId, filename, mimetype, originalname, caption, req.user!.id)
+      : await whatsappService.sendDocumentMessage(leadId, filename, mimetype, originalname, caption, req.user!.id);
+
+  sendSuccess(res, message, "Attachment sent", 201);
+});
+
+// Public on purpose - K3's servers fetch this exact URL to actually deliver
+// an outbound attachment, and a customer's own inbound photo/document is
+// saved under this same route once downloaded from K3. Nothing here is
+// authenticated; resolveAttachmentPath's random-UUID filename check is the
+// only guard, same as every other randomly-named upload URL in this app.
+export const serveMedia = asyncHandler(async (req: Request, res: Response) => {
+  const filePath = whatsappService.resolveAttachmentPath(String(req.params.filename));
+  res.sendFile(filePath);
 });
 
 export const listForLead = asyncHandler(async (req: Request, res: Response) => {
