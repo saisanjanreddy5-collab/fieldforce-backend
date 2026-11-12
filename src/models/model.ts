@@ -1064,6 +1064,19 @@ export async function createTables(): Promise<void> {
     `ALTER TABLE whatsapp_messages DROP CONSTRAINT IF EXISTS whatsapp_messages_wa_message_id_key`,
     `CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_wa_message_id ON whatsapp_messages(wa_message_id)`,
 
+    // Attachments (images/videos/documents/voice notes) - a pure media
+    // message can have no caption at all, which `body` being NOT NULL never
+    // allowed for. media_url points at wherever this file is actually
+    // served from: our own /public/whatsapp-attachments/:filename for a
+    // message we sent (K3 has to fetch it from a real URL to deliver it),
+    // or the same route after we've downloaded a customer's inbound file
+    // from K3's Download Media API - either way, this app always has its
+    // own durable copy, never just a reference into K3's own storage.
+    `ALTER TABLE whatsapp_messages ALTER COLUMN body DROP NOT NULL`,
+    `ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS media_url TEXT`,
+    `ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS media_mime_type VARCHAR(100)`,
+    `ALTER TABLE whatsapp_messages ADD COLUMN IF NOT EXISTS media_file_name TEXT`,
+
     // New module, wired to requirePermission from day one. Agents get both
     // view and send - they're the ones messaging their own leads; manager
     // and admin inherit the same pair for now, no separate "manage" action
@@ -2421,6 +2434,21 @@ Regards,', 'active', 4),
       archived_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
     `CREATE INDEX IF NOT EXISTS idx_lead_document_archive_lead_id ON lead_document_archive(lead_id)`,
+
+    // SSO - a one-time, single-use code handed to the browser mid-redirect
+    // (FieldForce -> Frappe) while Frappe's own server swaps it for a token
+    // server-to-server at /sso/token. Deliberately a real DB row, not a
+    // signed JWT, because "single use" has to be enforceable (used_at set
+    // the moment it's redeemed) - a stateless token can't do that on its own.
+    `CREATE TABLE IF NOT EXISTS sso_authorization_codes (
+      code VARCHAR(64) PRIMARY KEY,
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      redirect_uri TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_sso_authorization_codes_user_id ON sso_authorization_codes(user_id)`,
   ];
 
   try {

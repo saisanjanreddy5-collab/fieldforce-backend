@@ -11,3 +11,10 @@ export function isWhatsappConfigured(): boolean {
 // nothing said those changed too; this is a best-effort read of their
 // migration notice, not a confirmed v3 spec.
 export const WHATSAPP_BASE_URL = "https://partnersv1.pinbot.ai/v3";
+
+// Media download is a different API family from sending messages (no
+// phone_number_id in the path anywhere in K3's own docs for it), and their
+// migration notice was specifically about the /messages endpoint - nothing
+// said this one moved too. Same "best-effort read of their docs, not a
+// confirmed spec" caveat as WHATSAPP_BASE_URL above.
+export const WHATSAPP_MEDIA_BASE_URL = "https://partners.pinbot.ai/v2";
