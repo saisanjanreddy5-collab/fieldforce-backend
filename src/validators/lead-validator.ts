@@ -77,7 +77,15 @@ export const createLeadSchema = z.object({
   // Contact tab
   phone: requiredTenDigitPhone,
   altPhone: tenDigitPhone,
-  email: z.string().email().optional(),
+  // Case-insensitive on entry but always stored lowercase - same convention
+  // as gstNumber/panNumber below (just the other direction), so the same
+  // address never ends up looking like two different ones depending on who
+  // typed it (e.g. "Name@Gmail.cOm" vs "name@gmail.com").
+  email: z
+    .string()
+    .email()
+    .transform((v) => (v ? v.toLowerCase() : v))
+    .optional(),
   website: z.string().optional(),
   preferredLanguage: z.string().optional(),
   // Trimmed - matches the real-world incident that found this: a stray
