@@ -2,7 +2,7 @@ import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { recordAuditEvent, listAuditLogForEntity } from "./audit-log-service";
 import { listActivitiesForLead } from "./activity-service";
-import { listSupportTickets } from "./support-ticket-service";
+import { listLegacyTicketsForLead } from "./legacy-ticket-history-service";
 import { listOrderRowsForCustomer, countOpenOrders } from "./sales-order-service";
 import { listInvoiceRowsForCustomer, countOverdueInvoices } from "./invoice-service";
 import { listPaymentRowsForCustomer, sumClearedPayments } from "./payment-service";
@@ -63,7 +63,6 @@ interface CustomerRow {
   updated_at: string;
   owner_name?: string | null;
   district_name?: string | null;
-  open_ticket_count?: string;
   lifetime_value?: string;
   open_orders_count?: string;
   overdue_invoices_count?: string;
@@ -105,10 +104,8 @@ function toPublicCustomer(row: CustomerRow) {
     outstandingBalance: Number(row.outstanding_balance),
     creditCategory: row.credit_category,
     status: row.status,
-    openTicketCount: row.open_ticket_count !== undefined ? Number(row.open_ticket_count) : undefined,
     // Real transaction metrics - only populated on the single-record fetch
-    // (getCustomerById), not the list, same reasoning openTicketCount could
-    // have followed but didn't need to: the list view never displays these,
+    // (getCustomerById), not the list - the list view never displays these,
     // only the detail panel's Overview tab does.
     lifetimeValue: row.lifetime_value !== undefined ? Number(row.lifetime_value) : undefined,
     openOrdersCount: row.open_orders_count !== undefined ? Number(row.open_orders_count) : undefined,
@@ -249,8 +246,7 @@ export async function listCustomers(requestingUserId: string, filters: ListCusto
 
   const result = await pool.query<CustomerRow>(
     `${SUBTREE_CTE}
-     SELECT c.*, u.name AS owner_name, d.name AS district_name,
-       (SELECT COUNT(*) FROM support_tickets st WHERE st.lead_id = c.lead_id AND st.status NOT IN ('Resolved','Closed')) AS open_ticket_count
+     SELECT c.*, u.name AS owner_name, d.name AS district_name
      FROM customers c
      LEFT JOIN users u ON u.id = c.owner_id
      LEFT JOIN districts d ON d.id = c.district_id
@@ -270,8 +266,7 @@ export async function getCustomerById(customerId: string, requestingUserId: stri
   }
 
   const result = await pool.query<CustomerRow>(
-    `SELECT c.*, u.name AS owner_name, d.name AS district_name,
-       (SELECT COUNT(*) FROM support_tickets st WHERE st.lead_id = c.lead_id AND st.status NOT IN ('Resolved','Closed')) AS open_ticket_count
+    `SELECT c.*, u.name AS owner_name, d.name AS district_name
      FROM customers c
      LEFT JOIN users u ON u.id = c.owner_id
      LEFT JOIN districts d ON d.id = c.district_id
@@ -477,9 +472,11 @@ export async function getCustomerTransactions(customerId: string, requestingUser
 }
 
 // Powers the detail panel's Activity tab - real Activities (calls/emails/
-// site visits), real Support Tickets raised for this account, and this
-// customer's own real Audit trail (credit/balance/owner/category changes),
-// merged into one chronological timeline. Activities is best-effort: if the
+// site visits), any historical Support Tickets raised before the cutover to
+// Frappe Helpdesk (legacy-ticket-history-service.ts - read-only now, nothing
+// creates new rows here anymore), and this customer's own real Audit trail
+// (credit/balance/owner/category changes), merged into one chronological
+// timeline. Activities is best-effort: if the
 // originating lead's own visibility has drifted from the customer's (see
 // the owner-reassignment note in customer-module-progress memory), this
 // falls back to an empty list rather than failing the whole timeline.
@@ -497,7 +494,7 @@ export async function getCustomerTimeline(customerId: string, requestingUserId: 
 
   const [activities, ticketsResult, auditEvents] = await Promise.all([
     listActivitiesForLead(leadId, requestingUserId).catch(() => []),
-    listSupportTickets(requestingUserId, { leadId, page: 1, limit: 200 }).catch(() => ({ supportTickets: [], total: 0 })),
+    listLegacyTicketsForLead(requestingUserId, { leadId, page: 1, limit: 200 }).catch(() => ({ tickets: [], total: 0 })),
     listAuditLogForEntity("customer", customerId),
   ]);
 
@@ -510,7 +507,7 @@ export async function getCustomerTimeline(customerId: string, requestingUserId: 
       date: a.createdAt,
       actorName: null as string | null,
     })),
-    ...ticketsResult.supportTickets.map((t) => ({
+    ...ticketsResult.tickets.map((t) => ({
       kind: "ticket" as const,
       id: t.id,
       summary: `Ticket - ${t.subject}`,
