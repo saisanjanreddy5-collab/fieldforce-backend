@@ -95,12 +95,28 @@ async function main(): Promise<void> {
     const tokenBody = (await tokenRes.json()) as { access_token?: string; token_type?: string };
     assertCheck(typeof tokenBody.access_token === "string" && tokenBody.token_type === "bearer", "Token response has access_token + token_type=bearer");
 
-    const reuseRes = await fetch(`${BASE_URL}/sso/token`, {
+    const immediateReplayRes = await fetch(`${BASE_URL}/sso/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirectUri, client_id: clientId, client_secret: clientSecret }),
     });
-    assertCheck(reuseRes.status === 400, "Re-using the same code a second time is rejected (single use)");
+    assertCheck(
+      immediateReplayRes.status === 200,
+      "An immediate replay of the same code within the grace window is tolerated (Frappe Cloud's own infra has been observed turning one callback into two calls here)"
+    );
+    const immediateReplayBody = (await immediateReplayRes.json()) as { access_token?: string; token_type?: string };
+    assertCheck(
+      typeof immediateReplayBody.access_token === "string" && immediateReplayBody.token_type === "bearer",
+      "The tolerated replay still returns a valid access_token + token_type=bearer"
+    );
+
+    await pool.query(`UPDATE sso_authorization_codes SET used_at = now() - interval '11 seconds' WHERE code = $1`, [code]);
+    const staleReplayRes = await fetch(`${BASE_URL}/sso/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirectUri, client_id: clientId, client_secret: clientSecret }),
+    });
+    assertCheck(staleReplayRes.status === 400, "Re-using the same code well outside the grace window is still rejected (single-use protection still holds)");
 
     const userinfoRes = await fetch(`${BASE_URL}/sso/userinfo`, { headers: { Authorization: `Bearer ${tokenBody.access_token}` } });
     assertCheck(userinfoRes.status === 200, "Userinfo succeeds with a valid access token");
