@@ -15,6 +15,14 @@ const SSO_SESSION_COOKIE = "ff_sso_session";
 const SSO_SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // matches JWT_REFRESH_EXPIRES_IN's default (7d)
 const AUTH_CODE_TTL_MS = 60 * 1000; // just long enough for the two redirects to happen
 const ACCESS_TOKEN_TTL_SECONDS = 5 * 60;
+// Frappe Cloud's own infra has been observed turning one incoming callback
+// into two outgoing calls to this endpoint (confirmed via direct curl
+// testing - a single request to Frappe's callback URL still produced two
+// hits here, even though this endpoint's own logic is correct in isolation).
+// The code already proved itself legitimate on its first use, so a
+// near-instant repeat of the *same* code reissues a fresh token instead of
+// failing the whole login over infra outside our control.
+const CODE_REPLAY_GRACE_MS = 10 * 1000;
 
 interface SsoSessionPayload {
   id: string;
@@ -105,13 +113,27 @@ export async function exchangeCodeForToken(params: {
     [params.code]
   );
   const row = result.rows[0];
-  if (!row || row.used_at !== null || new Date(row.expires_at).getTime() < Date.now() || row.redirect_uri !== params.redirectUri) {
+  if (!row || row.redirect_uri !== params.redirectUri) {
+    throw new ApiError(400, "Invalid, expired, or already-used authorization code");
+  }
+
+  if (row.used_at !== null) {
+    if (Date.now() - new Date(row.used_at).getTime() > CODE_REPLAY_GRACE_MS) {
+      throw new ApiError(400, "Invalid, expired, or already-used authorization code");
+    }
+    return issueSsoAccessToken(row.user_id, tokenSecret);
+  }
+
+  if (new Date(row.expires_at).getTime() < Date.now()) {
     throw new ApiError(400, "Invalid, expired, or already-used authorization code");
   }
 
   await pool.query(`UPDATE sso_authorization_codes SET used_at = now() WHERE code = $1`, [params.code]);
+  return issueSsoAccessToken(row.user_id, tokenSecret);
+}
 
-  const accessToken = jwt.sign({ sub: row.user_id, aud: "frappe-helpdesk" } satisfies SsoAccessTokenPayload, tokenSecret, {
+function issueSsoAccessToken(userId: string, tokenSecret: string): { accessToken: string; expiresIn: number } {
+  const accessToken = jwt.sign({ sub: userId, aud: "frappe-helpdesk" } satisfies SsoAccessTokenPayload, tokenSecret, {
     expiresIn: ACCESS_TOKEN_TTL_SECONDS,
   });
   return { accessToken, expiresIn: ACCESS_TOKEN_TTL_SECONDS };
