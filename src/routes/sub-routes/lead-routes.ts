@@ -7,7 +7,6 @@ import { emailAttachmentUpload } from "../../services/microsoft-service";
 import * as smartfloController from "../../controllers/smartflo-controller";
 import * as whatsappController from "../../controllers/whatsapp-controller";
 import * as quoteController from "../../controllers/quote-controller";
-import * as supportTicketController from "../../controllers/support-ticket-controller";
 import { requireAuth, requireRole } from "../../middleware/auth-middleware";
 import { ROLES } from "../../utils/roles";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission-middleware";
@@ -114,8 +113,6 @@ router.post("/:id/send-to-field", requirePermission("leads.send_to_field"), vali
 router.post("/:id/reassign", requirePermission("leads.reassign"), validateBody(reassignLeadSchema), leadController.reassign);
 
 router.get("/:id/quotes", requirePermission("quotes.view"), quoteController.listForLead);
-
-router.get("/:id/support-tickets", requirePermission("support_tickets.view"), supportTicketController.listForLead);
 
 router.post(
   "/:id/microsoft/email",

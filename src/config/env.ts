@@ -60,25 +60,6 @@ const envSchema = z.object({
   // fail-closed-when-unset behavior, as SMARTFLO_WEBHOOK_SECRET.
   WHATSAPP_WEBHOOK_SECRET: z.string().optional(),
 
-  // Frappe Helpdesk (Support tickets) - our own dedicated Frappe Cloud site,
-  // one account for the whole org, not per-user. Unlike Smartflo/WhatsApp
-  // above, the base URL itself has no fixed vendor constant - it's our own
-  // site's address, so it's configured here rather than hardcoded next to a
-  // BASE_URL constant in config/frappe.ts. Auth is Frappe's token scheme
-  // (Authorization: token <key>:<secret>), both optional for the same
-  // boot-without-crashing reason as the other integrations' credentials.
-  FRAPPE_BASE_URL: z.string().optional(),
-  FRAPPE_API_KEY: z.string().optional(),
-  FRAPPE_API_SECRET: z.string().optional(),
-
-  // The "Webhook Secret" entered on each Frappe-side Webhook record - Frappe
-  // signs every webhook POST with HMAC-SHA256 of this secret over the raw
-  // JSON body, sent as the X-Frappe-Webhook-Signature header (confirmed
-  // against Frappe framework's own webhook.py, not guessed) - a materially
-  // different scheme from WHATSAPP/SMARTFLO_WEBHOOK_SECRET above, which are
-  // plain shared-secret headers compared directly, not HMAC signatures.
-  FRAPPE_WEBHOOK_SECRET: z.string().optional(),
-
   // SKIA FOFO's own store-app user registration API (a separate Nextech
   // product, not part of this CRM) - "Push to onboarding app" on a FOFO
   // lead calls this to actually create the store owner's app login, instead

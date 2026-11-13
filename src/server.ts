@@ -36,16 +36,6 @@ async function start(): Promise<void> {
     })
   );
 
-  // Frappe's own webhook requests don't carry Content-Type: application/json
-  // (confirmed against a real failed delivery, not guessed) - express.json()
-  // below only parses a body when the Content-Type matches, so it silently
-  // skips these requests entirely, leaving nothing to verify the HMAC
-  // signature against. Reading them as raw bytes here, before the global
-  // JSON parser even sees them, works regardless of whatever Content-Type
-  // (or none) Frappe actually sends - every other route is unaffected, this
-  // only applies to these two specific paths.
-  app.use("/api/integrations/frappe/webhook", express.raw({ type: () => true, limit: "1mb" }));
-
   // Default express.json() limit is 100kb - fine for every other route, but
   // the bulk lead import sends its whole sheet as one JSON request (see
   // bulkImportLeads's own MAX_BULK_IMPORT_ROWS = 5000), and a real multi-
