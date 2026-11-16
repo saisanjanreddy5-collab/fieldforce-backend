@@ -1,17 +1,14 @@
 import { pool } from "../config/db";
+import { ADMIN_AWARE_SUBTREE_CTE } from "../utils/subtree";
 import { CALL_CENTER_UNIVERSAL_VISIBILITY_CLAUSE } from "./lead-service";
 
 // Same subtree-visibility rule leads/opportunities already use everywhere
 // else (owner in the requester's reporting subtree, or explicitly shared) -
 // global search never shows a record the Leads/Opportunities pages
 // themselves wouldn't show this same user.
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION ALL
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
+// Admin-aware: an Admin sees the whole company here, not just their own
+// reporting line (see utils/subtree.ts).
+const SUBTREE_CTE = ADMIN_AWARE_SUBTREE_CTE;
 
 const BASE_VISIBILITY = `
   l.owner_id IN (SELECT id FROM subtree)

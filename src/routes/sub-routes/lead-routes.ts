@@ -57,7 +57,8 @@ router.post(
 // createOwnQueueLead's own comment for why this isn't just POST / with a flag.
 router.post("/queue", requirePermission("leads.queue_create"), validateBody(createLeadSchema), leadController.createOwnQueueLead);
 router.get("/territories", requirePermission("leads.view"), leadController.listTerritories);
-router.get("/sources", requirePermission("leads.view"), leadController.listSources);
+// Also leads.queue_view: Call Center's own queue uses the same Source filter.
+router.get("/sources", requireAnyPermission("leads.view", "leads.queue_view"), leadController.listSources);
 router.get("/quick-filter-counts", requirePermission("leads.view"), leadController.quickFilterCounts);
 // "My queue"'s own second section (CallCenterPage.tsx) - leads this person
 // used to own and has since handed off via Send to Field. Same widened

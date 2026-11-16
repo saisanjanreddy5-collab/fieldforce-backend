@@ -10,7 +10,7 @@ import { registerFofoUser } from "./skia-fofo-service";
 const SUBTREE_CTE = `
   WITH RECURSIVE subtree AS (
     SELECT id FROM users WHERE id = $1
-    UNION ALL
+    UNION
     SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
   )
 `;
@@ -70,6 +70,7 @@ async function deriveApprovalChain(leadId: string, ownerId: string, expectedValu
        UNION ALL
        SELECT u.id, u.manager_id, c.depth + 1
        FROM users u INNER JOIN chain c ON u.id = c.manager_id
+       WHERE c.depth < 20
      )
      SELECT id FROM chain WHERE depth > 0 ORDER BY depth ASC`,
     [ownerId]
@@ -229,14 +230,30 @@ export async function getHandoff(leadId: string, requestingUserId: string, reque
 // FOFO call fails, nothing here is marked pushed - the whole point of this
 // step is that "pushed" means a real app account exists over there, not just
 // that someone clicked the button.
+// Leads with a push currently in flight in this process - a double-click
+// (or two people pressing it together) must not register the store twice.
+const pushesInFlight = new Set<string>();
+
 export async function pushToOnboardingApp(leadId: string, requestingUserId: string, requestingRole: string) {
   const inScope = await leadService.isLeadInOwnerScope(leadId, requestingUserId);
   if (!inScope) {
     throw new ApiError(403, "You do not have access to this lead");
   }
+  if (pushesInFlight.has(leadId)) {
+    throw new ApiError(409, "This lead is already being pushed - please wait a moment");
+  }
+  pushesInFlight.add(leadId);
+  try {
+    return await pushToOnboardingAppOnce(leadId, requestingUserId, requestingRole);
+  } finally {
+    pushesInFlight.delete(leadId);
+  }
+}
 
-  const leadResult = await pool.query<{ full_name: string; phone: string | null; push_status: string; pushed_at: string | null }>(
-    "SELECT full_name, phone, push_status, pushed_at FROM leads WHERE id = $1",
+async function pushToOnboardingAppOnce(leadId: string, requestingUserId: string, requestingRole: string) {
+
+  const leadResult = await pool.query<{ full_name: string; phone: string | null; push_status: string; pushed_at: string | null; owner_id: string | null; expected_value: string | null }>(
+    "SELECT full_name, phone, push_status, pushed_at, owner_id, expected_value FROM leads WHERE id = $1",
     [leadId]
   );
   const lead = leadResult.rows[0];
@@ -252,6 +269,12 @@ export async function pushToOnboardingApp(leadId: string, requestingUserId: stri
     throw new ApiError(422, `This lead was already pushed to the onboarding app on ${new Date(lead.pushed_at!).toLocaleDateString()}`);
   }
 
+  // The approval chain is normally created the first time someone opens
+  // the handoff - make sure it exists here too, so pushing straight away
+  // can never skip it.
+  if (lead?.owner_id) {
+    await deriveApprovalChain(leadId, lead.owner_id, lead.expected_value === null ? null : Number(lead.expected_value));
+  }
   const steps = await pool.query<ApprovalStepRow>("SELECT * FROM lead_approval_steps WHERE lead_id = $1", [leadId]);
   if (steps.rows.some((s) => s.status === "rejected")) {
     throw new ApiError(422, "This handoff has a rejected approval step and cannot be pushed");
@@ -268,7 +291,7 @@ export async function pushToOnboardingApp(leadId: string, requestingUserId: stri
 
   const onboardingAppId = `FOFO-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
   await pool.query(
-    "UPDATE leads SET push_status = 'pushed', onboarding_app_id = $1, pushed_at = now(), updated_at = now() WHERE id = $2",
+    "UPDATE leads SET push_status = 'pushed', onboarding_app_id = $1, pushed_at = now(), updated_at = now() WHERE id = $2 AND push_status <> 'pushed'",
     [onboardingAppId, leadId]
   );
 

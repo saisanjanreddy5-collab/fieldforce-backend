@@ -17,6 +17,14 @@ async function start(): Promise<void> {
 
   const app = express();
 
+  // nginx on the same machine terminates HTTPS and forwards to this
+  // process - without this, every request looks like it came from
+  // 127.0.0.1 (all users share one rate-limit bucket) and req.protocol
+  // reads "http" (breaking the SSO redirect URL). "loopback" only trusts
+  // X-Forwarded-* when the connection itself comes from localhost, so a
+  // client talking to this port directly still can't spoof its own IP.
+  app.set("trust proxy", "loopback");
+
   // CORS is driven entirely by CORS_ALLOWED_ORIGINS in .env for every route
   // except the public website-lead-capture endpoint, which by definition is
   // called from an arbitrary client website's own domain we can't know in
@@ -43,7 +51,12 @@ async function start(): Promise<void> {
   // imports fail outright with a generic 500 before a single row was even
   // read - confirmed by a real failed import, not guessed. 10mb comfortably
   // covers 5,000 rows even with long free-text fields (notes, addresses).
-  app.use(express.json({ limit: "10mb" }));
+  // Only that one route gets 10mb - every other route (including the
+  // public, unauthenticated QR/website/SSO/webhook endpoints) is capped at
+  // 1mb, so nobody can push huge bodies at the server through them.
+  const bulkImportJson = express.json({ limit: "10mb" });
+  const defaultJson = express.json({ limit: "1mb" });
+  app.use((req, res, next) => (req.path === "/api/leads/bulk-import" ? bulkImportJson : defaultJson)(req, res, next));
   app.use(express.urlencoded({ extended: true }));
   app.use(cookieParser());
 

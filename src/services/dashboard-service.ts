@@ -1,17 +1,14 @@
 import { pool } from "../config/db";
+import { ADMIN_AWARE_SUBTREE_CTE } from "../utils/subtree";
 
 // Every metric here is scoped to the requesting user's subtree (themselves +
 // everyone below them in the reporting chain) - the same Rule A idea used
 // everywhere else. An individual agent's subtree is just themselves, so they
 // see personal numbers; a manager's subtree includes their whole team, so
 // the same queries naturally roll up into team-wide numbers.
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION ALL
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
+// Admin-aware: an Admin sees the whole company here, not just their own
+// reporting line (see utils/subtree.ts).
+const SUBTREE_CTE = ADMIN_AWARE_SUBTREE_CTE;
 
 export async function getOverview(requestingUserId: string) {
   const [totalLeadsResult, totalOpportunitiesResult, pipelineValueResult, conversionResult, activeResult] =

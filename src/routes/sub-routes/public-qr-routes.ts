@@ -9,7 +9,7 @@ const router = Router();
 
 // Deliberately no requireAuth anywhere in this file - a QR code is scanned by
 // an anonymous visitor with no FieldForce account. Rate limiting is the only
-// abuse guard, same as authRateLimiter protects the login route.
+// abuse guard, same as loginRateLimiter protects the login route.
 router.get("/:code", qrScanRateLimiter, publicQrController.getInfo);
 router.post(
   "/:code/submit",

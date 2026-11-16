@@ -192,7 +192,15 @@ export const createLeadSchema = z.object({
   consent: consentInputSchema.optional(),
 });
 
-export const updateLeadSchema = createLeadSchema.omit({ startDate: true }).partial().extend({ startDate: z.string().optional() });
+// ownerId/salesTeamId are deliberately NOT editable here - a lead only
+// changes hands through the dedicated reassign / send-to-field / escalate
+// actions, each of which checks who may receive it (qualified first,
+// pincode match, active user, ...). Allowing them on this generic edit
+// endpoint let anyone with leads.update skip every one of those rules.
+export const updateLeadSchema = createLeadSchema
+  .omit({ startDate: true, ownerId: true, salesTeamId: true })
+  .partial()
+  .extend({ startDate: z.string().optional() });
 
 // Deliberately separate from createLeadSchema, not a subset of it - that
 // one uses z.string().email() etc. for a human typing one lead directly,

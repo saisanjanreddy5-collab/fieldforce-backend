@@ -39,8 +39,19 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
     throw new ApiError(422, "Enter a valid amount");
   }
+  // expense_claims.amount is NUMERIC(10,2) - anything larger would crash the
+  // insert with a database error instead of a clear message.
+  if (parsedAmount > 99_999_999.99) {
+    throw new ApiError(422, "Amount is too large");
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(expenseDate)) || Number.isNaN(new Date(`${expenseDate}T00:00:00Z`).getTime())) {
+    throw new ApiError(422, "Enter a valid expense date");
+  }
   const parsedQuantity = quantity ? Number(quantity) : undefined;
-  if (quantity && (!Number.isFinite(parsedQuantity) || (parsedQuantity as number) <= 0)) {
+  // Upper bound keeps quantity x per-unit limit inside the NUMERIC(10,2)
+  // policy_limit_at_submission column (100,000 km/nights/etc. is already far
+  // beyond any real claim).
+  if (quantity && (!Number.isFinite(parsedQuantity) || (parsedQuantity as number) <= 0 || (parsedQuantity as number) > 100_000)) {
     throw new ApiError(422, "Enter a valid quantity");
   }
 
@@ -71,6 +82,6 @@ export const markPaid = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const downloadReceipt = asyncHandler(async (req: Request, res: Response) => {
-  const { filePath, originalFilename } = await expenseService.getClaimFile(String(req.params.id));
+  const { filePath, originalFilename } = await expenseService.getClaimFile(String(req.params.id), req.user!.id);
   res.download(filePath, originalFilename);
 });

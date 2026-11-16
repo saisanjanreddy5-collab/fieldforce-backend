@@ -1,4 +1,5 @@
 import { pool } from "../config/db";
+import { externalFetch } from "../utils/external-fetch";
 import { GRAPH_BASE_URL } from "../config/microsoft";
 import { getValidAccessToken } from "./microsoft-service";
 
@@ -29,7 +30,7 @@ async function sendReminderEmail(row: DueCallRow): Promise<void> {
   });
   const phoneLine = row.lead_phone ? `Phone: ${row.lead_phone}` : "No phone number on file";
 
-  const response = await fetch(`${GRAPH_BASE_URL}/me/sendMail`, {
+  const response = await externalFetch(`${GRAPH_BASE_URL}/me/sendMail`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -105,9 +106,24 @@ const REMINDER_INTERVAL_MS = 2 * 60 * 1000;
 // Deliberately a plain setInterval, matching microsoft-mail-sync-service.ts's
 // own startMailSyncScheduler - this app's one established pattern for a
 // recurring background job, not a new job-queue dependency for a second one.
+// A pass that runs longer than the interval (slow Microsoft Graph) must not
+// overlap the next one - both would pick up the same not-yet-marked
+// reminders and email the rep twice.
+let reminderPassRunning = false;
+
+async function runReminderPass(label: string): Promise<void> {
+  if (reminderPassRunning) return;
+  reminderPassRunning = true;
+  try {
+    await sendDueCallReminders();
+  } catch (err) {
+    console.error(`${label} call reminder pass failed:`, err);
+  } finally {
+    reminderPassRunning = false;
+  }
+}
+
 export function startCallReminderScheduler(): void {
-  sendDueCallReminders().catch((err) => console.error("Initial call reminder pass failed:", err));
-  setInterval(() => {
-    sendDueCallReminders().catch((err) => console.error("Scheduled call reminder pass failed:", err));
-  }, REMINDER_INTERVAL_MS);
+  void runReminderPass("Initial");
+  setInterval(() => void runReminderPass("Scheduled"), REMINDER_INTERVAL_MS);
 }

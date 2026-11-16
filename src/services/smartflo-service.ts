@@ -1,4 +1,5 @@
 import { pool } from "../config/db";
+import { externalFetch } from "../utils/external-fetch";
 import { ApiError } from "../utils/ApiError";
 import { SMARTFLO_BASE_URL, isSmartfloConfigured } from "../config/smartflo";
 import { env } from "../config/env";
@@ -79,7 +80,7 @@ export async function initiateCallForLead(
     throw new ApiError(422, "No phone number on file to call");
   }
 
-  const response = await fetch(`${SMARTFLO_BASE_URL}/click_to_call`, {
+  const response = await externalFetch(`${SMARTFLO_BASE_URL}/click_to_call`, {
     method: "POST",
     headers: { Authorization: `Bearer ${env.SMARTFLO_API_TOKEN}`, "Content-Type": "application/json" },
     body: JSON.stringify({

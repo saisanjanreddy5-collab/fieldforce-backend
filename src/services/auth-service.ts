@@ -255,10 +255,16 @@ export async function loginUser(email: string, password: string) {
 }
 
 export async function refreshAccessToken(refreshToken: string) {
-  let payload: { id: string; jti?: string };
+  let payload: { id: string; jti?: string; purpose?: string };
   try {
-    payload = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET) as { id: string; jti?: string };
+    payload = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET) as { id: string; jti?: string; purpose?: string };
   } catch {
+    throw new ApiError(401, "Invalid or expired refresh token");
+  }
+  // The SSO session cookie (sso-service.ts) is signed with this same secret
+  // but is not a refresh token - it can't be revoked by logout, so it must
+  // never be accepted here as one.
+  if (payload.purpose !== undefined) {
     throw new ApiError(401, "Invalid or expired refresh token");
   }
 

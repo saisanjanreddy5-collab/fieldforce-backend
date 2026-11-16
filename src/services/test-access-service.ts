@@ -4,7 +4,7 @@ import { ApiError } from "../utils/ApiError";
 const SUBTREE_CTE = `
   WITH RECURSIVE subtree AS (
     SELECT id FROM users WHERE id = $1
-    UNION ALL
+    UNION
     SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
   )
 `;

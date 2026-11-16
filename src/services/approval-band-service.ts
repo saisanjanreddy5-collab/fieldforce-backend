@@ -80,6 +80,14 @@ export async function listApprovalBands(filters: ListApprovalBandsFilters) {
   return { approvalBands: result.rows.map(toPublicBand), total: Number(countResult.rows[0].count) };
 }
 
+// An inverted range (to below from) can never match any amount, so a band
+// saved that way would silently never route anything to its approver.
+function assertValidRange(from: number, to: number | null): void {
+  if (to !== null && to < from) {
+    throw new ApiError(422, "The range end must be greater than or equal to the range start");
+  }
+}
+
 async function getBandById(id: string) {
   const result = await pool.query<ApprovalBandRow>("SELECT * FROM approval_bands WHERE id = $1 AND is_deleted = false", [id]);
   if (result.rows.length === 0) {
@@ -97,6 +105,7 @@ async function assertLevelExists(levelId: string | undefined | null, label: stri
 }
 
 export async function createApprovalBand(input: CreateApprovalBandInput) {
+  assertValidRange(input.rangeFrom ?? 0, input.rangeTo ?? null);
   await assertLevelExists(input.approverLevelId, "approver");
   await assertLevelExists(input.countersignedByLevelId, "countersigner");
 
@@ -120,6 +129,10 @@ export async function createApprovalBand(input: CreateApprovalBandInput) {
 
 export async function updateApprovalBand(id: string, updates: UpdateApprovalBandInput) {
   const current = await getBandById(id);
+  assertValidRange(
+    updates.rangeFrom ?? current.rangeFrom,
+    updates.rangeTo !== undefined ? updates.rangeTo : current.rangeTo
+  );
   if (updates.approverLevelId) {
     await assertLevelExists(updates.approverLevelId, "approver");
   }

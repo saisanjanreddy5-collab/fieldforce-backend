@@ -1,7 +1,21 @@
 import { pool } from "../config/db";
 
+// A data change that must happen exactly once per database (e.g. revoking a
+// wrongly-seeded permission). Plain statements here re-run on every boot,
+// which is fine for CREATE ... IF NOT EXISTS / ON CONFLICT DO NOTHING, but a
+// revoke re-run on every boot would also silently undo an Admin who later
+// granted that permission back on purpose from the Permissions screen.
+interface OnceStatement {
+  once: string;
+  sql: string;
+}
+
+function once(key: string, sql: string): OnceStatement {
+  return { once: key, sql };
+}
+
 export async function createTables(): Promise<void> {
-  const createTableQueries = [
+  const createTableQueries: (string | OnceStatement)[] = [
     `CREATE EXTENSION IF NOT EXISTS pgcrypto`,
 
     `CREATE TABLE IF NOT EXISTS zones (
@@ -2054,7 +2068,7 @@ Regards,', 'active', 4),
     // below) that never touches the generic Leads module's pages at all.
     // The DELETE un-does the original leads.view grant on any database that
     // already ran the INSERT above before this revision.
-    `DELETE FROM role_permissions WHERE role = 'call_center' AND permission = 'leads.view'`,
+    once("call_center_no_leads_view", `DELETE FROM role_permissions WHERE role = 'call_center' AND permission = 'leads.view'`),
     `INSERT INTO role_permissions (role, permission) VALUES
       ('call_center','leads.queue_view'),
       ('call_center','activities.create'),
@@ -2112,18 +2126,19 @@ Regards,', 'active', 4),
     // install, but ON CONFLICT DO NOTHING can't retroactively undo a row
     // that's already there on an existing database - this DELETE is that
     // retroactive fix. Harmless no-op everywhere this was never seeded.
-    `DELETE FROM role_permissions WHERE role = 'agent' AND permission = 'call_center.view'`,
+    once("agent_no_call_center_view", `DELETE FROM role_permissions WHERE role = 'agent' AND permission = 'call_center.view'`),
 
     // Call Center never got the same self-service Leave/Expenses access
     // every other role (admin/manager/agent) already has - an oversight
     // from when this role was first built around the lead-qualification
-    // workflow only. They're real employees too.
+    // workflow only. They're real employees too. (Expenses were later
+    // dropped again for this role - see call_center_no_expenses below - so
+    // they're deliberately not granted here, or every boot would re-grant
+    // what that one-time revoke removed.)
     `INSERT INTO role_permissions (role, permission) VALUES
       ('call_center','leave_types.view'),
       ('call_center','leave_requests.view'), ('call_center','leave_requests.create'), ('call_center','leave_requests.update'),
-      ('call_center','comp_off_credits.view'),
-      ('call_center','expense_types.view'),
-      ('call_center','expense_claims.view'), ('call_center','expense_claims.create'), ('call_center','expense_claims.update')
+      ('call_center','comp_off_credits.view')
     ON CONFLICT (role, permission) DO NOTHING`,
 
     // Needed to populate the template picker in EmailComposeDrawer.tsx when
@@ -2199,9 +2214,11 @@ Regards,', 'active', 4),
     // column - without gaining the full Leads module's own create/import.
     // admin/manager already hold leads.create, which the route also
     // accepts, but granted here too for Permissions-matrix consistency with
-    // every other fine-grained permission this session.
+    // every other fine-grained permission this session. (Call Center's own
+    // grant was later revoked - bulk import is Admin-only, see
+    // call_center_no_bulk_import below - so it isn't re-granted here.)
     `INSERT INTO role_permissions (role, permission) VALUES
-      ('admin','leads.bulk_import'), ('manager','leads.bulk_import'), ('call_center','leads.bulk_import')
+      ('admin','leads.bulk_import'), ('manager','leads.bulk_import')
     ON CONFLICT (role, permission) DO NOTHING`,
 
     // Call Center is desk-based and never travels for work, so expense
@@ -2210,8 +2227,8 @@ Regards,', 'active', 4),
     // alone only affects a brand-new seed or an explicit "reset to
     // default" - this actually revokes it from every existing Call Center
     // employee already granted it in production.
-    `DELETE FROM role_permissions WHERE role = 'call_center' AND permission IN
-      ('expense_types.view', 'expense_claims.view', 'expense_claims.create', 'expense_claims.update')`,
+    once("call_center_no_expenses", `DELETE FROM role_permissions WHERE role = 'call_center' AND permission IN
+      ('expense_types.view', 'expense_claims.view', 'expense_claims.create', 'expense_claims.update')`),
 
     // Client revised the original three-tier plan before any real leads or
     // employees ever reached TLC (confirmed before building this): drop the
@@ -2243,57 +2260,15 @@ Regards,', 'active', 4),
     // executives go back to single-add only (leads.queue_create). This is a
     // live grant revoke, not just a DEFAULT_ROLE_PERMISSIONS change, since
     // role_permissions is the table requirePermission actually reads.
-    `DELETE FROM role_permissions WHERE role = 'call_center' AND permission = 'leads.bulk_import'`,
+    once("call_center_no_bulk_import", `DELETE FROM role_permissions WHERE role = 'call_center' AND permission = 'leads.bulk_import'`),
 
-    // Designation ladder: "Call Center Executive" used to cover every FLC and
-    // SLC employee under one label with no way to tell them apart in Sales
-    // force management > Levels & axes. Splits it into two levels that
-    // mirror the real FLC/SLC tiers, cloning every other setting (security
-    // tier, record scope, export/PII flags, ...) from the level being split
-    // - this is a rename/split, not a new kind of employee, so nothing about
-    // what an FLC/SLC person can see or do should change because of it.
-    `INSERT INTO levels (
-       name, sort_order, description, headcount_limit, approval_ceiling, security_tier, is_cross_cutting,
-       record_scope, sees_label_override, approval_label_override, can_edit_label,
-       see_credit_fields, see_margin_fields, can_export, can_view_call_recordings, can_see_unmasked_pii
-     )
-     SELECT 'FLC Executive', 1, l.description, l.headcount_limit, l.approval_ceiling, l.security_tier, l.is_cross_cutting,
-       l.record_scope, l.sees_label_override, l.approval_label_override, l.can_edit_label,
-       l.see_credit_fields, l.see_margin_fields, l.can_export, l.can_view_call_recordings, l.can_see_unmasked_pii
-     FROM levels l
-     WHERE l.name = 'Call Center Executive'
-       AND NOT EXISTS (SELECT 1 FROM levels WHERE name = 'FLC Executive')`,
-    `INSERT INTO levels (
-       name, sort_order, description, headcount_limit, approval_ceiling, security_tier, is_cross_cutting,
-       record_scope, sees_label_override, approval_label_override, can_edit_label,
-       see_credit_fields, see_margin_fields, can_export, can_view_call_recordings, can_see_unmasked_pii
-     )
-     SELECT 'SLC Executive', 2, l.description, l.headcount_limit, l.approval_ceiling, l.security_tier, l.is_cross_cutting,
-       l.record_scope, l.sees_label_override, l.approval_label_override, l.can_edit_label,
-       l.see_credit_fields, l.see_margin_fields, l.can_export, l.can_view_call_recordings, l.can_see_unmasked_pii
-     FROM levels l
-     WHERE l.name = 'Call Center Executive'
-       AND NOT EXISTS (SELECT 1 FROM levels WHERE name = 'SLC Executive')`,
-    // Move every existing Call Center Executive over to whichever new level
-    // matches their real sales_team_id - the one real signal for which tier
-    // they're actually on (see FLC_STAGE/SLC_STAGE in lead-service.ts).
-    `UPDATE users SET level_id = (SELECT id FROM levels WHERE name = 'FLC Executive')
-     WHERE level_id = (SELECT id FROM levels WHERE name = 'Call Center Executive')
-       AND sales_team_id = (SELECT id FROM sales_teams WHERE name = 'FLC Team')`,
-    `UPDATE users SET level_id = (SELECT id FROM levels WHERE name = 'SLC Executive')
-     WHERE level_id = (SELECT id FROM levels WHERE name = 'Call Center Executive')
-       AND sales_team_id = (SELECT id FROM sales_teams WHERE name = 'SLC Team')`,
-    // Field Sales Executive moves below both calling tiers in the ladder -
-    // Admin, FLC Executive, SLC Executive, Field Sales Executive, top to
-    // bottom, by explicit request.
-    `UPDATE levels SET sort_order = 3 WHERE name = 'Field Sales Executive'`,
-    // Only removed once every Call Center Executive has been moved off it
-    // above - same guarded-delete pattern as the TLC Team/SKIA Call Center
-    // Team cleanups above (a local-only test fixture on an already-removed
-    // TLC Team, with nowhere to move to, is expected to keep this around
-    // locally - see testTlcRemoval.ts's own fixtures).
-    `DELETE FROM levels WHERE name = 'Call Center Executive'
-       AND NOT EXISTS (SELECT 1 FROM users WHERE level_id = levels.id)`,
+    // (An earlier FLC Executive/SLC Executive level split used to run here.
+    // It was reversed by the migration further below and never belongs on a
+    // database that never had it - running it fresh would create two
+    // throwaway levels, shuffle people between them, and could recreate
+    // "Call Center Executive" under a new id. Removed; the reversal below
+    // still cleans up any database that did go through it.)
+
     // Support the Leads export's owner-trail reconstruction and the new
     // Call Center/Field Sales performance reports, both of which now filter/
     // group audit_log by actor_id and activities by created_by directly -
@@ -2323,10 +2298,16 @@ Regards,', 'active', 4),
        AND NOT EXISTS (SELECT 1 FROM levels WHERE name = 'Call Center Executive')`,
     `UPDATE users SET level_id = (SELECT id FROM levels WHERE name = 'Call Center Executive')
      WHERE level_id IN (SELECT id FROM levels WHERE name IN ('FLC Executive', 'SLC Executive'))`,
-    `UPDATE levels SET sort_order = 1 WHERE name = 'Call Center Executive'`,
+    // Only while the split's leftover levels still exist - i.e. once, on the
+    // boot that actually reverses it. Unguarded, these reset the ladder's
+    // order on every restart, overriding any order an Admin set in Levels &
+    // axes.
+    `UPDATE levels SET sort_order = 1 WHERE name = 'Call Center Executive'
+       AND EXISTS (SELECT 1 FROM levels WHERE name IN ('FLC Executive', 'SLC Executive'))`,
     // Field Sales Executive moves back up to directly below Call Center
     // Executive, now that the two calling-tier levels are gone again.
-    `UPDATE levels SET sort_order = 2 WHERE name = 'Field Sales Executive'`,
+    `UPDATE levels SET sort_order = 2 WHERE name = 'Field Sales Executive'
+       AND EXISTS (SELECT 1 FROM levels WHERE name IN ('FLC Executive', 'SLC Executive'))`,
     `DELETE FROM levels WHERE name = 'FLC Executive'
        AND NOT EXISTS (SELECT 1 FROM users WHERE level_id = levels.id)`,
     `DELETE FROM levels WHERE name = 'SLC Executive'
@@ -2357,8 +2338,8 @@ Regards,', 'active', 4),
     // the INSERTs above, so these DELETEs are the retroactive cleanup for a
     // database that already has the row, same pattern as the call_center.view
     // fix above. Harmless no-op everywhere this was never seeded.
-    `DELETE FROM role_permissions WHERE role = 'agent' AND permission = 'offices.view'`,
-    `DELETE FROM role_permissions WHERE role = 'agent' AND permission = 'levels.view'`,
+    once("agent_no_offices_view", `DELETE FROM role_permissions WHERE role = 'agent' AND permission = 'offices.view'`),
+    once("agent_no_levels_view", `DELETE FROM role_permissions WHERE role = 'agent' AND permission = 'levels.view'`),
 
     // customers.delete/support_tickets.delete were seeded above but never had
     // a route behind them anywhere in the app (phantom permissions - toggling
@@ -2366,7 +2347,7 @@ Regards,', 'active', 4),
     // app-wide in favor of archive, not delete, so there's nothing to wire up
     // instead. Retroactive cleanup for a database that already has these rows
     // from the original INSERTs above; harmless no-op on a fresh install.
-    `DELETE FROM role_permissions WHERE permission IN ('customers.delete', 'support_tickets.delete')`,
+    once("drop_phantom_delete_permissions", `DELETE FROM role_permissions WHERE permission IN ('customers.delete', 'support_tickets.delete')`),
 
     // A Call Center Executive's team assignment, many-to-many - one person
     // can now be staffed on both the FLC and SLC teams at once (so a
@@ -2451,13 +2432,33 @@ Regards,', 'active', 4),
     `CREATE INDEX IF NOT EXISTS idx_sso_authorization_codes_user_id ON sso_authorization_codes(user_id)`,
   ];
 
+  // One dedicated connection with the pool's per-query timeout lifted - an
+  // index build or backfill on a large production table may legitimately
+  // take longer than the API's normal safety limit.
+  const client = await pool.connect();
   try {
+    await client.query("SET statement_timeout = 0");
+    await client.query(`CREATE TABLE IF NOT EXISTS schema_once_migrations (
+      key VARCHAR(100) PRIMARY KEY,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
     for (const query of createTableQueries) {
-      await pool.query(query);
+      if (typeof query === "string") {
+        await client.query(query);
+        continue;
+      }
+      const alreadyApplied = await client.query("SELECT 1 FROM schema_once_migrations WHERE key = $1", [query.once]);
+      if ((alreadyApplied.rowCount ?? 0) > 0) continue;
+      await client.query(query.sql);
+      await client.query("INSERT INTO schema_once_migrations (key) VALUES ($1) ON CONFLICT (key) DO NOTHING", [query.once]);
     }
     console.log("Tables created successfully");
   } catch (error) {
     console.error("Error creating tables:", error);
     throw error;
+  } finally {
+    // Destroyed rather than returned to the pool, so the lifted timeout
+    // never leaks into a normal API query later.
+    client.release(true);
   }
 }

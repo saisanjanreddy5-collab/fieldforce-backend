@@ -1,4 +1,5 @@
 import { env } from "../config/env";
+import { externalFetch } from "../utils/external-fetch";
 import { ApiError } from "../utils/ApiError";
 
 export function isSkiaFofoConfigured(): boolean {
@@ -40,7 +41,7 @@ export async function registerFofoUser(input: RegisterFofoUserInput): Promise<Re
     throw new ApiError(503, "SKIA FOFO integration is not configured yet - set SKIA_FOFO_CMR_TOKEN");
   }
 
-  const response = await fetch(env.SKIA_FOFO_REGISTRATION_URL!, {
+  const response = await externalFetch(env.SKIA_FOFO_REGISTRATION_URL!, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

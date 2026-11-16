@@ -1,15 +1,12 @@
 import { pool } from "../config/db";
+import { ADMIN_AWARE_SUBTREE_CTE } from "../utils/subtree";
 
 // Same subtree-scoping convention as dashboard-service.ts and everywhere
 // else - a report always reflects the requesting user's own reporting
 // chain, never a company-wide bypass for admin.
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION ALL
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
+// Admin-aware: an Admin sees the whole company here, not just their own
+// reporting line (see utils/subtree.ts).
+const SUBTREE_CTE = ADMIN_AWARE_SUBTREE_CTE;
 
 // A lead counts as "qualified" once an opportunity created from it has
 // moved past the initial 'new' stage - the real stage list already used by

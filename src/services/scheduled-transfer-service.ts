@@ -43,7 +43,7 @@ function toPublicTransfer(row: ScheduledTransferRow) {
 const SUBTREE_CTE = `
   WITH RECURSIVE subtree AS (
     SELECT id FROM users WHERE id = $1
-    UNION ALL
+    UNION
     SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
   )
 `;
@@ -168,6 +168,17 @@ export async function createTerritoryTransfer(input: CreateTerritoryTransferInpu
     throw new ApiError(404, "Person not found");
   }
   const oldTerritory = person.rows[0].territory;
+
+  // users.territory is unique - if someone else already holds it, the
+  // transfer could never apply (it would just fail and stay "scheduled"
+  // forever), so refuse it up front with a clear reason instead.
+  const taken = await pool.query<{ name: string }>(
+    "SELECT name FROM users WHERE territory = $1 AND id <> $2",
+    [input.newTerritory, input.fromUserId]
+  );
+  if (taken.rows.length > 0) {
+    throw new ApiError(409, `This territory already belongs to ${taken.rows[0].name}`);
+  }
 
   const counts = await pool.query<{ leads: string }>(
     "SELECT COUNT(*) AS leads FROM leads WHERE owner_id = $1 AND is_deleted = false" + (oldTerritory ? " AND territory = $2" : ""),

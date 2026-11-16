@@ -1,6 +1,6 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
-import { isLeadVisibleToUser } from "./lead-service";
+import { isLeadInOwnerScope, isLeadVisibleToUser } from "./lead-service";
 import { isOpportunityVisibleToUser } from "./opportunity-service";
 import { recordAuditEvent } from "./audit-log-service";
 
@@ -152,8 +152,10 @@ async function assertLeadOpportunityPair(leadId: string, opportunityId: string):
 }
 
 export async function createQuote(input: CreateQuoteInput, requestingUserId: string) {
-  const leadVisible = await isLeadVisibleToUser(input.leadId, requestingUserId);
-  if (!leadVisible) throw new ApiError(403, "You do not have access to this lead");
+  // Creating a quote is a change to the lead - same right as editing it,
+  // not just being able to see it (a shared lead, or Call Center lookup).
+  const leadWritable = await isLeadInOwnerScope(input.leadId, requestingUserId);
+  if (!leadWritable) throw new ApiError(403, "You do not have access to this lead");
   const opportunityVisible = await isOpportunityVisibleToUser(input.opportunityId, requestingUserId);
   if (!opportunityVisible) throw new ApiError(403, "You do not have access to this opportunity");
   await assertLeadOpportunityPair(input.leadId, input.opportunityId);
@@ -218,7 +220,7 @@ export async function createQuote(input: CreateQuoteInput, requestingUserId: str
 // answerable from quote_versions directly rather than reconstructed from
 // an audit log.
 export async function updateQuote(quoteId: string, input: UpdateQuoteInput, requestingUserId: string) {
-  const quote = await getQuoteRow(quoteId, requestingUserId);
+  const quote = await getQuoteRow(quoteId, requestingUserId, true);
 
   if (input.lineItems.length === 0) {
     throw new ApiError(422, "A quote needs at least one line item");
@@ -271,7 +273,7 @@ export async function updateQuote(quoteId: string, input: UpdateQuoteInput, requ
 }
 
 export async function updateQuoteStatus(quoteId: string, status: string, requestingUserId: string) {
-  const quote = await getQuoteRow(quoteId, requestingUserId);
+  const quote = await getQuoteRow(quoteId, requestingUserId, true);
   const result = await pool.query<QuoteRow>(
     `UPDATE quotes SET status = $1, updated_at = now() WHERE id = $2 RETURNING *`,
     [status, quoteId]
@@ -297,15 +299,19 @@ export async function updateQuoteStatus(quoteId: string, status: string, request
   return toPublicQuote(result.rows[0]);
 }
 
-async function getQuoteRow(quoteId: string, requestingUserId: string): Promise<QuoteRow> {
+async function getQuoteRow(quoteId: string, requestingUserId: string, forWrite = false): Promise<QuoteRow> {
   const result = await pool.query<QuoteRow>("SELECT * FROM quotes WHERE id = $1", [quoteId]);
   if (result.rows.length === 0) {
     throw new ApiError(404, "Quote not found");
   }
   const quote = result.rows[0];
-  const leadVisible = await isLeadVisibleToUser(quote.lead_id, requestingUserId);
-  if (!leadVisible) {
-    throw new ApiError(403, "You do not have access to this quote");
+  // Revising a quote or changing its status needs the same right as
+  // editing the lead itself; reading it only needs visibility.
+  const allowed = forWrite
+    ? await isLeadInOwnerScope(quote.lead_id, requestingUserId)
+    : await isLeadVisibleToUser(quote.lead_id, requestingUserId);
+  if (!allowed) {
+    throw new ApiError(403, forWrite ? "You can view this quote but not change it" : "You do not have access to this quote");
   }
   return quote;
 }
@@ -372,7 +378,7 @@ export async function listQuotesForOpportunity(opportunityId: string, requesting
 const SUBTREE_CTE = `
   WITH RECURSIVE subtree AS (
     SELECT id FROM users WHERE id = $1
-    UNION ALL
+    UNION
     SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
   )
 `;

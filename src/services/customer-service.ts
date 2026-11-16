@@ -1,5 +1,6 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
+import { ROLES } from "../utils/roles";
 import { recordAuditEvent, listAuditLogForEntity } from "./audit-log-service";
 import { listActivitiesForLead } from "./activity-service";
 import { listLegacyTicketsForLead } from "./legacy-ticket-history-service";
@@ -16,7 +17,7 @@ import { listPaymentRowsForCustomer, sumClearedPayments } from "./payment-servic
 const SUBTREE_CTE = `
   WITH RECURSIVE subtree AS (
     SELECT id FROM users WHERE id = $1
-    UNION ALL
+    UNION
     SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
   )
 `;
@@ -309,6 +310,16 @@ export async function updateCustomer(
   const inScope = await isCustomerInScope(customerId, requestingUserId);
   if (!inScope) {
     throw new ApiError(403, "You do not have access to this customer");
+  }
+
+  // The money a customer is allowed to owe, and what they currently owe,
+  // are company finance figures - an Admin decision, not something a
+  // salesperson can raise or zero out on their own accounts.
+  if (updates.creditLimit !== undefined || updates.outstandingBalance !== undefined) {
+    const requester = await pool.query<{ role: string }>("SELECT role FROM users WHERE id = $1", [requestingUserId]);
+    if (requester.rows[0]?.role !== ROLES.ADMIN) {
+      throw new ApiError(403, "Only an Admin can change a customer's credit limit or outstanding balance");
+    }
   }
 
   // Credit/balance/owner changes go to the real Audit trail - the same

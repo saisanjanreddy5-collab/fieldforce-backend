@@ -1,9 +1,29 @@
-import rateLimit from "express-rate-limit";
+import type { Request } from "express";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 
-// Protects login/refresh from brute-force and credential-stuffing attempts.
-export const authRateLimiter = rateLimit({
+// Password guessing against one account - keyed on network + email, so one
+// person mistyping their own password can't lock out everyone else sharing
+// the same office/carrier IP (a whole call-center floor usually does).
+export const loginRateLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => {
+    const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+    return `${ipKeyGenerator(req.ip ?? "")}|${email}`;
+  },
+  message: {
+    success: false,
+    message: "Too many attempts. Please try again later.",
+  },
+});
+
+// Credential stuffing (many different emails from one source) - a much
+// higher per-network ceiling, still far below anything a script would need.
+export const loginIpRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 100,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -12,7 +32,23 @@ export const authRateLimiter = rateLimit({
   },
 });
 
-// Deliberately its own, much higher-volume limiter than authRateLimiter
+// /auth/refresh and /auth/logout already require a valid signed refresh
+// token, so they're not a password-guessing surface - but every logged-in
+// user calls /refresh roughly every 15 minutes (the access-token lifetime),
+// so sharing the login limiter's tiny budget would start logging real
+// users out the moment ~10 people on one network were active at once.
+export const sessionRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 1000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many requests. Please try again later.",
+  },
+});
+
+// Deliberately its own, much higher-volume limiter than loginRateLimiter
 // above: /sso/token and /sso/userinfo are called by Frappe's own server, on
 // behalf of every employee's and customer's login company-wide, all from
 // Frappe's one source IP - sharing the 10-per-15-min login-brute-force

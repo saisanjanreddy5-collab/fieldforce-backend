@@ -1,3 +1,4 @@
+import path from "path";
 import { Request, Response } from "express";
 import { ApiError } from "../utils/ApiError";
 import { asyncHandler } from "../utils/asyncHandler";
@@ -37,6 +38,13 @@ export const sendMediaForLead = asyncHandler(async (req: Request, res: Response)
 // only guard, same as every other randomly-named upload URL in this app.
 export const serveMedia = asyncHandler(async (req: Request, res: Response) => {
   const filePath = whatsappService.resolveAttachmentPath(String(req.params.filename));
+  // Never let a browser guess a different type than the one we send, and
+  // never render anything but images/video/audio/PDF inline - this route is
+  // public and the files come from outside customers.
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  if (!whatsappService.isInlineSafeAttachment(filePath)) {
+    res.attachment(path.basename(filePath));
+  }
   res.sendFile(filePath);
 });
 
