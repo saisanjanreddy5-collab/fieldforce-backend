@@ -5,6 +5,7 @@ import multer from "multer";
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { recordAuditEvent } from "./audit-log-service";
+import { ROLES } from "../utils/roles";
 
 export const EXPENSE_TYPE_KEYS = [
   "travel",
@@ -165,6 +166,11 @@ async function getDirectManagerId(userId: string): Promise<string | null> {
   return result.rows[0]?.manager_id ?? null;
 }
 
+async function isAdminUser(userId: string): Promise<boolean> {
+  const result = await pool.query<{ role: string }>("SELECT role FROM users WHERE id = $1", [userId]);
+  return result.rows[0]?.role === ROLES.ADMIN;
+}
+
 // Walks the manager chain upward from startUserId looking for the first
 // ancestor whose level is at least as senior as targetSortOrder (lower
 // sort_order = more senior, same convention the org ladder/L1..L6 numbering
@@ -201,7 +207,7 @@ async function findAncestorAtOrAboveLevel(startUserId: string, targetSortOrder: 
 async function resolveSecondApprover(requesterId: string, directManagerId: string, amount: number): Promise<string | null> {
   const bandResult = await pool.query<{ approver_level_id: string | null; countersigned_by_level_id: string | null }>(
     `SELECT approver_level_id, countersigned_by_level_id FROM approval_bands
-     WHERE request_type = 'expense_claim' AND range_from <= $1 AND (range_to IS NULL OR range_to >= $1)
+     WHERE request_type = 'expense_claim' AND is_deleted = false AND range_from <= $1 AND (range_to IS NULL OR range_to >= $1)
      ORDER BY sort_order ASC LIMIT 1`,
     [amount]
   );
@@ -278,7 +284,7 @@ export async function listTeamClaims(managerId: string) {
 const EXPENSE_SUBTREE_CTE = `
   WITH RECURSIVE subtree AS (
     SELECT id FROM users WHERE id = $1
-    UNION ALL
+    UNION
     SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
   )
 `;
@@ -329,14 +335,19 @@ export async function searchExpenseClaims(requestingUserId: string, filters: Sea
 }
 
 export async function listPendingApprovals(userId: string) {
+  // A claim filed by someone with no reporting manager has no named
+  // approver - it sits in every Admin's queue, and whichever Admin acts
+  // first becomes its approver (see decideExpenseClaim).
   const result = await pool.query<ExpenseClaimRow>(
     `${CLAIM_SELECT}
      WHERE ec.status = 'pending' AND (
        (ec.approver_id = $1 AND ec.approver_decision IS NULL)
        OR (ec.second_approver_id = $1 AND ec.approver_decision = 'approved' AND ec.second_approver_decision IS NULL)
+       OR ($2::boolean AND ec.approver_decision IS NULL AND ec.user_id <> $1
+           AND (ec.approver_id IS NULL OR EXISTS (SELECT 1 FROM users au WHERE au.id = ec.approver_id AND au.is_active = false)))
      )
      ORDER BY ec.created_at ASC`,
-    [userId]
+    [userId, await isAdminUser(userId)]
   );
   return result.rows.map(toPublicExpenseClaim);
 }
@@ -395,8 +406,12 @@ export async function createExpenseClaim(userId: string, input: CreateExpenseCla
   const limit = effectiveLimit(type, input.quantity);
   const isPolicyBreach = input.amount > limit;
 
+  // No reporting manager: an Admin at the top of the org is self-approved
+  // (there's nobody above them); anyone else is left with no named
+  // approver, so it lands in every Admin's queue instead of going through
+  // unchecked.
   const managerId = await getDirectManagerId(userId);
-  const autoApprove = managerId === null;
+  const autoApprove = managerId === null && (await isAdminUser(userId));
   const secondApproverId = managerId ? await resolveSecondApprover(userId, managerId, input.amount) : null;
 
   const result = await pool.query<{ id: string }>(
@@ -441,7 +456,14 @@ export async function decideExpenseClaim(
     throw new ApiError(409, "This claim has already been decided");
   }
 
-  const isFirstApprover = claim.approver_id === deciderId && claim.approver_decision === null;
+  // Admins pick up anything with no one able to act on it: no named
+  // approver (no reporting manager), or a named approver who has since been
+  // deactivated (e.g. left the company) - otherwise it's stuck forever.
+  const approverGone =
+    claim.approver_id === null ||
+    ((await pool.query("SELECT 1 FROM users WHERE id = $1 AND is_active = false", [claim.approver_id])).rowCount ?? 0) > 0;
+  const unassignedForAdmin = approverGone && claim.user_id !== deciderId && (await isAdminUser(deciderId));
+  const isFirstApprover = (claim.approver_id === deciderId || unassignedForAdmin) && claim.approver_decision === null;
   const isSecondApprover =
     claim.second_approver_id === deciderId && claim.approver_decision === "approved" && claim.second_approver_decision === null;
 
@@ -457,9 +479,9 @@ export async function decideExpenseClaim(
   if (isFirstApprover) {
     const finalStatus = decision === "rejected" ? "rejected" : claim.second_approver_id ? "pending" : "approved";
     decided = await pool.query(
-      `UPDATE expense_claims SET approver_decision = $1, approver_decided_at = now(), status = $2, decision_note = COALESCE($3, decision_note), updated_at = now()
+      `UPDATE expense_claims SET approver_id = $5, approver_decision = $1, approver_decided_at = now(), status = $2, decision_note = COALESCE($3, decision_note), updated_at = now()
        WHERE id = $4 AND approver_decision IS NULL`,
-      [decision, finalStatus, note ?? null, claimId]
+      [decision, finalStatus, note ?? null, claimId, deciderId]
     );
   } else {
     decided = await pool.query(
@@ -505,8 +527,19 @@ export async function markClaimPaid(claimId: string, payerId: string) {
   return toPublicExpenseClaim(await getClaimById(claimId));
 }
 
-export async function getClaimFile(claimId: string): Promise<{ filePath: string; originalFilename: string }> {
+export async function getClaimFile(claimId: string, requestingUserId: string): Promise<{ filePath: string; originalFilename: string }> {
   const claim = await getClaimById(claimId);
+  // Same people who can see the claim itself: the person who filed it,
+  // anyone it was routed to for a decision, anyone above them in the
+  // reporting line, and Admins.
+  const isInvolved =
+    claim.user_id === requestingUserId || claim.approver_id === requestingUserId || claim.second_approver_id === requestingUserId;
+  if (!isInvolved && !(await isAdminUser(requestingUserId))) {
+    const inSubtree = await pool.query(`${EXPENSE_SUBTREE_CTE} SELECT 1 FROM subtree WHERE id = $2`, [requestingUserId, claim.user_id]);
+    if ((inSubtree.rowCount ?? 0) === 0) {
+      throw new ApiError(403, "You do not have access to this receipt");
+    }
+  }
   if (!claim.receipt_file_path || !claim.receipt_original_filename) {
     throw new ApiError(404, "No receipt was uploaded for this claim");
   }

@@ -193,6 +193,22 @@ export async function updateLevel(id: string, updates: UpdateLevelInput) {
     }
   }
 
+  // A person's real access tier is copied from their Level onto users.role
+  // when they're placed on it - changing the tier here would not update the
+  // people already on this Level, leaving the screen and their actual
+  // access out of sync (and silently changing it later, on some unrelated
+  // edit). So a tier change is only allowed on an empty Level.
+  if (updates.securityTier !== undefined && updates.securityTier !== current.securityTier) {
+    const onLevel = await pool.query<{ count: string }>("SELECT COUNT(*) FROM users WHERE level_id = $1", [id]);
+    const peopleOnLevel = Number(onLevel.rows[0].count);
+    if (peopleOnLevel > 0) {
+      throw new ApiError(
+        409,
+        `This level has ${peopleOnLevel} people on it (including deactivated accounts) - move them to another level before changing its security tier`
+      );
+    }
+  }
+
   const normalize = (value: string | null | undefined) => (value === "" ? null : value);
   const fieldMap: Record<string, unknown> = {
     name: updates.name,

@@ -216,12 +216,14 @@ export async function listRolePermissionMatrix() {
 // gets this guard; recovery from any other mistake is always possible by
 // coming back here and re-granting it, as long as this one permission
 // survives somewhere.
-const CRITICAL_PERMISSION = "role_permissions.update";
+// role_permissions.view is guarded the same way: without it the Permissions
+// tab (and the matrix it loads) disappears, which is just as much a dead end.
+const CRITICAL_PERMISSIONS = ["role_permissions.update", "role_permissions.view"];
 
-async function wouldOrphanCriticalPermission(roleBeingChanged: string): Promise<boolean> {
+async function wouldOrphanCriticalPermission(roleBeingChanged: string, permission: string): Promise<boolean> {
   const others = await pool.query<{ role: string }>(
     "SELECT DISTINCT role FROM role_permissions WHERE permission = $1 AND role <> $2",
-    [CRITICAL_PERMISSION, roleBeingChanged]
+    [permission, roleBeingChanged]
   );
   return others.rows.length === 0;
 }
@@ -231,7 +233,7 @@ async function wouldOrphanCriticalPermission(roleBeingChanged: string): Promise<
 // requirePermission-gated route - which, after the Phase 2 migration, is
 // every route that used to be a hardcoded requireRole check.
 export async function setRolePermission(role: string, permission: string, granted: boolean): Promise<void> {
-  if (!granted && permission === CRITICAL_PERMISSION && (await wouldOrphanCriticalPermission(role))) {
+  if (!granted && CRITICAL_PERMISSIONS.includes(permission) && (await wouldOrphanCriticalPermission(role, permission))) {
     throw new ApiError(409, "At least one role must always be able to manage permissions - grant it to another role first.");
   }
   if (granted) {
@@ -253,8 +255,10 @@ export async function resetRoleToDefault(role: string): Promise<void> {
   if (!defaults) {
     throw new ApiError(422, "Unknown role");
   }
-  if (!defaults.includes(CRITICAL_PERMISSION) && (await wouldOrphanCriticalPermission(role))) {
-    throw new ApiError(409, "Resetting this role would leave no role able to manage permissions - grant role_permissions.update to another role first.");
+  for (const permission of CRITICAL_PERMISSIONS) {
+    if (!defaults.includes(permission) && (await wouldOrphanCriticalPermission(role, permission))) {
+      throw new ApiError(409, `Resetting this role would leave no role holding ${permission} - grant it to another role first.`);
+    }
   }
 
   const client = await pool.connect();

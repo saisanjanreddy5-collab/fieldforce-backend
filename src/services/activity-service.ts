@@ -1,6 +1,6 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
-import { isLeadVisibleToUser } from "./lead-service";
+import { isLeadInOwnerScope, isLeadVisibleToUser } from "./lead-service";
 import { isOpportunityVisibleToUser } from "./opportunity-service";
 
 // An activity is visible whenever the lead it (directly or, via an
@@ -8,7 +8,7 @@ import { isOpportunityVisibleToUser } from "./opportunity-service";
 const SUBTREE_CTE = `
   WITH RECURSIVE subtree AS (
     SELECT id FROM users WHERE id = $1
-    UNION ALL
+    UNION
     SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
   )
 `;
@@ -100,6 +100,23 @@ function toPublicComment(row: CommentRow) {
   };
 }
 
+// Who can see an activity (alias a, its lead l, requesting user $1). Same
+// as the lead rules, plus two things the lead rules alone missed:
+//  - your OWN activities (you created it, or it's assigned to you) - a
+//    Call Center rep who logs a callback on a teammate's lead must still
+//    see it in their own queue and calendar;
+//  - Admins see every activity, matching how leads/opportunities/quotes
+//    already treat Admin as company-wide (not just their own reporting
+//    subtree, which may be empty).
+// Shared with call-center-service.ts so the two can't drift apart again.
+export const ACTIVITY_VISIBILITY_CLAUSE = `(
+    l.owner_id IN (SELECT id FROM subtree)
+    OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
+    OR a.created_by = $1
+    OR a.assigned_to = $1
+    OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin')
+  )`;
+
 export async function isActivityVisibleToUser(activityId: string, userId: string): Promise<boolean> {
   const result = await pool.query(
     `${SUBTREE_CTE}
@@ -109,10 +126,7 @@ export async function isActivityVisibleToUser(activityId: string, userId: string
      WHERE a.id = $2
        AND a.is_deleted = false
        AND l.is_deleted = false
-       AND (
-         l.owner_id IN (SELECT id FROM subtree)
-         OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
-       )`,
+       AND ${ACTIVITY_VISIBILITY_CLAUSE}`,
     [userId, activityId]
   );
   return (result.rowCount ?? 0) > 0;
@@ -132,7 +146,11 @@ export async function isActivityInOwnerScope(activityId: string, userId: string)
      WHERE a.id = $2
        AND a.is_deleted = false
        AND l.is_deleted = false
-       AND l.owner_id IN (SELECT id FROM subtree)`,
+       AND (
+         l.owner_id IN (SELECT id FROM subtree)
+         OR a.created_by = $1
+         OR EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'admin')
+       )`,
     [userId, activityId]
   );
   return (result.rowCount ?? 0) > 0;
@@ -243,9 +261,16 @@ async function insertActivity(
 }
 
 export async function createActivityForLead(leadId: string, input: ActivityInput, requestingUserId: string) {
-  const visible = await isLeadVisibleToUser(leadId, requestingUserId);
-  if (!visible) {
-    throw new ApiError(403, "You do not have access to this lead");
+  // Logging work on a lead needs real working access (owner/team scope) or
+  // an explicit share - Call Center's company-wide *lookup* visibility of
+  // leads that have already left their floor is read-only by design.
+  const canWork = await isLeadInOwnerScope(leadId, requestingUserId);
+  if (!canWork) {
+    const shared = await pool.query("SELECT 1 FROM lead_shares WHERE lead_id = $1 AND shared_with_user_id = $2", [leadId, requestingUserId]);
+    if ((shared.rowCount ?? 0) === 0) {
+      const visible = await isLeadVisibleToUser(leadId, requestingUserId);
+      throw new ApiError(403, visible ? "You can view this lead but not log activities on it" : "You do not have access to this lead");
+    }
   }
   return insertActivity(input, requestingUserId, leadId, null);
 }
@@ -311,10 +336,7 @@ export async function listActivitiesForUser(requestingUserId: string, filters: L
   const conditions: string[] = ["l.is_deleted = false", "a.is_deleted = false"];
   const params: unknown[] = [requestingUserId];
 
-  conditions.push(`(
-    l.owner_id IN (SELECT id FROM subtree)
-    OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
-  )`);
+  conditions.push(ACTIVITY_VISIBILITY_CLAUSE);
 
   if (filters.type) {
     params.push(filters.type);

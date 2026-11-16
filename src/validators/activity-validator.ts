@@ -6,6 +6,9 @@ import { z } from "zod";
 // GET /activities?type=..., which does.
 export const ACTIVITY_TYPES = ["call", "email", "teams_meeting", "site_visit", "whatsapp", "internal", "support_ticket"] as const;
 
+// externalRefId is set only by the server itself (Smartflo click-to-call)
+// - never accepted from a request, or a copied id would let a caller graft
+// telephony webhook updates onto someone else's call record.
 export const createActivitySchema = z.object({
   type: z.enum(ACTIVITY_TYPES),
   subject: z.string().optional(),
@@ -15,7 +18,6 @@ export const createActivitySchema = z.object({
   details: z.record(z.string(), z.unknown()).optional(),
   latitude: z.coerce.number().optional(),
   longitude: z.coerce.number().optional(),
-  externalRefId: z.string().optional(),
 });
 
 export const updateActivitySchema = z.object({
@@ -26,7 +28,6 @@ export const updateActivitySchema = z.object({
   details: z.record(z.string(), z.unknown()).optional(),
   latitude: z.coerce.number().optional(),
   longitude: z.coerce.number().optional(),
-  externalRefId: z.string().optional(),
 });
 
 export const addCommentSchema = z.object({

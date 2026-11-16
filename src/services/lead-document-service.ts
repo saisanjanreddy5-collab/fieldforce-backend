@@ -109,6 +109,10 @@ export async function getDocumentLeadId(documentId: string): Promise<string> {
   return (await getDocumentRow(documentId)).lead_id;
 }
 
+export async function getDocumentType(documentId: string): Promise<string> {
+  return (await getDocumentRow(documentId)).doc_type;
+}
+
 export async function saveUploadedFile(
   leadId: string,
   docType: string,

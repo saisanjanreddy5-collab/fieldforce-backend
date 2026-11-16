@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { externalFetch, MEDIA_TIMEOUT_MS } from "../utils/external-fetch";
 import fs from "fs";
 import path from "path";
 import multer from "multer";
@@ -61,9 +62,47 @@ const OUTBOUND_ALLOWED_MIME_TYPES = new Set([
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 ]);
 
+// The stored file's extension decides how the public media route serves it
+// (Content-Type comes from the extension). It must never come from anything
+// the sender controls - a customer's "invoice.html" or an inbound
+// "text/html" document would otherwise be served as a live web page from
+// this backend's own domain. Every known type maps to one fixed, safe
+// extension; anything else is stored as an opaque .bin download.
+const SAFE_EXTENSION_BY_MIME: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "video/mp4": "mp4",
+  "video/3gpp": "3gp",
+  "audio/ogg": "ogg",
+  "audio/mpeg": "mp3",
+  "audio/aac": "aac",
+  "audio/amr": "amr",
+  "audio/mp4": "m4a",
+  "application/pdf": "pdf",
+  "application/msword": "doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "application/vnd.ms-excel": "xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+};
+
+function safeExtensionFor(mimeType: string): string {
+  const base = mimeType.split(";")[0].trim().toLowerCase();
+  return SAFE_EXTENSION_BY_MIME[base] ?? "bin";
+}
+
+// Shown inline in the chat thread (image preview, video/voice player, PDF
+// viewer). Everything else - Office files, unknown .bin - is always sent
+// as a download, never rendered by the browser.
+const INLINE_SAFE_EXTENSIONS = new Set(["jpg", "png", "webp", "mp4", "3gp", "ogg", "mp3", "aac", "amr", "m4a", "pdf"]);
+
+export function isInlineSafeAttachment(filePath: string): boolean {
+  return INLINE_SAFE_EXTENSIONS.has(path.extname(filePath).slice(1).toLowerCase());
+}
+
 const attachmentStorage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_ROOT),
-  filename: (_req, file, cb) => cb(null, `${crypto.randomUUID()}${path.extname(file.originalname).slice(0, 20)}`),
+  filename: (_req, file, cb) => cb(null, `${crypto.randomUUID()}.${safeExtensionFor(file.mimetype)}`),
 });
 
 export const attachmentUpload = multer({
@@ -126,7 +165,7 @@ async function postWhatsappMessage(leadId: string, phone: string, body: string, 
   // accepts the request and returns a message id.
   const digits = phone.replace(/\D/g, "");
   const to = digits.length === 10 ? `91${digits}` : digits;
-  const response = await fetch(`${WHATSAPP_BASE_URL}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+  const response = await externalFetch(`${WHATSAPP_BASE_URL}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
     method: "POST",
     headers: requestHeaders(),
     body: JSON.stringify({
@@ -204,7 +243,7 @@ async function postWhatsappMediaMessage(
 ) {
   const digits = phone.replace(/\D/g, "");
   const to = digits.length === 10 ? `91${digits}` : digits;
-  const response = await fetch(`${WHATSAPP_BASE_URL}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+  const response = await externalFetch(`${WHATSAPP_BASE_URL}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
     method: "POST",
     headers: requestHeaders(),
     body: JSON.stringify({
@@ -412,12 +451,11 @@ interface WhatsappWebhookPayload {
 // not assumed. Saved under the same UPLOAD_ROOT as outbound attachments so
 // both directions end up served by the exact same public route.
 async function downloadInboundMediaToFile(mediaId: string, mimeType: string): Promise<{ filePath: string; publicFilename: string }> {
-  const response = await fetch(`${WHATSAPP_MEDIA_BASE_URL}/downloadmedia/${mediaId}`, { headers: requestHeaders() });
+  const response = await externalFetch(`${WHATSAPP_MEDIA_BASE_URL}/downloadmedia/${mediaId}`, { headers: requestHeaders() }, MEDIA_TIMEOUT_MS);
   if (!response.ok) {
     throw new ApiError(502, `Failed to download WhatsApp media ${mediaId}`);
   }
-  const extension = mimeType.split("/")[1]?.split(";")[0] ?? "bin";
-  const publicFilename = `${crypto.randomUUID()}.${extension}`;
+  const publicFilename = `${crypto.randomUUID()}.${safeExtensionFor(mimeType)}`;
   const filePath = path.join(UPLOAD_ROOT, publicFilename);
   const buffer = Buffer.from(await response.arrayBuffer());
   await fs.promises.writeFile(filePath, buffer);

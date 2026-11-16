@@ -1,4 +1,5 @@
 import { pool } from "../config/db";
+import { externalFetch } from "../utils/external-fetch";
 import { GRAPH_BASE_URL } from "../config/microsoft";
 import { getValidAccessToken, disconnect } from "./microsoft-service";
 
@@ -35,8 +36,13 @@ interface DeltaPage {
 // 3 minutes forever.
 class PermanentMailboxError extends Error {}
 
+// Graph answers 410 Gone when a stored delta checkpoint has expired (it only
+// keeps sync state for a limited time). Retrying that same link fails
+// forever - the fix is to drop it so the next pass re-baselines.
+class ExpiredDeltaLinkError extends Error {}
+
 async function fetchDeltaPage(accessToken: string, url: string): Promise<DeltaPage> {
-  const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const response = await externalFetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
   if (!response.ok) {
     const body = await response.text();
     // Microsoft's own permanent signal that a mailbox can't be reached via
@@ -47,6 +53,9 @@ async function fetchDeltaPage(accessToken: string, url: string): Promise<DeltaPa
     // resolve on its own.
     if (response.status === 404 && body.includes("MailboxNotEnabledForRESTAPI")) {
       throw new PermanentMailboxError(`Mailbox permanently unavailable: ${body}`);
+    }
+    if (response.status === 410) {
+      throw new ExpiredDeltaLinkError(`Mail sync checkpoint expired: ${body}`);
     }
     throw new Error(`Graph mail delta query failed: ${response.status} ${body}`);
   }
@@ -151,6 +160,11 @@ export async function syncAllConnectedMailboxes(): Promise<void> {
         await disconnect(row.user_id).catch((disconnectErr) =>
           console.error(`Mail sync: failed to auto-disconnect user ${row.user_id} after a permanent mailbox error:`, disconnectErr)
         );
+      } else if (err instanceof ExpiredDeltaLinkError) {
+        console.warn(`Mail sync: checkpoint expired for user ${row.user_id} - will re-baseline on the next pass`);
+        await pool
+          .query("UPDATE microsoft_connections SET mail_delta_link = NULL, updated_at = now() WHERE user_id = $1", [row.user_id])
+          .catch((clearErr) => console.error(`Mail sync: failed to clear expired checkpoint for user ${row.user_id}:`, clearErr));
       } else {
         console.error(`Mail sync failed for user ${row.user_id}:`, err);
       }
@@ -163,9 +177,23 @@ const SYNC_INTERVAL_MS = 3 * 60 * 1000;
 // Deliberately a plain setInterval, not a new job-queue dependency - this is
 // the one and only background job in this codebase today, and a single
 // process-wide timer is the whole mechanism a project this size needs.
+// A sync longer than the interval (first sync of a big inbox, slow Graph)
+// must not overlap the next one - both would log the same inbound emails.
+let mailSyncRunning = false;
+
+async function runMailSync(label: string): Promise<void> {
+  if (mailSyncRunning) return;
+  mailSyncRunning = true;
+  try {
+    await syncAllConnectedMailboxes();
+  } catch (err) {
+    console.error(`${label} mail sync failed:`, err);
+  } finally {
+    mailSyncRunning = false;
+  }
+}
+
 export function startMailSyncScheduler(): void {
-  syncAllConnectedMailboxes().catch((err) => console.error("Initial mail sync failed:", err));
-  setInterval(() => {
-    syncAllConnectedMailboxes().catch((err) => console.error("Scheduled mail sync failed:", err));
-  }, SYNC_INTERVAL_MS);
+  void runMailSync("Initial");
+  setInterval(() => void runMailSync("Scheduled"), SYNC_INTERVAL_MS);
 }

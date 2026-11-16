@@ -19,6 +19,22 @@ async function assertVisible(leadId: string, userId: string): Promise<void> {
   }
 }
 
+// Changing a lead's files needs the same right as editing the lead itself -
+// read-only visibility (a shared lead, or Call Center's company-wide lookup)
+// is enough to view/download, never to upload over or remove a document.
+async function assertCanModify(leadId: string, userId: string): Promise<void> {
+  const canModify = await leadService.isLeadInOwnerScope(leadId, userId);
+  if (!canModify) {
+    throw new ApiError(403, "You can't change documents on this lead");
+  }
+}
+
+// This general door exists for the Consent tab's evidence only. Every FOFO
+// document (PAN, GST, cheque, ...) goes through fofo-onboarding-routes.ts,
+// which has its own upload/verify permissions - so it can't be replaced or
+// removed from here, bypassing those.
+const GENERAL_DOC_TYPES = new Set(["consent_form"]);
+
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const leadId = String(req.params.leadId);
   await assertVisible(leadId, req.user!.id);
@@ -27,11 +43,15 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
 
 export const upload = asyncHandler(async (req: Request, res: Response) => {
   const leadId = String(req.params.leadId);
-  await assertVisible(leadId, req.user!.id);
+  await assertCanModify(leadId, req.user!.id);
   if (!req.file) {
     throw new ApiError(422, "A file is required");
   }
-  const document = await leadDocumentService.saveUploadedFile(leadId, String(req.body.docType), req.file, req.user!.id);
+  const docType = String(req.body.docType);
+  if (!GENERAL_DOC_TYPES.has(docType)) {
+    throw new ApiError(422, "This document type is uploaded from FOFO onboarding");
+  }
+  const document = await leadDocumentService.saveUploadedFile(leadId, docType, req.file, req.user!.id);
   sendSuccess(res, document, "Document uploaded", 201);
 });
 
@@ -46,7 +66,11 @@ export const download = asyncHandler(async (req: Request, res: Response) => {
 export const remove = asyncHandler(async (req: Request, res: Response) => {
   const documentId = String(req.params.documentId);
   const leadId = await leadDocumentService.getDocumentLeadId(documentId);
-  await assertVisible(leadId, req.user!.id);
+  await assertCanModify(leadId, req.user!.id);
+  const docType = await leadDocumentService.getDocumentType(documentId);
+  if (!GENERAL_DOC_TYPES.has(docType)) {
+    throw new ApiError(422, "This document is managed from FOFO onboarding");
+  }
   const document = await leadDocumentService.deleteDocumentFile(documentId);
   sendSuccess(res, document, "Document removed");
 });

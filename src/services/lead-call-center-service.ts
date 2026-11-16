@@ -167,12 +167,10 @@ export async function logCallDisposition(leadId: string, input: LogCallDispositi
     throw new ApiError(403, "You do not have access to this lead");
   }
 
-  await pool.query(
-    `INSERT INTO activities (type, lead_id, assigned_to, status, details, created_by)
-     VALUES ('call', $1, $2, 'completed', $3::jsonb, $2)`,
-    [leadId, requestingUserId, JSON.stringify({ disposition: input.disposition, notes: input.notes ?? null })]
-  );
-
+  // Booked FIRST: this is the step that can be refused (a clash with
+  // another booking within 15 minutes). If it were done after the call
+  // record below, a refusal would leave the outcome saved but the counters
+  // not updated - and the rep's retry would log the same call twice.
   // A second, separate Activity - this one's still pending, not a record of
   // what just happened but a real commitment for what happens next. This is
   // the actual fix for "Call Back" being a dead end: before this, picking
@@ -191,6 +189,12 @@ export async function logCallDisposition(leadId: string, input: LogCallDispositi
       requestingUserId
     );
   }
+
+  await pool.query(
+    `INSERT INTO activities (type, lead_id, assigned_to, status, details, created_by)
+     VALUES ('call', $1, $2, 'completed', $3::jsonb, $2)`,
+    [leadId, requestingUserId, JSON.stringify({ disposition: input.disposition, notes: input.notes ?? null })]
+  );
 
   await pool.query(
     `UPDATE leads SET call_attempt_count = call_attempt_count + 1, last_call_outcome = $1, last_call_at = now()

@@ -88,15 +88,23 @@ function monthBoundaries(): { start: string; end: string } {
 // this screen. A person with no monthly target row gets `quota: null`
 // ("no target set"), never a fabricated 0%.
 export async function getTeamRollup(requestingUserId: string, requestingRole: Role): Promise<TeamRollupGroup[]> {
+  // A "team" is anyone with active people reporting to them - not the
+  // 'manager' security role, which the live org doesn't use at all (its
+  // levels are Admin / Call Center / Field Sales, and team leads are
+  // reporting managers on the org chart). Keying off the role left this
+  // view permanently empty for everyone.
   let managerIds: string[];
   if (requestingRole === ROLES.ADMIN) {
-    const result = await pool.query<{ id: string }>("SELECT id FROM users WHERE role = $1 AND status = 'active'", [ROLES.MANAGER]);
+    const result = await pool.query<{ id: string }>(
+      `SELECT DISTINCT m.id FROM users m
+       JOIN users r ON r.manager_id = m.id AND r.status = 'active'
+       WHERE m.status = 'active'`
+    );
     managerIds = result.rows.map((r) => r.id);
-  } else if (requestingRole === ROLES.MANAGER) {
-    managerIds = [requestingUserId];
   } else {
-    // Agents have no direct reports - nothing to roll up for them.
-    return [];
+    const hasReports = await pool.query("SELECT 1 FROM users WHERE manager_id = $1 AND status = 'active' LIMIT 1", [requestingUserId]);
+    if ((hasReports.rowCount ?? 0) === 0) return [];
+    managerIds = [requestingUserId];
   }
   if (managerIds.length === 0) return [];
 

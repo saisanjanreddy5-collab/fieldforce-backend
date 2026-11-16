@@ -1,5 +1,6 @@
 import { pool } from "../config/db";
 import { customerLabel } from "./customer-service";
+import { ACTIVITY_VISIBILITY_CLAUSE } from "./activity-service";
 
 // Same hierarchy-visibility shape as every other module (Leads, Customers,
 // Activity Calendar) - walk DOWN from the requesting user to find their
@@ -7,7 +8,7 @@ import { customerLabel } from "./customer-service";
 const SUBTREE_CTE = `
   WITH RECURSIVE subtree AS (
     SELECT id FROM users WHERE id = $1
-    UNION ALL
+    UNION
     SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
   )
 `;
@@ -23,12 +24,7 @@ const SUBTREE_CTE = `
 // someone outside the manager's team on a lead the manager genuinely owns
 // would vanish from this module despite showing in that lead's own
 // Activity tab.
-const VISIBILITY_CLAUSE = `
-  (
-    l.owner_id IN (SELECT id FROM subtree)
-    OR EXISTS (SELECT 1 FROM lead_shares ls WHERE ls.lead_id = l.id AND ls.shared_with_user_id = $1)
-  )
-`;
+const VISIBILITY_CLAUSE = ACTIVITY_VISIBILITY_CLAUSE;
 
 // Same join shape as activity-service.ts's own listActivitiesForUser: a call
 // can in principle be tied to an opportunity instead of a lead directly (the

@@ -1,16 +1,13 @@
 import { pool } from "../config/db";
+import { ADMIN_AWARE_SUBTREE_CTE } from "../utils/subtree";
 import { ApiError } from "../utils/ApiError";
 import { totalPathDistanceKm } from "../utils/geo";
 
 // A user's own attendance is visible to themselves and to everyone above
 // them in their reporting chain - the same Rule A idea used for leads.
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION ALL
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
+// Admin-aware: an Admin sees the whole company here, not just their own
+// reporting line (see utils/subtree.ts).
+const SUBTREE_CTE = ADMIN_AWARE_SUBTREE_CTE;
 
 interface AttendanceRow {
   id: string;

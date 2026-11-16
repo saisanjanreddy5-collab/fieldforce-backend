@@ -16,7 +16,7 @@ import * as whatsappService from "./whatsapp-service";
 const SUBTREE_CTE = `
   WITH RECURSIVE subtree AS (
     SELECT id FROM users WHERE id = $1
-    UNION ALL
+    UNION
     SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
   )
 `;
@@ -452,9 +452,12 @@ async function resolveAutoAssignee(input: CreateLeadInput, creatorId: string): P
 
   if (input.stateId) {
     const ruleMatch = await pool.query<{ assigned_user_id: string }>(
-      `SELECT assigned_user_id FROM assignment_rules
-       WHERE state_id = $1 AND is_active = true AND (category = $2 OR category IS NULL)
-       ORDER BY category IS NULL ASC
+      // Skips a rule whose person has since been deactivated - a lead
+      // auto-assigned to someone who can no longer log in just disappears.
+      `SELECT ar.assigned_user_id FROM assignment_rules ar
+       JOIN users u ON u.id = ar.assigned_user_id AND u.is_active = true
+       WHERE ar.state_id = $1 AND ar.is_active = true AND (ar.category = $2 OR ar.category IS NULL)
+       ORDER BY ar.category IS NULL ASC
        LIMIT 1`,
       [input.stateId, input.category ?? null]
     );
@@ -817,12 +820,15 @@ export async function createLead(
   // logs its own failures) - a WhatsApp outage or missing/unconfigured
   // integration must never fail lead creation itself. welcome_message_sent
   // only flips true on a real confirmed send, never optimistically.
+  // Genuinely not awaited: the lead is already saved, so the person (or
+  // public QR/website form) gets their answer immediately instead of
+  // waiting on WhatsApp's response time.
   if (lead.phone && !options?.skipWelcomeMessage) {
-    const sent = await whatsappService.sendWelcomeMessageForLead(lead.id, lead.phone, lead.full_name, creatorId);
-    if (sent) {
-      await pool.query("UPDATE leads SET welcome_message_sent = true WHERE id = $1", [lead.id]);
-      lead.welcome_message_sent = true;
-    }
+    const leadId = lead.id;
+    whatsappService
+      .sendWelcomeMessageForLead(leadId, lead.phone, lead.full_name, creatorId)
+      .then((sent) => (sent ? pool.query("UPDATE leads SET welcome_message_sent = true WHERE id = $1", [leadId]) : undefined))
+      .catch((err) => console.error(`Welcome message bookkeeping failed for lead ${leadId}:`, err));
   }
 
   return toPublicLead(lead);
@@ -891,8 +897,18 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
       const assignedOwnerId = row.assignedToEmail
         ? await resolveCallCenterExecutiveByEmail(row.assignedToEmail)
         : null;
+      // Spreadsheets carry phones as "+91 98765 43210", "098765-43210", ...
+      // Store the clean 10-digit form whenever one can be read, so these
+      // leads match the format the Edit form requires instead of blocking
+      // every later edit until someone retypes the number. A value that
+      // doesn't yield 10 digits is kept as typed - never guessed.
+      const cleanPhone = (value: string | undefined) => {
+        if (!value) return value;
+        const digits = normalizePhone(value);
+        return digits.length === 10 ? digits : value;
+      };
       await createLead(
-        { ...row, ownerId: assignedOwnerId ?? undefined },
+        { ...row, phone: cleanPhone(row.phone), altPhone: cleanPhone(row.altPhone), ownerId: assignedOwnerId ?? undefined },
         creatorId,
         undefined,
         { requiresQualification: true, skipWelcomeMessage: true }
@@ -1556,7 +1572,7 @@ export async function updateLead(
   const result = await pool.query<LeadRow>(
     `WITH RECURSIVE subtree AS (
        SELECT id FROM users WHERE id = $${scopeUserIdx}
-       UNION ALL
+       UNION
        SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
      ),
      updated AS (

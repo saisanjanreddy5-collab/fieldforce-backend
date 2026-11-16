@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import { externalFetch } from "../utils/external-fetch";
 import multer from "multer";
 import { pool } from "../config/db";
 import { env } from "../config/env";
@@ -146,7 +147,7 @@ async function exchangeCodeForTokens(code: string): Promise<TokenResponse> {
     scope: MS_SCOPES.join(" "),
   });
 
-  const response = await fetch(msTokenUrl(), {
+  const response = await externalFetch(msTokenUrl(), {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
@@ -174,7 +175,7 @@ async function refreshTokens(refreshToken: string): Promise<TokenResponse> {
     scope: MS_SCOPES.join(" "),
   });
 
-  const response = await fetch(msTokenUrl(), {
+  const response = await externalFetch(msTokenUrl(), {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
@@ -188,7 +189,7 @@ async function refreshTokens(refreshToken: string): Promise<TokenResponse> {
 }
 
 async function fetchMicrosoftEmail(accessToken: string): Promise<string> {
-  const response = await fetch(`${GRAPH_BASE_URL}/me`, {
+  const response = await externalFetch(`${GRAPH_BASE_URL}/me`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!response.ok) {
@@ -342,7 +343,7 @@ export async function sendMailForLead(
 
   const accessToken = await getValidAccessToken(requestingUserId);
 
-  const response = await fetch(`${GRAPH_BASE_URL}/me/sendMail`, {
+  const response = await externalFetch(`${GRAPH_BASE_URL}/me/sendMail`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -383,7 +384,7 @@ export async function createTeamsMeetingForLead(
   startTime: string,
   endTime: string,
   requestingUserId: string
-): Promise<{ joinUrl: string }> {
+): Promise<{ joinUrl: string | null }> {
   // Same strict owner-scope reasoning as sendMailForLead above.
   const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
   if (!inScope) {
@@ -404,7 +405,7 @@ export async function createTeamsMeetingForLead(
   // Adding the lead as an attendee (not just creating the meeting for
   // ourselves) is what makes Microsoft actually send them a real calendar
   // invite with the join link - same as inviting anyone to a normal meeting.
-  const response = await fetch(`${GRAPH_BASE_URL}/me/events`, {
+  const response = await externalFetch(`${GRAPH_BASE_URL}/me/events`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -426,7 +427,11 @@ export async function createTeamsMeetingForLead(
     throw new ApiError(502, `Microsoft rejected the Teams meeting: ${await response.text()}`);
   }
 
-  const event = (await response.json()) as { onlineMeeting: { joinUrl: string }; id: string };
+  // onlineMeeting comes back null when Teams isn't provisioned for this
+  // mailbox - the calendar invite has still been sent at this point, so
+  // log the activity regardless instead of crashing after the fact.
+  const event = (await response.json()) as { onlineMeeting?: { joinUrl?: string } | null; id: string };
+  const joinUrl = event.onlineMeeting?.joinUrl ?? null;
 
   await createActivityForLead(
     leadId,
@@ -435,11 +440,11 @@ export async function createTeamsMeetingForLead(
       subject,
       dueDate: startTime,
       status: "pending",
-      details: { joinUrl: event.onlineMeeting.joinUrl },
+      details: { joinUrl },
       externalRefId: event.id,
     },
     requestingUserId
   );
 
-  return { joinUrl: event.onlineMeeting.joinUrl };
+  return { joinUrl };
 }

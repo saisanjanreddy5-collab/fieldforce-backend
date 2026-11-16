@@ -150,7 +150,7 @@ export async function listUsers(requestingUserId: string, requestingRole: Role, 
   const countResult = await pool.query<{ count: string }>(
     `WITH RECURSIVE subtree AS (
        SELECT id FROM users WHERE id = $1
-       UNION ALL
+       UNION
        SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
      )
      SELECT COUNT(*) FROM users u
@@ -162,7 +162,7 @@ export async function listUsers(requestingUserId: string, requestingRole: Role, 
   const result = await pool.query<UserRow>(
     `WITH RECURSIVE subtree AS (
        SELECT id FROM users WHERE id = $1
-       UNION ALL
+       UNION
        SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
      )
      SELECT u.*, ep.pincodes, st.sales_team_ids FROM users u
@@ -189,6 +189,29 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
       throw new ApiError(404, "User not found");
     }
     previousManagerId = existing.rows[0].manager_id;
+
+    // A reporting line must stay a tree. Picking yourself, or anyone who
+    // already reports up to you, would create a loop - every visibility
+    // query walks this tree, so a loop means nobody in it ever sees the
+    // right records again.
+    const newManagerId = updates.managerId;
+    if (newManagerId) {
+      if (newManagerId === id) {
+        throw new ApiError(400, "A person cannot report to themselves");
+      }
+      const loop = await pool.query(
+        `WITH RECURSIVE subtree AS (
+           SELECT id FROM users WHERE id = $1
+           UNION
+           SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
+         )
+         SELECT 1 FROM subtree WHERE id = $2 LIMIT 1`,
+        [id, newManagerId]
+      );
+      if ((loop.rowCount ?? 0) > 0) {
+        throw new ApiError(400, "The selected manager already reports to this person (directly or through someone else) - pick a manager outside this person's own team");
+      }
+    }
   }
 
   if (updates.territory) {
@@ -243,6 +266,26 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
   // the level (levelId === "") leaves role untouched - there's no tier to
   // derive from "no level".
   const role = updates.levelId ? await getLevelSecurityTier(updates.levelId) : undefined;
+
+  // Same lock-out guardrails as disabling login above, applied to a Level
+  // change that would take an Admin out of the admin tier.
+  if (role !== undefined && role !== ROLES.ADMIN) {
+    const target = await pool.query<{ role: Role; is_active: boolean }>("SELECT role, is_active FROM users WHERE id = $1", [id]);
+    if (target.rows[0]?.role === ROLES.ADMIN) {
+      if (id === changedBy) {
+        throw new ApiError(400, "You cannot move your own account out of the Admin level");
+      }
+      if (target.rows[0].is_active) {
+        const activeAdmins = await pool.query<{ count: string }>(
+          "SELECT COUNT(*) FROM users WHERE role = $1 AND is_active = true",
+          [ROLES.ADMIN]
+        );
+        if (Number(activeAdmins.rows[0].count) <= 1) {
+          throw new ApiError(400, "Cannot move the only active Admin out of the Admin level");
+        }
+      }
+    }
+  }
 
   // Same defense-in-depth check as registerUser - a field employee can never
   // be left with zero pincodes, whether that's this update's new role or

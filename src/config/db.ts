@@ -14,9 +14,15 @@ types.setTypeParser(types.builtins.DATE, (value) => value);
 
 export const pool = new Pool({
   connectionString: env.DATABASE_URL,
+  // Safety net: no single query may hold a connection forever. Nothing in
+  // normal use comes close to this; it only cuts off a runaway query before
+  // it can exhaust the pool and take the whole API down with it.
+  statement_timeout: 60_000,
 });
 
+// An idle client dropping (DB restart, network blip) is already removed
+// from the pool by pg itself - the next query just opens a fresh
+// connection. Exiting here would turn a momentary blip into an outage.
 pool.on("error", (err) => {
   console.error("Unexpected error on idle database client", err);
-  process.exit(1);
 });

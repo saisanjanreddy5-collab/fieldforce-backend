@@ -213,6 +213,11 @@ function countWorkingDays(startDate: string, endDate: string): number {
   return count;
 }
 
+async function isAdminUser(userId: string): Promise<boolean> {
+  const result = await pool.query<{ role: string }>("SELECT role FROM users WHERE id = $1", [userId]);
+  return result.rows[0]?.role === ROLES.ADMIN;
+}
+
 async function getDirectManagerId(userId: string): Promise<string | null> {
   const result = await pool.query<{ manager_id: string | null }>("SELECT manager_id FROM users WHERE id = $1", [userId]);
   return result.rows[0]?.manager_id ?? null;
@@ -231,17 +236,32 @@ export async function getBalances(userId: string) {
   const balances = await Promise.all(
     types.map(async (type) => {
       if (type.key === "comp_off") {
-        const earnedResult = await pool.query<{ total: string | null }>(
-          "SELECT COALESCE(SUM(days), 0) AS total FROM comp_off_credits WHERE user_id = $1 AND expires_at >= CURRENT_DATE",
+        // Comp-off days taken are drawn from credits oldest-expiry first.
+        // Comparing *unexpired* credits against *all-time* usage (as before)
+        // meant that once early credits expired, days already taken from
+        // them were subtracted a second time from brand-new credits.
+        const creditsResult = await pool.query<{ days: string; expired: boolean }>(
+          "SELECT days, expires_at < CURRENT_DATE AS expired FROM comp_off_credits WHERE user_id = $1 ORDER BY expires_at ASC, earned_date ASC",
           [userId]
         );
         const usedResult = await pool.query<{ total: string | null }>(
           "SELECT COALESCE(SUM(days_count), 0) AS total FROM leave_requests WHERE user_id = $1 AND kind = 'comp_off' AND status = 'approved'",
           [userId]
         );
-        const earned = Number(earnedResult.rows[0].total);
         const used = Number(usedResult.rows[0].total);
-        return { ...type, entitlement: null, used, available: Math.max(0, earned - used), earned };
+        let toAllocate = used;
+        let available = 0;
+        let earned = 0;
+        for (const credit of creditsResult.rows) {
+          const days = Number(credit.days);
+          const drawn = Math.min(days, toAllocate);
+          toAllocate -= drawn;
+          if (!credit.expired) {
+            earned += days;
+            available += days - drawn;
+          }
+        }
+        return { ...type, entitlement: null, used, available, earned };
       }
 
       const usedResult = await pool.query<{ total: string | null }>(
@@ -312,7 +332,7 @@ export async function listTeamRequests(managerId: string, requestingRole: Role) 
 const LEAVE_SUBTREE_CTE = `
   WITH RECURSIVE subtree AS (
     SELECT id FROM users WHERE id = $1
-    UNION ALL
+    UNION
     SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
   )
 `;
@@ -375,9 +395,11 @@ export async function listPendingApprovals(userId: string) {
      WHERE lr.status = 'pending' AND (
        (lr.approver_id = $1 AND lr.approver_decision IS NULL)
        OR (lr.second_approver_id = $1 AND lr.approver_decision = 'approved' AND lr.second_approver_decision IS NULL)
+       OR ($2::boolean AND lr.approver_decision IS NULL AND lr.user_id <> $1
+           AND (lr.approver_id IS NULL OR EXISTS (SELECT 1 FROM users au WHERE au.id = lr.approver_id AND au.is_active = false)))
      )
      ORDER BY lr.created_at ASC`,
-    [userId]
+    [userId, await isAdminUser(userId)]
   );
   return result.rows.map(toPublicLeaveRequest);
 }
@@ -434,19 +456,40 @@ export async function createLeaveRequest(userId: string, input: CreateLeaveReque
     throw new ApiError(422, "A half day request can only cover a single date");
   }
 
-  // Top of the org (no manager_id at all) has no one left to approve their
-  // leave - rather than blocking them from ever applying, their request is
-  // auto-approved on creation instead of going through the normal pending
-  // workflow, the same way an org chart treats "top of org" as its own
-  // terminal case rather than an error.
+  // No reporting manager: an Admin at the top of the org has nobody left to
+  // approve their leave, so it's auto-approved; anyone else is left with no
+  // named approver and lands in every Admin's queue (whichever Admin acts
+  // first becomes the approver) instead of going through unchecked.
   const managerId = await getDirectManagerId(userId);
-  const autoApprove = managerId === null;
+  const autoApprove = managerId === null && (await isAdminUser(userId));
 
   let secondApproverId: string | null = null;
   const daysCount = input.kind === "half_day" ? 0.5 : countWorkingDays(input.startDate, input.endDate);
   if (daysCount <= 0) {
     throw new ApiError(422, "That date range has no working days in it");
   }
+
+  // The same days can't be requested twice - an overlapping pending or
+  // approved request (any kind) would double-count them.
+  const overlap = await pool.query(
+    `SELECT 1 FROM leave_requests
+     WHERE user_id = $1 AND status IN ('pending', 'approved')
+       AND start_date <= $3 AND end_date >= $2
+     LIMIT 1`,
+    [userId, input.startDate, input.endDate]
+  );
+  if ((overlap.rowCount ?? 0) > 0) {
+    throw new ApiError(422, "You already have a leave request covering some of these dates");
+  }
+
+  // Days already asked for but not yet decided count against the balance
+  // too - otherwise several pending requests could each fit the balance on
+  // their own and all be approved, together far exceeding it.
+  const pendingResult = await pool.query<{ days: string | null }>(
+    "SELECT SUM(days_count) AS days FROM leave_requests WHERE user_id = $1 AND kind = $2 AND status = 'pending'",
+    [userId, input.kind]
+  );
+  const pendingDays = Number(pendingResult.rows[0]?.days ?? 0);
 
   if (ENTITLEMENT_KINDS.includes(input.kind)) {
     const type = await getLeaveTypeByKey(input.kind as LeaveTypeKey);
@@ -470,14 +513,16 @@ export async function createLeaveRequest(userId: string, input: CreateLeaveReque
     if (type.key === "comp_off") {
       const balances = await getBalances(userId);
       const compOff = balances.find((b) => b.key === "comp_off")!;
-      if (compOff.available! < daysCount) {
-        throw new ApiError(422, `Not enough comp-off balance - ${compOff.available} day${compOff.available === 1 ? "" : "s"} available`);
+      const compOffLeft = compOff.available! - pendingDays;
+      if (compOffLeft < daysCount) {
+        throw new ApiError(422, `Not enough comp-off balance - ${Math.max(compOffLeft, 0)} day${compOffLeft === 1 ? "" : "s"} available after pending requests`);
       }
     } else {
       const balances = await getBalances(userId);
       const balance = balances.find((b) => b.key === type.key)!;
-      if (balance.available !== null && balance.available < daysCount) {
-        throw new ApiError(422, `Not enough ${type.label.toLowerCase()} balance - ${balance.available} day${balance.available === 1 ? "" : "s"} available`);
+      const left = balance.available === null ? null : balance.available - pendingDays;
+      if (left !== null && left < daysCount) {
+        throw new ApiError(422, `Not enough ${type.label.toLowerCase()} balance - ${Math.max(left, 0)} day${left === 1 ? "" : "s"} available after pending requests`);
       }
     }
 
@@ -514,7 +559,14 @@ export async function decideLeaveRequest(requestId: string, deciderId: string, d
     throw new ApiError(409, "This request has already been decided");
   }
 
-  const isFirstApprover = request.approver_id === deciderId && request.approver_decision === null;
+  // Admins pick up anything with no one able to act on it: no named
+  // approver (no reporting manager), or a named approver who has since been
+  // deactivated (e.g. left the company) - otherwise it's stuck forever.
+  const approverGone =
+    request.approver_id === null ||
+    ((await pool.query("SELECT 1 FROM users WHERE id = $1 AND is_active = false", [request.approver_id])).rowCount ?? 0) > 0;
+  const unassignedForAdmin = approverGone && request.user_id !== deciderId && (await isAdminUser(deciderId));
+  const isFirstApprover = (request.approver_id === deciderId || unassignedForAdmin) && request.approver_decision === null;
   const isSecondApprover = request.second_approver_id === deciderId && request.approver_decision === "approved" && request.second_approver_decision === null;
 
   if (!isFirstApprover && !isSecondApprover) {
@@ -530,9 +582,9 @@ export async function decideLeaveRequest(requestId: string, deciderId: string, d
   if (isFirstApprover) {
     const finalStatus = decision === "rejected" ? "rejected" : request.second_approver_id ? "pending" : "approved";
     decided = await pool.query(
-      `UPDATE leave_requests SET approver_decision = $1, approver_decided_at = now(), status = $2, updated_at = now()
+      `UPDATE leave_requests SET approver_id = $4, approver_decision = $1, approver_decided_at = now(), status = $2, updated_at = now()
        WHERE id = $3 AND approver_decision IS NULL`,
-      [decision, finalStatus, requestId]
+      [decision, finalStatus, requestId, deciderId]
     );
   } else {
     decided = await pool.query(
