@@ -34,6 +34,7 @@ const UNASSIGNED_ADMIN_CLAUSE = `
 
 interface CustomerRow {
   id: string;
+  credit_limit_requested?: string | null;
   customer_number: number;
   lead_id: string;
   full_name: string;
@@ -79,6 +80,7 @@ function toPublicCustomer(row: CustomerRow) {
     customerNumber: row.customer_number,
     customerLabel: customerLabel(row.customer_number),
     leadId: row.lead_id,
+    creditLimitRequested: row.credit_limit_requested === undefined || row.credit_limit_requested === null ? null : Number(row.credit_limit_requested),
     fullName: row.full_name,
     contactName: row.contact_name,
     phone: row.phone,
@@ -169,7 +171,11 @@ export async function createCustomerFromLead(lead: {
       lead.address_line1,
       lead.address_line2,
       lead.territory,
-      lead.credit_limit_requested ?? 0,
+      // A credit limit is a finance decision for an Admin, never inherited
+      // from what the salesperson typed as "requested" on the lead - the
+      // customer starts at 0 and the requested figure is shown to the Admin
+      // as a suggestion (creditLimitRequested on the customer detail).
+      0,
     ]
   );
 }
@@ -267,10 +273,11 @@ export async function getCustomerById(customerId: string, requestingUserId: stri
   }
 
   const result = await pool.query<CustomerRow>(
-    `SELECT c.*, u.name AS owner_name, d.name AS district_name
+    `SELECT c.*, u.name AS owner_name, d.name AS district_name, sl.credit_limit_requested
      FROM customers c
      LEFT JOIN users u ON u.id = c.owner_id
      LEFT JOIN districts d ON d.id = c.district_id
+     LEFT JOIN leads sl ON sl.id = c.lead_id
      WHERE c.id = $1 AND c.is_deleted = false`,
     [customerId]
   );
@@ -315,10 +322,12 @@ export async function updateCustomer(
   // The money a customer is allowed to owe, and what they currently owe,
   // are company finance figures - an Admin decision, not something a
   // salesperson can raise or zero out on their own accounts.
-  if (updates.creditLimit !== undefined || updates.outstandingBalance !== undefined) {
+  // ...and so is who owns the account: the owner decides who sees its
+  // orders, invoices and credit, so reassigning it is an Admin decision too.
+  if (updates.creditLimit !== undefined || updates.outstandingBalance !== undefined || updates.ownerId !== undefined) {
     const requester = await pool.query<{ role: string }>("SELECT role FROM users WHERE id = $1", [requestingUserId]);
     if (requester.rows[0]?.role !== ROLES.ADMIN) {
-      throw new ApiError(403, "Only an Admin can change a customer's credit limit or outstanding balance");
+      throw new ApiError(403, "Only an Admin can change a customer's owner, credit limit or outstanding balance");
     }
   }
 

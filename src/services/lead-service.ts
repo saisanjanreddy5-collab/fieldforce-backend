@@ -902,10 +902,20 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
       // leads match the format the Edit form requires instead of blocking
       // every later edit until someone retypes the number. A value that
       // doesn't yield 10 digits is kept as typed - never guessed.
+      // Only unambiguous forms of ONE Indian mobile number are cleaned:
+      // 10 digits, or a 0 / 91 / 091 prefix + 10 digits. Anything else (two
+      // numbers in one cell, an extra-digit typo) is kept exactly as typed -
+      // trimming it to "the last 10 digits" would silently turn it into a
+      // stranger's number.
       const cleanPhone = (value: string | undefined) => {
         if (!value) return value;
-        const digits = normalizePhone(value);
-        return digits.length === 10 ? digits : value;
+        const digits = value.replace(/\D/g, "");
+        const isOneMobile =
+          digits.length === 10 ||
+          (digits.length === 11 && digits.startsWith("0")) ||
+          (digits.length === 12 && digits.startsWith("91")) ||
+          (digits.length === 13 && digits.startsWith("091"));
+        return isOneMobile ? digits.slice(-10) : value;
       };
       await createLead(
         { ...row, phone: cleanPhone(row.phone), altPhone: cleanPhone(row.altPhone), ownerId: assignedOwnerId ?? undefined },
@@ -1104,7 +1114,7 @@ export function buildLeadFilterConditions(
   }
   if (filters.overdueOnly) {
     conditions.push(
-      `EXISTS (SELECT 1 FROM activities a WHERE a.lead_id = l.id AND a.due_date < now() AND a.status <> 'completed')`
+      `EXISTS (SELECT 1 FROM activities a WHERE a.lead_id = l.id AND a.is_deleted = false AND a.due_date < now() AND a.status <> 'completed')`
     );
   }
   if (filters.highScoreOnly) {
@@ -1152,11 +1162,11 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
        dl.full_name AS duplicate_of_full_name, dl.lead_number AS duplicate_of_lead_number,
        EXISTS (
          SELECT 1 FROM activities a
-         WHERE a.lead_id = l.id AND a.due_date < now() AND a.status <> 'completed'
+         WHERE a.lead_id = l.id AND a.is_deleted = false AND a.due_date < now() AND a.status <> 'completed'
        ) AS has_overdue_activity,
        (
          SELECT MIN(a.due_date) FROM activities a
-         WHERE a.lead_id = l.id AND a.due_date IS NOT NULL AND a.status <> 'completed'
+         WHERE a.lead_id = l.id AND a.is_deleted = false AND a.due_date IS NOT NULL AND a.status <> 'completed'
        ) AS next_activity_due_at,
        (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE} ${TIER_TEAMMATE_CLAUSE}) AS in_owner_scope
      FROM leads l
@@ -1304,7 +1314,7 @@ export async function getQuickFilterCounts(requestingUserId: string) {
        COUNT(*) FILTER (WHERE l.owner_id = $1) AS my_leads,
        COUNT(*) FILTER (WHERE l.owner_id IS NULL) AS unassigned,
        COUNT(*) FILTER (
-         WHERE EXISTS (SELECT 1 FROM activities a WHERE a.lead_id = l.id AND a.due_date < now() AND a.status <> 'completed')
+         WHERE EXISTS (SELECT 1 FROM activities a WHERE a.lead_id = l.id AND a.is_deleted = false AND a.due_date < now() AND a.status <> 'completed')
        ) AS overdue,
        COUNT(*) FILTER (WHERE l.category = 'FOFO') AS fofo,
        COUNT(*) FILTER (WHERE l.lead_score >= $2) AS high_score

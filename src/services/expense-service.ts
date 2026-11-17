@@ -161,6 +161,27 @@ async function getExpenseTypeByKey(key: ExpenseTypeKey): Promise<ExpenseTypeRow>
   return result.rows[0];
 }
 
+
+// An approver nobody can rely on: missing, deactivated, or whose role doesn't
+// hold the approve permission (any user can be picked as someone's
+// manager). Requests waiting on such a person go to every Admin instead of
+// sitting pending forever.
+function approverCannotActSql(column: string): string {
+  return `(${column} IS NULL OR EXISTS (SELECT 1 FROM users au WHERE au.id = ${column} AND (au.is_active = false OR NOT EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role = au.role AND rp.permission = 'expense_claims.approve'))))`;
+}
+
+async function approverCannotAct(approverId: string | null): Promise<boolean> {
+  const result = await pool.query<{ gone: boolean }>(`SELECT ${approverCannotActSql("$1::uuid")} AS gone`, [approverId]);
+  return result.rows[0].gone;
+}
+
+// Whether another active Admin exists who can decide (or pay) this
+// person's own request.
+async function anotherActiveAdminExists(userId: string): Promise<boolean> {
+  const result = await pool.query("SELECT 1 FROM users WHERE role = $1 AND is_active = true AND id <> $2 LIMIT 1", [ROLES.ADMIN, userId]);
+  return (result.rowCount ?? 0) > 0;
+}
+
 async function getDirectManagerId(userId: string): Promise<string | null> {
   const result = await pool.query<{ manager_id: string | null }>("SELECT manager_id FROM users WHERE id = $1", [userId]);
   return result.rows[0]?.manager_id ?? null;
@@ -343,8 +364,11 @@ export async function listPendingApprovals(userId: string) {
      WHERE ec.status = 'pending' AND (
        (ec.approver_id = $1 AND ec.approver_decision IS NULL)
        OR (ec.second_approver_id = $1 AND ec.approver_decision = 'approved' AND ec.second_approver_decision IS NULL)
-       OR ($2::boolean AND ec.approver_decision IS NULL AND ec.user_id <> $1
-           AND (ec.approver_id IS NULL OR EXISTS (SELECT 1 FROM users au WHERE au.id = ec.approver_id AND au.is_active = false)))
+       OR ($2::boolean AND ec.user_id <> $1 AND (
+             (ec.approver_decision IS NULL AND ${approverCannotActSql("ec.approver_id")})
+             OR (ec.approver_decision = 'approved' AND ec.second_approver_id IS NOT NULL AND ec.second_approver_decision IS NULL
+                 AND ${approverCannotActSql("ec.second_approver_id")})
+           ))
      )
      ORDER BY ec.created_at ASC`,
     [userId, await isAdminUser(userId)]
@@ -411,7 +435,9 @@ export async function createExpenseClaim(userId: string, input: CreateExpenseCla
   // approver, so it lands in every Admin's queue instead of going through
   // unchecked.
   const managerId = await getDirectManagerId(userId);
-  const autoApprove = managerId === null && (await isAdminUser(userId));
+  // Self-approval only for an Admin with nobody else able to decide - when
+  // other Admins exist, an Admin's own request goes to them like anyone's.
+  const autoApprove = managerId === null && (await isAdminUser(userId)) && !(await anotherActiveAdminExists(userId));
   const secondApproverId = managerId ? await resolveSecondApprover(userId, managerId, input.amount) : null;
 
   const result = await pool.query<{ id: string }>(
@@ -459,13 +485,15 @@ export async function decideExpenseClaim(
   // Admins pick up anything with no one able to act on it: no named
   // approver (no reporting manager), or a named approver who has since been
   // deactivated (e.g. left the company) - otherwise it's stuck forever.
-  const approverGone =
-    claim.approver_id === null ||
-    ((await pool.query("SELECT 1 FROM users WHERE id = $1 AND is_active = false", [claim.approver_id])).rowCount ?? 0) > 0;
-  const unassignedForAdmin = approverGone && claim.user_id !== deciderId && (await isAdminUser(deciderId));
-  const isFirstApprover = (claim.approver_id === deciderId || unassignedForAdmin) && claim.approver_decision === null;
+  const adminStandIn = claim.user_id !== deciderId && (await isAdminUser(deciderId));
+  const isFirstApprover =
+    claim.approver_decision === null && (claim.approver_id === deciderId || (adminStandIn && (await approverCannotAct(claim.approver_id))));
   const isSecondApprover =
-    claim.second_approver_id === deciderId && claim.approver_decision === "approved" && claim.second_approver_decision === null;
+    !isFirstApprover &&
+    claim.approver_decision === "approved" &&
+    claim.second_approver_decision === null &&
+    claim.second_approver_id !== null &&
+    (claim.second_approver_id === deciderId || (adminStandIn && (await approverCannotAct(claim.second_approver_id))));
 
   if (!isFirstApprover && !isSecondApprover) {
     throw new ApiError(403, "You're not the approver for this claim");
@@ -480,14 +508,14 @@ export async function decideExpenseClaim(
     const finalStatus = decision === "rejected" ? "rejected" : claim.second_approver_id ? "pending" : "approved";
     decided = await pool.query(
       `UPDATE expense_claims SET approver_id = $5, approver_decision = $1, approver_decided_at = now(), status = $2, decision_note = COALESCE($3, decision_note), updated_at = now()
-       WHERE id = $4 AND approver_decision IS NULL`,
+       WHERE id = $4 AND approver_decision IS NULL AND status = 'pending'`,
       [decision, finalStatus, note ?? null, claimId, deciderId]
     );
   } else {
     decided = await pool.query(
-      `UPDATE expense_claims SET second_approver_decision = $1, second_approver_decided_at = now(), status = $2, decision_note = COALESCE($3, decision_note), updated_at = now()
-       WHERE id = $4 AND second_approver_decision IS NULL`,
-      [decision, decision, note ?? null, claimId]
+      `UPDATE expense_claims SET second_approver_id = $5, second_approver_decision = $1, second_approver_decided_at = now(), status = $2, decision_note = COALESCE($3, decision_note), updated_at = now()
+       WHERE id = $4 AND second_approver_decision IS NULL AND status = 'pending'`,
+      [decision, decision, note ?? null, claimId, deciderId]
     );
   }
   if (decided.rowCount === 0) {
@@ -514,6 +542,9 @@ export async function decideExpenseClaim(
 
 export async function markClaimPaid(claimId: string, payerId: string) {
   const claim = await getClaimById(claimId);
+  if (claim.user_id === payerId && (await anotherActiveAdminExists(payerId))) {
+    throw new ApiError(403, "Another Admin has to mark your own claim as paid");
+  }
   if (claim.status !== "approved") {
     throw new ApiError(409, "Only an approved, unpaid claim can be marked paid");
   }

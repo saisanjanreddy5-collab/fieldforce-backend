@@ -218,6 +218,27 @@ async function isAdminUser(userId: string): Promise<boolean> {
   return result.rows[0]?.role === ROLES.ADMIN;
 }
 
+
+// An approver nobody can rely on: missing, deactivated, or whose role doesn't
+// hold the approve permission (any user can be picked as someone's
+// manager). Requests waiting on such a person go to every Admin instead of
+// sitting pending forever.
+function approverCannotActSql(column: string): string {
+  return `(${column} IS NULL OR EXISTS (SELECT 1 FROM users au WHERE au.id = ${column} AND (au.is_active = false OR NOT EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role = au.role AND rp.permission = 'leave_requests.approve'))))`;
+}
+
+async function approverCannotAct(approverId: string | null): Promise<boolean> {
+  const result = await pool.query<{ gone: boolean }>(`SELECT ${approverCannotActSql("$1::uuid")} AS gone`, [approverId]);
+  return result.rows[0].gone;
+}
+
+// Whether another active Admin exists who can decide (or pay) this
+// person's own request.
+async function anotherActiveAdminExists(userId: string): Promise<boolean> {
+  const result = await pool.query("SELECT 1 FROM users WHERE role = $1 AND is_active = true AND id <> $2 LIMIT 1", [ROLES.ADMIN, userId]);
+  return (result.rowCount ?? 0) > 0;
+}
+
 async function getDirectManagerId(userId: string): Promise<string | null> {
   const result = await pool.query<{ manager_id: string | null }>("SELECT manager_id FROM users WHERE id = $1", [userId]);
   return result.rows[0]?.manager_id ?? null;
@@ -236,31 +257,36 @@ export async function getBalances(userId: string) {
   const balances = await Promise.all(
     types.map(async (type) => {
       if (type.key === "comp_off") {
-        // Comp-off days taken are drawn from credits oldest-expiry first.
-        // Comparing *unexpired* credits against *all-time* usage (as before)
-        // meant that once early credits expired, days already taken from
-        // them were subtracted a second time from brand-new credits.
-        const creditsResult = await pool.query<{ days: string; expired: boolean }>(
-          "SELECT days, expires_at < CURRENT_DATE AS expired FROM comp_off_credits WHERE user_id = $1 ORDER BY expires_at ASC, earned_date ASC",
+        // Each comp-off day taken is drawn from a credit that was actually
+        // valid on that day (earned on/before it, not yet expired), soonest
+        // expiry first. Charging it to just any credit - e.g. one that had
+        // already expired unused - would leave a newer credit untouched and
+        // hand out a free extra day.
+        const creditsResult = await pool.query<{ days: string; earned_date: string; expires_at: string; expired: boolean }>(
+          "SELECT days, earned_date, expires_at, expires_at < CURRENT_DATE AS expired FROM comp_off_credits WHERE user_id = $1 ORDER BY expires_at ASC, earned_date ASC",
           [userId]
         );
-        const usedResult = await pool.query<{ total: string | null }>(
-          "SELECT COALESCE(SUM(days_count), 0) AS total FROM leave_requests WHERE user_id = $1 AND kind = 'comp_off' AND status = 'approved'",
+        const takenResult = await pool.query<{ start_date: string; days_count: string }>(
+          "SELECT start_date, days_count FROM leave_requests WHERE user_id = $1 AND kind = 'comp_off' AND status = 'approved' ORDER BY start_date ASC",
           [userId]
         );
-        const used = Number(usedResult.rows[0].total);
-        let toAllocate = used;
-        let available = 0;
-        let earned = 0;
-        for (const credit of creditsResult.rows) {
-          const days = Number(credit.days);
-          const drawn = Math.min(days, toAllocate);
-          toAllocate -= drawn;
-          if (!credit.expired) {
-            earned += days;
-            available += days - drawn;
+        const credits = creditsResult.rows.map((c) => ({ ...c, left: Number(c.days) }));
+        let used = 0;
+        for (const taken of takenResult.rows) {
+          let need = Number(taken.days_count);
+          used += need;
+          for (const credit of credits) {
+            if (need <= 0) break;
+            const validThatDay = credit.earned_date <= taken.start_date && credit.expires_at >= taken.start_date;
+            if (!validThatDay || credit.left <= 0) continue;
+            const drawn = Math.min(credit.left, need);
+            credit.left -= drawn;
+            need -= drawn;
           }
         }
+        const live = credits.filter((c) => !c.expired);
+        const earned = live.reduce((sum, c) => sum + Number(c.days), 0);
+        const available = live.reduce((sum, c) => sum + c.left, 0);
         return { ...type, entitlement: null, used, available, earned };
       }
 
@@ -395,8 +421,11 @@ export async function listPendingApprovals(userId: string) {
      WHERE lr.status = 'pending' AND (
        (lr.approver_id = $1 AND lr.approver_decision IS NULL)
        OR (lr.second_approver_id = $1 AND lr.approver_decision = 'approved' AND lr.second_approver_decision IS NULL)
-       OR ($2::boolean AND lr.approver_decision IS NULL AND lr.user_id <> $1
-           AND (lr.approver_id IS NULL OR EXISTS (SELECT 1 FROM users au WHERE au.id = lr.approver_id AND au.is_active = false)))
+       OR ($2::boolean AND lr.user_id <> $1 AND (
+             (lr.approver_decision IS NULL AND ${approverCannotActSql("lr.approver_id")})
+             OR (lr.approver_decision = 'approved' AND lr.second_approver_id IS NOT NULL AND lr.second_approver_decision IS NULL
+                 AND ${approverCannotActSql("lr.second_approver_id")})
+           ))
      )
      ORDER BY lr.created_at ASC`,
     [userId, await isAdminUser(userId)]
@@ -461,7 +490,9 @@ export async function createLeaveRequest(userId: string, input: CreateLeaveReque
   // named approver and lands in every Admin's queue (whichever Admin acts
   // first becomes the approver) instead of going through unchecked.
   const managerId = await getDirectManagerId(userId);
-  const autoApprove = managerId === null && (await isAdminUser(userId));
+  // Self-approval only for an Admin with nobody else able to decide - when
+  // other Admins exist, an Admin's own request goes to them like anyone's.
+  const autoApprove = managerId === null && (await isAdminUser(userId)) && !(await anotherActiveAdminExists(userId));
 
   let secondApproverId: string | null = null;
   const daysCount = input.kind === "half_day" ? 0.5 : countWorkingDays(input.startDate, input.endDate);
@@ -471,13 +502,21 @@ export async function createLeaveRequest(userId: string, input: CreateLeaveReque
 
   // The same days can't be requested twice - an overlapping pending or
   // approved request (any kind) would double-count them.
-  const overlap = await pool.query(
-    `SELECT 1 FROM leave_requests
-     WHERE user_id = $1 AND status IN ('pending', 'approved')
-       AND start_date <= $3 AND end_date >= $2
-     LIMIT 1`,
-    [userId, input.startDate, input.endDate]
-  );
+  // WFH isn't time off, so it never clashes with leave either way (someone
+  // on approved WFH who falls sick must still be able to apply for sick
+  // leave), and two half-days can share one date.
+  const overlap =
+    input.kind === "wfh"
+      ? { rowCount: 0 }
+      : await pool.query(
+          `SELECT 1 FROM leave_requests
+           WHERE user_id = $1 AND status IN ('pending', 'approved')
+             AND start_date <= $3 AND end_date >= $2
+             AND kind <> 'wfh'
+             AND NOT (kind = 'half_day' AND $4 = 'half_day')
+           LIMIT 1`,
+          [userId, input.startDate, input.endDate, input.kind]
+        );
   if ((overlap.rowCount ?? 0) > 0) {
     throw new ApiError(422, "You already have a leave request covering some of these dates");
   }
@@ -562,12 +601,15 @@ export async function decideLeaveRequest(requestId: string, deciderId: string, d
   // Admins pick up anything with no one able to act on it: no named
   // approver (no reporting manager), or a named approver who has since been
   // deactivated (e.g. left the company) - otherwise it's stuck forever.
-  const approverGone =
-    request.approver_id === null ||
-    ((await pool.query("SELECT 1 FROM users WHERE id = $1 AND is_active = false", [request.approver_id])).rowCount ?? 0) > 0;
-  const unassignedForAdmin = approverGone && request.user_id !== deciderId && (await isAdminUser(deciderId));
-  const isFirstApprover = (request.approver_id === deciderId || unassignedForAdmin) && request.approver_decision === null;
-  const isSecondApprover = request.second_approver_id === deciderId && request.approver_decision === "approved" && request.second_approver_decision === null;
+  const adminStandIn = request.user_id !== deciderId && (await isAdminUser(deciderId));
+  const isFirstApprover =
+    request.approver_decision === null && (request.approver_id === deciderId || (adminStandIn && (await approverCannotAct(request.approver_id))));
+  const isSecondApprover =
+    !isFirstApprover &&
+    request.approver_decision === "approved" &&
+    request.second_approver_decision === null &&
+    request.second_approver_id !== null &&
+    (request.second_approver_id === deciderId || (adminStandIn && (await approverCannotAct(request.second_approver_id))));
 
   if (!isFirstApprover && !isSecondApprover) {
     throw new ApiError(403, "You're not the approver for this request");
@@ -583,14 +625,14 @@ export async function decideLeaveRequest(requestId: string, deciderId: string, d
     const finalStatus = decision === "rejected" ? "rejected" : request.second_approver_id ? "pending" : "approved";
     decided = await pool.query(
       `UPDATE leave_requests SET approver_id = $4, approver_decision = $1, approver_decided_at = now(), status = $2, updated_at = now()
-       WHERE id = $3 AND approver_decision IS NULL`,
+       WHERE id = $3 AND approver_decision IS NULL AND status = 'pending'`,
       [decision, finalStatus, requestId, deciderId]
     );
   } else {
     decided = await pool.query(
-      `UPDATE leave_requests SET second_approver_decision = $1, second_approver_decided_at = now(), status = $2, updated_at = now()
-       WHERE id = $3 AND second_approver_decision IS NULL`,
-      [decision, decision, requestId]
+      `UPDATE leave_requests SET second_approver_id = $4, second_approver_decision = $1, second_approver_decided_at = now(), status = $2, updated_at = now()
+       WHERE id = $3 AND second_approver_decision IS NULL AND status = 'pending'`,
+      [decision, decision, requestId, deciderId]
     );
   }
   if (decided.rowCount === 0) {

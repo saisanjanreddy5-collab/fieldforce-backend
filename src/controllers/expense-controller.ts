@@ -49,9 +49,9 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
   }
   const parsedQuantity = quantity ? Number(quantity) : undefined;
   // Upper bound keeps quantity x per-unit limit inside the NUMERIC(10,2)
-  // policy_limit_at_submission column (100,000 km/nights/etc. is already far
+  // policy_limit_at_submission column (10,000 km/nights/etc. is already far
   // beyond any real claim).
-  if (quantity && (!Number.isFinite(parsedQuantity) || (parsedQuantity as number) <= 0 || (parsedQuantity as number) > 100_000)) {
+  if (quantity && (!Number.isFinite(parsedQuantity) || (parsedQuantity as number) <= 0 || (parsedQuantity as number) > 10_000)) {
     throw new ApiError(422, "Enter a valid quantity");
   }
 

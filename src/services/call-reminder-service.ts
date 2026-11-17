@@ -77,6 +77,7 @@ export async function sendDueCallReminders(): Promise<void> {
      -- excluded here rather than failing per-row inside the try/catch below.
      JOIN microsoft_connections mc ON mc.user_id = a.assigned_to
      WHERE a.type = 'call'
+       AND a.is_deleted = false
        AND a.status <> 'completed'
        AND a.reminder_sent_at IS NULL
        AND a.due_date IS NOT NULL

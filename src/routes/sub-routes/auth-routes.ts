@@ -4,7 +4,7 @@ import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody } from "../../middleware/validate-middleware";
 import { changePasswordSchema, loginSchema, logoutSchema, refreshSchema, registerSchema } from "../../validators/auth-validator";
-import { loginIpRateLimiter, loginRateLimiter, sessionRateLimiter } from "../../middleware/rate-limit-middleware";
+import { loginIpRateLimiter, loginRateLimiter, passwordChangeRateLimiter, sessionRateLimiter } from "../../middleware/rate-limit-middleware";
 
 const router = Router();
 
@@ -19,6 +19,6 @@ router.get("/me", requireAuth, authController.me);
 // Self-service, same "ungated by permission, just logged in" pattern as
 // PATCH /users/me - every role can change their own password, including
 // Call Center and Field Sales accounts.
-router.post("/change-password", requireAuth, validateBody(changePasswordSchema), authController.changePassword);
+router.post("/change-password", requireAuth, passwordChangeRateLimiter, validateBody(changePasswordSchema), authController.changePassword);
 
 export default router;

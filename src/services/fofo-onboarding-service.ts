@@ -275,6 +275,17 @@ async function pushToOnboardingAppOnce(leadId: string, requestingUserId: string,
   if (lead?.owner_id) {
     await deriveApprovalChain(leadId, lead.owner_id, lead.expected_value === null ? null : Number(lead.expected_value));
   }
+  // The "Regional head approval" step was marked not-applicable or pending
+  // from the expected value at the moment the chain was first built. If the
+  // value has since been raised above the threshold, that approval is now
+  // required - reopen it rather than pushing a high-value store without it.
+  const highValueThreshold = await getHighValueThreshold();
+  if (lead?.expected_value !== null && lead?.expected_value !== undefined && Number(lead.expected_value) > highValueThreshold) {
+    await pool.query(
+      "UPDATE lead_approval_steps SET status = 'pending' WHERE lead_id = $1 AND step_order = 3 AND status = 'not_applicable'",
+      [leadId]
+    );
+  }
   const steps = await pool.query<ApprovalStepRow>("SELECT * FROM lead_approval_steps WHERE lead_id = $1", [leadId]);
   if (steps.rows.some((s) => s.status === "rejected")) {
     throw new ApiError(422, "This handoff has a rejected approval step and cannot be pushed");

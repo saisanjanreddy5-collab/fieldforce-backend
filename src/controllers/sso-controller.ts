@@ -25,7 +25,11 @@ export const authorize = asyncHandler(async (req: Request, res: Response) => {
     // they have. The login page itself does a full-page redirect back here
     // (not an SPA navigate) once login succeeds, so this handler runs again
     // and takes the branch below.
-    const selfUrl = `${req.protocol}://${req.get("host")}${req.originalUrl}`;
+    // Built from the configured public address when one is set - behind
+    // nginx, req.protocol/host can read "http" / "localhost:8000", and the
+    // login page (safeSsoContinue) rightly refuses to follow such a link.
+    const publicBase = process.env.PUBLIC_BACKEND_BASE_URL?.replace(/\/+$/, "");
+    const selfUrl = `${publicBase || `${req.protocol}://${req.get("host")}`}${req.originalUrl}`;
     const loginUrl = `${env.FRONTEND_URL}/login?ssoContinue=${encodeURIComponent(selfUrl)}`;
     res.redirect(loginUrl);
     return;

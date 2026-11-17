@@ -95,6 +95,45 @@ const envSchema = z.object({
   SSO_TOKEN_SECRET: z.string().optional(),
 });
 
+// Settings whose built-in default only makes sense on a developer's own
+// machine (localhost, or SKIA's TEST registration server). Not fatal - a
+// server must never fail to start over this - but printed loudly at boot,
+// because on a real server each one silently breaks something: WhatsApp
+// attachments, Microsoft sign-in redirects, FOFO store registration going
+// to the test system, or the login cookie not being marked Secure.
+const DEV_ONLY_DEFAULTS: { key: string; effect: string }[] = [
+  { key: "NODE_ENV", effect: "login/SSO cookies are not marked Secure (set NODE_ENV=production on a server)" },
+  { key: "FRONTEND_URL", effect: "Microsoft connect / SSO send users back to http://localhost:5173" },
+  { key: "PUBLIC_BACKEND_BASE_URL", effect: "WhatsApp attachments get http://localhost:8000 links that K3/customers can't open" },
+  { key: "MS_REDIRECT_URI", effect: "Microsoft 365 sign-in redirects to localhost and fails" },
+  { key: "SKIA_FOFO_REGISTRATION_URL", effect: "FOFO 'push to onboarding app' registers stores on SKIA's TEST server" },
+];
+const missingDevDefaults = DEV_ONLY_DEFAULTS.filter(({ key }) => !process.env[key]);
+if (missingDevDefaults.length > 0) {
+  console.warn(
+    [
+      "WARNING - these settings are not set in .env and are using development defaults:",
+      ...missingDevDefaults.map(({ key, effect }) => `  - ${key}: ${effect}`),
+      "  (Fine on a developer machine; on devcrm/skiacrm set them in .env.)",
+    ].join("\n")
+  );
+}
+
+// Weak or shared JWT secrets: if the access and refresh secrets are the
+// same, a short-lived access token would also verify as a (legacy, no-jti)
+// refresh token - see auth-service.ts's refreshAccessToken, which refuses
+// that case - and short secrets are guessable. Loud warning, not a crash.
+{
+  const access = process.env.JWT_SECRET ?? "";
+  const refresh = process.env.JWT_REFRESH_SECRET ?? "";
+  if (access && refresh && access === refresh) {
+    console.warn("WARNING - JWT_SECRET and JWT_REFRESH_SECRET are identical. Set two different long random values in .env.");
+  }
+  if ((access && access.length < 32) || (refresh && refresh.length < 32)) {
+    console.warn("WARNING - JWT_SECRET / JWT_REFRESH_SECRET are shorter than 32 characters. Use long random values in .env.");
+  }
+}
+
 const parsed = envSchema.safeParse(process.env);
 
 if (!parsed.success) {

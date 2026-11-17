@@ -51,12 +51,17 @@ async function start(): Promise<void> {
   // imports fail outright with a generic 500 before a single row was even
   // read - confirmed by a real failed import, not guessed. 10mb comfortably
   // covers 5,000 rows even with long free-text fields (notes, addresses).
-  // Only that one route gets 10mb - every other route (including the
-  // public, unauthenticated QR/website/SSO/webhook endpoints) is capped at
-  // 1mb, so nobody can push huge bodies at the server through them.
-  const bulkImportJson = express.json({ limit: "10mb" });
+  // Bulk import parses its own (up to 10mb) body inside its route, only
+  // AFTER login + permission checks - parsing 10mb for an anonymous caller
+  // first would let anyone tie up the server. Login gets a tiny limit (it
+  // only ever carries an email + password); everything else, including the
+  // public QR/website/SSO/webhook endpoints, is capped at 1mb.
+  const loginJson = express.json({ limit: "10kb" });
   const defaultJson = express.json({ limit: "1mb" });
-  app.use((req, res, next) => (req.path === "/api/leads/bulk-import" ? bulkImportJson : defaultJson)(req, res, next));
+  app.use((req, res, next) => {
+    if (req.path === "/api/leads/bulk-import") return next();
+    return (req.path === "/api/auth/login" ? loginJson : defaultJson)(req, res, next);
+  });
   app.use(express.urlencoded({ extended: true }));
   app.use(cookieParser());
 

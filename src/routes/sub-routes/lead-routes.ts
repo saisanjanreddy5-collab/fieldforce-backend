@@ -1,4 +1,4 @@
-import { Router } from "express";
+import express, { Router } from "express";
 import * as leadController from "../../controllers/lead-controller";
 import * as opportunityController from "../../controllers/opportunity-controller";
 import * as activityController from "../../controllers/activity-controller";
@@ -47,6 +47,9 @@ router.post("/", requirePermission("leads.create"), validateBody(createLeadSchem
 router.post(
   "/bulk-import",
   requirePermission("leads.bulk_import"),
+  // Parsed here, not globally - see server.ts: only an authenticated Admin
+  // with bulk-import rights ever gets a 10mb body parsed.
+  express.json({ limit: "10mb" }),
   validateBody(bulkImportLeadsSchema),
   leadController.bulkImport
 );
@@ -59,7 +62,9 @@ router.post("/queue", requirePermission("leads.queue_create"), validateBody(crea
 router.get("/territories", requirePermission("leads.view"), leadController.listTerritories);
 // Also leads.queue_view: Call Center's own queue uses the same Source filter.
 router.get("/sources", requireAnyPermission("leads.view", "leads.queue_view"), leadController.listSources);
-router.get("/quick-filter-counts", requirePermission("leads.view"), leadController.quickFilterCounts);
+// Also leads.queue_view: Call Center opens lead details on the Leads page
+// (from global search/calendar), which loads these chips.
+router.get("/quick-filter-counts", requireAnyPermission("leads.view", "leads.queue_view"), leadController.quickFilterCounts);
 // "My queue"'s own second section (CallCenterPage.tsx) - leads this person
 // used to own and has since handed off via Send to Field. Same widened
 // check as the main GET / list route, for the same reason (Call Center

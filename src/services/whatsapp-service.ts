@@ -472,7 +472,10 @@ async function downloadInboundMediaToFile(mediaId: string, mimeType: string): Pr
 const DUPLICATE_DELIVERY_WINDOW = "10 minutes";
 
 export async function handleWebhookEvent(payload: WhatsappWebhookPayload): Promise<void> {
-  console.log("WhatsApp webhook payload:", JSON.stringify(payload));
+  // Counts only - the full payload carries customers' phone numbers and
+  // message text, which don't belong in server logs.
+  const entries = (payload as { entry?: unknown[] })?.entry ?? [];
+  console.log(`WhatsApp webhook received: ${Array.isArray(entries) ? entries.length : 0} entr(ies)`);
 
   for (const entry of payload.entry ?? []) {
     for (const change of entry.changes ?? []) {
@@ -515,21 +518,24 @@ export async function handleWebhookEvent(payload: WhatsappWebhookPayload): Promi
         // still gets recorded (so the thread shows "a photo arrived"),
         // just without a working link, rather than vanishing like every
         // media message did before this whole branch existed.
-        let mediaUrl: string | null = null;
-        let mediaFileName: string | null = null;
+        // Row first, file second: the download can take up to a minute, and a
+        // provider retry arriving meanwhile must find this message already
+        // recorded (the duplicate check above) instead of saving it twice.
+        const saved = await pool.query<{ id: string }>(
+          `INSERT INTO whatsapp_messages (lead_id, direction, body, status, wa_message_id, media_mime_type, media_file_name)
+           VALUES ($1, 'inbound', $2, 'received', $3, $4, $5) RETURNING id`,
+          [leadId, media!.caption ?? null, inbound.id, media!.mime_type, media!.filename ?? null]
+        );
         try {
           const { publicFilename } = await downloadInboundMediaToFile(media!.id, media!.mime_type);
-          mediaUrl = buildPublicMediaUrl(publicFilename);
-          mediaFileName = media!.filename ?? publicFilename;
+          await pool.query("UPDATE whatsapp_messages SET media_url = $1, media_file_name = $2 WHERE id = $3", [
+            buildPublicMediaUrl(publicFilename),
+            media!.filename ?? publicFilename,
+            saved.rows[0].id,
+          ]);
         } catch (err) {
           console.error(`Failed to download inbound WhatsApp media ${media!.id}:`, err);
         }
-
-        await pool.query(
-          `INSERT INTO whatsapp_messages (lead_id, direction, body, status, wa_message_id, media_url, media_mime_type, media_file_name)
-           VALUES ($1, 'inbound', $2, 'received', $3, $4, $5, $6)`,
-          [leadId, media!.caption ?? null, inbound.id, mediaUrl, media!.mime_type, mediaFileName]
-        );
       }
 
       for (const status of change.value?.statuses ?? []) {

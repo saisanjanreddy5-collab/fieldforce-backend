@@ -55,7 +55,7 @@ const SUBTREE_CTE = `
 // who opens Reporting lines (or Territory & targets) triggers it.
 async function applyDueTransfers(): Promise<void> {
   const due = await pool.query<ScheduledTransferRow>(
-    "SELECT * FROM scheduled_transfers WHERE status = 'scheduled' AND effective_date <= CURRENT_DATE"
+    "SELECT * FROM scheduled_transfers WHERE status = 'scheduled' AND effective_date <= CURRENT_DATE ORDER BY effective_date ASC, created_at ASC"
   );
 
   for (const row of due.rows) {
@@ -172,12 +172,28 @@ export async function createTerritoryTransfer(input: CreateTerritoryTransferInpu
   // users.territory is unique - if someone else already holds it, the
   // transfer could never apply (it would just fail and stay "scheduled"
   // forever), so refuse it up front with a clear reason instead.
+  // ...unless that person is themselves already scheduled to move off it
+  // by the same date (a planned handover), and never if another pending
+  // transfer is already heading into the same territory.
   const taken = await pool.query<{ name: string }>(
-    "SELECT name FROM users WHERE territory = $1 AND id <> $2",
-    [input.newTerritory, input.fromUserId]
+    `SELECT u.name FROM users u
+     WHERE u.territory = $1 AND u.id <> $2
+       AND NOT EXISTS (
+         SELECT 1 FROM scheduled_transfers st
+         WHERE st.status = 'scheduled' AND st.from_user_id = u.id AND st.old_territory = $1
+           AND st.transfer_type = 'territory' AND st.effective_date <= $3
+       )`,
+    [input.newTerritory, input.fromUserId, input.effectiveDate]
   );
   if (taken.rows.length > 0) {
     throw new ApiError(409, `This territory already belongs to ${taken.rows[0].name}`);
+  }
+  const incoming = await pool.query(
+    "SELECT 1 FROM scheduled_transfers WHERE status = 'scheduled' AND transfer_type = 'territory' AND new_territory = $1 AND from_user_id <> $2 LIMIT 1",
+    [input.newTerritory, input.fromUserId]
+  );
+  if ((incoming.rowCount ?? 0) > 0) {
+    throw new ApiError(409, "Another scheduled transfer is already moving someone into this territory");
   }
 
   const counts = await pool.query<{ leads: string }>(

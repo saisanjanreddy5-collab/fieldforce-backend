@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { decimal12_2 } from "./money";
 
 const uuid = z.string().uuid();
 
@@ -178,12 +179,12 @@ export const createLeadSchema = z.object({
   // number anywhere in it is never legitimate.
   nearestCocoStore: z.string().refine((v) => !/-\d/.test(v), "Can't contain a negative number").optional(),
   signageStatus: z.string().optional(),
-  securityDeposit: z.coerce.number().optional(),
-  openingStock: z.coerce.number().optional(),
+  securityDeposit: decimal12_2().min(0, "Can't be negative").optional(),
+  openingStock: decimal12_2().min(0, "Can't be negative").optional(),
   // Same reasoning as nearestCocoStore above - "Slab B — 22%" mixes a tier
   // label with a rate, stays free text, just can't go negative.
   marginSlab: z.string().refine((v) => !/-\d/.test(v), "Can't contain a negative number").optional(),
-  creditLimitRequested: z.coerce.number().optional(),
+  creditLimitRequested: decimal12_2().min(0, "Can't be negative").optional(),
   creditCategory: z.string().optional(),
   paymentTerms: z.coerce.number().min(0).int().optional(),
   targetGoLive: z.string().optional(),
