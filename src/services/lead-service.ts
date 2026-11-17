@@ -226,6 +226,7 @@ export interface CreateLeadInput {
 
 export interface ListLeadsFilters {
   status?: string;
+  opportunityReady?: boolean;
   ownerId?: string;
   zoneId?: string;
   stateId?: string;
@@ -1065,6 +1066,12 @@ export function buildLeadFilterConditions(
   )`);
   conditions.push(AGENT_WORKED_STAGE_CLAUSE);
 
+  if (filters.opportunityReady) {
+    // Same rule convertLeadToOpportunity enforces: the lead has been handed
+    // to Field Sales (its owner is a Field Sales Executive), whatever stage
+    // it is at - and it isn't closed as lost.
+    conditions.push(`EXISTS (SELECT 1 FROM users ou WHERE ou.id = l.owner_id AND ou.role = 'agent') AND l.status <> 'Closed Lost'`);
+  }
   if (filters.status) {
     // Comma-separated accepted too (e.g. "New,FLC,SLC") - lets a caller like
     // the Call Center queue fetch every tier stage it cares about in one

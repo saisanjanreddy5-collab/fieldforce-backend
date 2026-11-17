@@ -267,6 +267,9 @@ const queryBoolean = z
 
 export const listLeadsQuerySchema = z.object({
   status: z.string().optional(),
+  // Only leads an opportunity can be created for (owned by Field Sales, not
+  // closed-lost) - the exact rule convertLeadToOpportunity enforces.
+  opportunityReady: z.enum(["true", "false"]).optional().transform((v) => v === "true"),
   ownerId: uuid.optional(),
   zoneId: uuid.optional(),
   stateId: uuid.optional(),
