@@ -48,7 +48,9 @@ export async function registerFofoUser(input: RegisterFofoUserInput): Promise<Re
       user_name: input.userName,
       store_app_use_phone_number: input.phoneNumber,
       is_from_cmr: true,
-      cmr_token: env.SKIA_FOFO_CMR_TOKEN,
+      // Trimmed: a stray space or Windows line ending pasted into .env is
+      // invisible but makes SKIA reject the token as invalid.
+      cmr_token: env.SKIA_FOFO_CMR_TOKEN?.trim(),
     }),
   });
 
@@ -58,7 +60,17 @@ export async function registerFofoUser(input: RegisterFofoUserInput): Promise<Re
     if (isAlreadyRegisteredMessage(message)) {
       return { alreadyRegistered: true };
     }
-    throw new ApiError(502, `SKIA FOFO user registration failed: ${message}`);
+    // Name the server that answered - "Invalid CMR token" almost always
+    // means the token belongs to a different SKIA environment (e.g. a live
+    // token sent to SKIA's test server because SKIA_FOFO_REGISTRATION_URL
+    // isn't set in .env and fell back to the test default).
+    let server = "SKIA";
+    try {
+      server = new URL(env.SKIA_FOFO_REGISTRATION_URL!).host;
+    } catch {
+      // keep the generic name
+    }
+    throw new ApiError(502, `SKIA FOFO user registration failed (${server}): ${message}`);
   }
   return { alreadyRegistered: false };
 }
