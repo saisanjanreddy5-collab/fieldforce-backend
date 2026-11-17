@@ -10,13 +10,27 @@ export const loginRateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator: (req: Request) => {
-    const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+    // Capped: the key is kept in memory for the whole window, so an
+    // unbounded attacker-supplied "email" must not be able to bloat it.
+    const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase().slice(0, 254) : "";
     return `${ipKeyGenerator(req.ip ?? "")}|${email}`;
   },
   message: {
     success: false,
     message: "Too many attempts. Please try again later.",
   },
+});
+
+// Changing your own password checks the current one - without a limit, a
+// stolen session could be used to guess it. Keyed per logged-in user (runs
+// after requireAuth).
+export const passwordChangeRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req: Request) => (req as Request & { user?: { id: string } }).user?.id ?? ipKeyGenerator(req.ip ?? ""),
+  message: { success: false, message: "Too many attempts. Please try again later." },
 });
 
 // Credential stuffing (many different emails from one source) - a much

@@ -289,7 +289,12 @@ export async function createTables(): Promise<void> {
       name VARCHAR(100) NOT NULL UNIQUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
-    `INSERT INTO roles (name) VALUES ('admin'), ('manager'), ('agent') ON CONFLICT (name) DO NOTHING`,
+    // call_center is created here too (not only where that tier was added
+    // further down) - permissions are granted to it ~500 lines before that
+    // point, and role_permissions.role references roles(name), so on a
+    // brand-new empty database those grants failed and the server could not
+    // start at all.
+    `INSERT INTO roles (name) VALUES ('admin'), ('manager'), ('agent'), ('call_center') ON CONFLICT (name) DO NOTHING`,
 
     `CREATE TABLE IF NOT EXISTS levels (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

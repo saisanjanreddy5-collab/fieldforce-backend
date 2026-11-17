@@ -182,6 +182,19 @@ export async function logCallDisposition(leadId: string, input: LogCallDispositi
   // Activity Calendar's own "+ Add action" - same table, same status
   // convention ('pending', createActivityForLead's own default), same
   // overdue/due-today logic, no separate code path to keep in sync.
+  // The call being logged right now IS the follow-up any scheduled call on
+  // this lead that's already due (or due within the next 15 minutes) was
+  // waiting for - close those first. Nothing else ever closes a call-back
+  // (Call Center can't edit activities), so without this they pile up as
+  // permanently overdue, flood the rep's Call queue, and block booking the
+  // next call-back via the 15-minute clash check.
+  await pool.query(
+    `UPDATE activities SET status = 'completed', updated_at = now()
+     WHERE lead_id = $1 AND type = 'call' AND status <> 'completed' AND is_deleted = false
+       AND due_date IS NOT NULL AND due_date <= now() + interval '15 minutes'`,
+    [leadId]
+  );
+
   if (input.disposition === "Call Back" && input.callbackAt) {
     await createActivityForLead(
       leadId,

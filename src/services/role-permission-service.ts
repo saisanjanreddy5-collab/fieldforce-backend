@@ -58,6 +58,11 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "call_center.view",
     "support_tickets.view", "support_tickets.create", "support_tickets.update",
     "leads.call_log", "leads.qualify", "leads.send_to_field", "leads.reassign", "leads.queue_create",
+    "leads.escalate",
+    "lead_inquiry_options.view", "lead_inquiry_options.manage",
+    "sales_orders.view", "sales_orders.create", "sales_orders.update", "sales_orders.delete",
+    "invoices.view", "invoices.create", "invoices.update", "invoices.delete",
+    "payments.view", "payments.create", "payments.update", "payments.delete",
   ],
   [ROLES.MANAGER]: [
     "users.view",
@@ -102,6 +107,11 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "call_center.view",
     "support_tickets.view", "support_tickets.create", "support_tickets.update",
     "leads.call_log", "leads.qualify", "leads.send_to_field", "leads.reassign", "leads.queue_create",
+    "leads.escalate",
+    "lead_inquiry_options.view",
+    "sales_orders.view", "sales_orders.create", "sales_orders.update", "sales_orders.delete",
+    "invoices.view", "invoices.create", "invoices.update", "invoices.delete",
+    "payments.view", "payments.create", "payments.update", "payments.delete",
   ],
   [ROLES.AGENT]: [
     "leads.view", "leads.create", "leads.update", "leads.delete", "leads.share",
@@ -130,6 +140,10 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "quotes.view", "quotes.create", "quotes.update",
     "customers.view", "customers.create", "customers.update",
     "support_tickets.view", "support_tickets.create", "support_tickets.update",
+    "lead_inquiry_options.view",
+    "sales_orders.view", "sales_orders.create", "sales_orders.update", "sales_orders.delete",
+    "invoices.view", "invoices.create", "invoices.update", "invoices.delete",
+    "payments.view", "payments.create", "payments.update", "payments.delete",
   ],
   // A real, separate account for Call Center employees - their own queue
   // only (add a contact who called in directly via leads.queue_create, view/
@@ -146,6 +160,8 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "leads.call_log",
     "leads.qualify",
     "leads.send_to_field",
+    "leads.escalate",
+    "lead_inquiry_options.view",
     "activities.view",
     "activities.create",
     "whatsapp.view",
@@ -233,6 +249,12 @@ async function wouldOrphanCriticalPermission(roleBeingChanged: string, permissio
 // requirePermission-gated route - which, after the Phase 2 migration, is
 // every route that used to be a hardcoded requireRole check.
 export async function setRolePermission(role: string, permission: string, granted: boolean): Promise<void> {
+  // The Admin tier can never lose these two - it's the only tier that can
+  // fix a mistake here, and another tier merely holding "view" (e.g. the
+  // unused Manager tier) doesn't make a lock-out recoverable.
+  if (!granted && CRITICAL_PERMISSIONS.includes(permission) && role === ROLES.ADMIN) {
+    throw new ApiError(409, "The Admin tier always keeps access to Permissions - this can't be removed.");
+  }
   if (!granted && CRITICAL_PERMISSIONS.includes(permission) && (await wouldOrphanCriticalPermission(role, permission))) {
     throw new ApiError(409, "At least one role must always be able to manage permissions - grant it to another role first.");
   }

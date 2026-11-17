@@ -19,7 +19,7 @@ function setSsoSessionCookie(res: Response, userId: string): void {
 }
 
 export const register = asyncHandler(async (req: Request, res: Response) => {
-  const user = await authService.registerUser(req.body);
+  const user = await authService.registerUser(req.body, req.user!.id);
   sendSuccess(res, user, "User created", 201);
 });
 

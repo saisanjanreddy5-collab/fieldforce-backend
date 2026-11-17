@@ -180,6 +180,19 @@ export async function listUsers(requestingUserId: string, requestingRole: Role, 
 // Only the "Add user" flow set these fields before now - there was no way to
 // go back and set/change a territory or sales team on someone already
 // created (including whoever ran the seed script for the very first admin).
+// Only someone who is a real Admin in the database can create or promote an
+// Admin account or reset an Admin's password - holding the permission is not
+// enough, because "Grant full Administrator access" can hand every
+// permission to another tier temporarily, and anything done with it (a
+// self-promotion, a new Admin, a taken-over Admin login) would survive the
+// "Reset role to default" that ends the elevation.
+export async function assertActorIsRealAdmin(actorId: string | undefined, action: string): Promise<void> {
+  const actor = actorId ? await pool.query<{ role: string }>("SELECT role FROM users WHERE id = $1", [actorId]) : null;
+  if (actor?.rows[0]?.role !== ROLES.ADMIN) {
+    throw new ApiError(403, `Only an Admin can ${action}`);
+  }
+}
+
 export async function updateUser(id: string, updates: UpdateUserInput, changedBy: string) {
   const managerIdProvided = updates.managerId !== undefined;
   let previousManagerId: string | null = null;
@@ -266,6 +279,20 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
   // the level (levelId === "") leaves role untouched - there's no tier to
   // derive from "no level".
   const role = updates.levelId ? await getLevelSecurityTier(updates.levelId) : undefined;
+
+  // Nobody changes their own level (a self-promotion would survive the end
+  // of a temporary "Grant full Administrator access"), and only a real Admin
+  // can move anyone INTO the admin tier.
+  if (updates.levelId) {
+    const current = await pool.query<{ level_id: string | null }>("SELECT level_id FROM users WHERE id = $1", [id]);
+    const levelChanges = current.rows[0]?.level_id !== updates.levelId;
+    if (levelChanges && id === changedBy) {
+      throw new ApiError(403, "You can't change your own level - ask another Admin");
+    }
+    if (levelChanges && role === ROLES.ADMIN) {
+      await assertActorIsRealAdmin(changedBy, "move someone into the Admin level");
+    }
+  }
 
   // Same lock-out guardrails as disabling login above, applied to a Level
   // change that would take an Admin out of the admin tier.

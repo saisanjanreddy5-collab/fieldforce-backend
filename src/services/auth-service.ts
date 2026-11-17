@@ -6,7 +6,7 @@ import { env } from "../config/env";
 import { ApiError } from "../utils/ApiError";
 import { getPermissionsForRole } from "./permission-service";
 import { getLevelSecurityTier } from "./level-service";
-import { getNextEmployeeCode } from "./user-service";
+import { assertActorIsRealAdmin, getNextEmployeeCode } from "./user-service";
 import { recordAuditEvent } from "./audit-log-service";
 import { Role, ROLES } from "../utils/roles";
 
@@ -136,7 +136,7 @@ async function signRefreshToken(user: UserRow): Promise<string> {
   return token;
 }
 
-export async function registerUser(input: RegisterInput) {
+export async function registerUser(input: RegisterInput, actorId?: string) {
   const existing = await pool.query<{ id: string }>("SELECT id FROM users WHERE email = $1", [input.email]);
   if (existing.rows.length > 0) {
     throw new ApiError(409, "A user with this email already exists");
@@ -170,6 +170,9 @@ export async function registerUser(input: RegisterInput) {
   // (seedAdmin.ts, and anyone marked Administrator/Finance with no ladder
   // position) still pass role directly.
   const role = input.levelId ? await getLevelSecurityTier(input.levelId) : input.role;
+  if (role === ROLES.ADMIN && actorId) {
+    await assertActorIsRealAdmin(actorId, "create an Admin account");
+  }
 
   // A field employee with no pincode can never be matched to a lead by the
   // Call Center -> Field Sales engine (lead-call-center-service.ts) - this
@@ -267,6 +270,13 @@ export async function refreshAccessToken(refreshToken: string) {
   if (payload.purpose !== undefined) {
     throw new ApiError(401, "Invalid or expired refresh token");
   }
+  // With identical access/refresh secrets, an ordinary access token would
+  // also verify here as an old-style (no jti) refresh token - and could then
+  // be renewed forever, unaffected by logout. Old-style tokens are only
+  // trusted when the two secrets differ.
+  if (!payload.jti && env.JWT_SECRET === env.JWT_REFRESH_SECRET) {
+    throw new ApiError(401, "Invalid or expired refresh token");
+  }
 
   // Older, already-issued tokens signed before this field existed have no
   // jti - left to fall back to the pre-existing signature+expiry+is_active
@@ -347,9 +357,12 @@ export async function adminResetPassword(
   actorId: string,
   ipAddress?: string | null
 ): Promise<void> {
-  const target = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [targetUserId]);
+  const target = await pool.query<{ name: string; role: string }>("SELECT name, role FROM users WHERE id = $1", [targetUserId]);
   if (target.rows.length === 0) {
     throw new ApiError(404, "User not found");
+  }
+  if (target.rows[0].role === ROLES.ADMIN) {
+    await assertActorIsRealAdmin(actorId, "reset an Admin's password");
   }
 
   const passwordHash = await bcrypt.hash(newPassword, 10);

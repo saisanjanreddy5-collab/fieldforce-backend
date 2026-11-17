@@ -24,7 +24,9 @@ const SUBTREE_CTE = `
 // someone outside the manager's team on a lead the manager genuinely owns
 // would vanish from this module despite showing in that lead's own
 // Activity tab.
-const VISIBILITY_CLAUSE = ACTIVITY_VISIBILITY_CLAUSE;
+// Deleted (archived) calls never count anywhere in Call Center - not in the
+// queue, the stats, or the call log.
+const VISIBILITY_CLAUSE = `(a.is_deleted = false AND ${ACTIVITY_VISIBILITY_CLAUSE})`;
 
 // Same join shape as activity-service.ts's own listActivitiesForUser: a call
 // can in principle be tied to an opportunity instead of a lead directly (the

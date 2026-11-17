@@ -73,11 +73,15 @@ export interface TeamRollupGroup {
   people: TeamRollupPerson[];
 }
 
+// The current month in India time, not the server's own clock - a server
+// running in UTC would otherwise show last month's numbers from midnight
+// to 05:30 IST on the 1st of every month.
 function monthBoundaries(): { start: string; end: string } {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = now.getMonth() + 1;
-  const lastDay = new Date(year, month, 0).getDate();
+  const [year, month] = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit" })
+    .format(new Date())
+    .split("-")
+    .map(Number);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
   const pad = (n: number) => String(n).padStart(2, "0");
   return { start: `${year}-${pad(month)}-01`, end: `${year}-${pad(month)}-${pad(lastDay)}` };
 }
