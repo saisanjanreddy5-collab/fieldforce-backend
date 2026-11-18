@@ -3,6 +3,7 @@ import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import { pool } from "../config/db";
 import { env } from "../config/env";
+import { queueEmployeeHelpdeskSync } from "./frappe-helpdesk-service";
 import { ApiError } from "../utils/ApiError";
 import { getPermissionsForRole } from "./permission-service";
 import { getLevelSecurityTier } from "./level-service";
@@ -225,6 +226,8 @@ export async function registerUser(input: RegisterInput, actorId?: string) {
     );
   }
 
+  // Admin / Field Sales get their Helpdesk agent account straight away.
+  queueEmployeeHelpdeskSync(result.rows[0].id);
   return toPublicUser(result.rows[0]);
 }
 

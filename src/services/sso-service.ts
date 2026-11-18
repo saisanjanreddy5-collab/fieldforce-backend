@@ -171,3 +171,73 @@ export async function getUserInfoFromAccessToken(authorizationHeader: string | u
   }
   return { email: user.email, name: user.name };
 }
+
+// --- Helpdesk access + one-click launch -------------------------------------
+
+// Who may enter Frappe Helpdesk through FieldForce at all: an active user
+// whose role holds support_tickets.view (Admin and Field Sales by default;
+// never Call Center). Checked both when starting the one-click launch and at
+// /sso/authorize itself - the second check is what actually blocks someone
+// who skips the CRM and clicks "Login with FieldForce" on Frappe's own page.
+export async function canUseHelpdesk(userId: string): Promise<boolean> {
+  const result = await pool.query(
+    `SELECT 1 FROM users u
+     JOIN role_permissions rp ON rp.role = u.role AND rp.permission = 'support_tickets.view'
+     WHERE u.id = $1 AND u.is_active = true`,
+    [userId]
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+function frappeBaseUrl(): string | null {
+  const base = process.env.FRAPPE_BASE_URL?.trim().replace(/\/+$/, "");
+  return base ? base : null;
+}
+
+// Only Helpdesk paths may be passed through as the landing page - never an
+// arbitrary URL (that would make this an open redirect).
+export function safeHelpdeskPath(raw: unknown): string {
+  return typeof raw === "string" && /^\/helpdesk(\/[A-Za-z0-9/_\-.?=&%]*)?$/.test(raw) ? raw : "/helpdesk";
+}
+
+// Frappe 16 only accepts an OAuth login that IT started (its state token is
+// generated and remembered by Frappe - a state we invent is rejected as
+// "Your login attempt is invalid or has expired"). So instead of building the
+// authorize URL ourselves, ask Frappe's own login page for a fresh
+// "Login with FieldForce" link (which carries a Frappe-issued state) and send
+// the browser straight to it - the user never sees Frappe's login form.
+// Returns null if Frappe can't be reached or the button isn't there, so the
+// caller can fall back to Frappe's normal login page.
+export async function getFrappeOneClickLoginUrl(redirectTo: string): Promise<string | null> {
+  const base = frappeBaseUrl();
+  const clientId = env.SSO_FRAPPE_CLIENT_ID;
+  if (!base || !clientId) return null;
+  try {
+    const response = await fetch(`${base}/login?redirect-to=${encodeURIComponent(redirectTo)}`, {
+      signal: AbortSignal.timeout(8_000),
+      headers: { Accept: "text/html" },
+    });
+    if (!response.ok) return null;
+    const html = await response.text();
+    for (const match of html.matchAll(/href="([^"]*\/sso\/authorize\?[^"]*)"/g)) {
+      const candidate = match[1].replace(/&amp;/g, "&");
+      try {
+        const url = new URL(candidate);
+        if (url.searchParams.get("client_id") === clientId && url.searchParams.get("state")) {
+          return url.toString();
+        }
+      } catch {
+        // not a usable URL - keep looking
+      }
+    }
+    return null;
+  } catch (err) {
+    console.error("Helpdesk one-click login: couldn't fetch Frappe's login link -", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+export function frappeLoginPageUrl(redirectTo: string): string | null {
+  const base = frappeBaseUrl();
+  return base ? `${base}/login?redirect-to=${encodeURIComponent(redirectTo)}` : null;
+}

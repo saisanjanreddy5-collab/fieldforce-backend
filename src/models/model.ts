@@ -2435,6 +2435,23 @@ Regards,', 'active', 4),
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
     `CREATE INDEX IF NOT EXISTS idx_sso_authorization_codes_user_id ON sso_authorization_codes(user_id)`,
+
+    // Frappe Helpdesk sync (frappe-helpdesk-service.ts): what each employee's
+    // Helpdesk access was last synced as ('agent_manager' | 'agent' | 'none')
+    // and which email a customer's Helpdesk account was last created for -
+    // the reconcile job only calls Frappe for rows where these no longer
+    // match, so a normal run makes no external calls at all.
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS helpdesk_access VARCHAR(20)`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS helpdesk_synced_at TIMESTAMPTZ`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS helpdesk_synced_email VARCHAR(255)`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS helpdesk_synced_owner VARCHAR(255)`,
+    // Helpdesk tickets FieldForce assigned to their customer's owner - so an
+    // owner change only takes back assignments FieldForce made, never manual ones.
+    `CREATE TABLE IF NOT EXISTS helpdesk_ticket_assignments (
+      ticket VARCHAR(140) PRIMARY KEY,
+      assignee VARCHAR(255) NOT NULL,
+      assigned_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
   ];
 
   // One dedicated connection with the pool's per-query timeout lifted - an
