@@ -68,7 +68,9 @@ export const sendEmailForLead = asyncHandler(async (req: Request, res: Response)
   const files = (req.files as Express.Multer.File[] | undefined) ?? [];
   const attachments = files.map((file) => ({
     filename: file.originalname,
-    contentType: file.mimetype,
+    // A .csv can arrive labelled text/plain or octet-stream - send it on as
+    // a real CSV so the recipient's mail app opens it as a spreadsheet.
+    contentType: microsoftService.isCsvFileName(file.originalname) ? "text/csv" : file.mimetype,
     content: file.buffer,
   }));
   await microsoftService.sendMailForLead(

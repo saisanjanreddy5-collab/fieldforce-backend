@@ -434,8 +434,19 @@ interface CustomerSyncRow {
 
 // Takes portal access away again (deal no longer Won, customer deleted, email
 // removed). Only a portal user FieldForce itself created is disabled - never
-// a staff account or someone who signed up on the portal on their own.
-async function revokeCustomerPortal(email: string): Promise<void> {
+// a staff account or someone who signed up on the portal on their own - and
+// never while another customer that still qualifies uses the same email (one
+// person can hold several outlets/franchises on one address; they share a
+// single portal login).
+async function revokeCustomerPortal(email: string, customerId: string): Promise<void> {
+  const stillUsed = await pool.query(
+    `SELECT 1 FROM customers c
+     WHERE c.id <> $1 AND c.is_deleted = false AND lower(trim(c.email)) = lower(trim($2))
+       AND ${CUSTOMER_PORTAL_QUALIFIES_SQL}
+     LIMIT 1`,
+    [customerId, email]
+  );
+  if ((stillUsed.rowCount ?? 0) > 0) return;
   const user = await getDoc<FrappeUser & { owner?: string }>("User", email);
   if (user && user.enabled && user.user_type === "Website User" && user.owner?.toLowerCase() === (await apiUser())) {
     await frappe("PUT", resource("User", email), { enabled: 0 });
@@ -523,7 +534,7 @@ async function syncCustomerNow(customerId: string, options: { sendInvite?: boole
   const email = customer.email?.trim().toLowerCase() || null;
 
   if (customer.is_deleted || !email || !customer.qualifies) {
-    if (customer.helpdesk_synced_email) await revokeCustomerPortal(customer.helpdesk_synced_email);
+    if (customer.helpdesk_synced_email) await revokeCustomerPortal(customer.helpdesk_synced_email, customerId);
     await pool.query("DELETE FROM helpdesk_customer_invites WHERE customer_id = $1", [customerId]);
     await pool.query(
       "UPDATE customers SET helpdesk_synced_email = NULL, helpdesk_synced_owner = NULL, helpdesk_invite_pending = false WHERE id = $1",
@@ -536,7 +547,7 @@ async function syncCustomerNow(customerId: string, options: { sendInvite?: boole
   const ownerEmail = customer.owner_email ?? "";
   // The email changed: the old address's portal login goes away.
   if (customer.helpdesk_synced_email && customer.helpdesk_synced_email !== email) {
-    await revokeCustomerPortal(customer.helpdesk_synced_email);
+    await revokeCustomerPortal(customer.helpdesk_synced_email, customerId);
   }
 
   // Account name carries the FieldForce customer number, so two customers

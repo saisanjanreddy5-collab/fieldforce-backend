@@ -25,13 +25,23 @@ const ALLOWED_ATTACHMENT_MIME_TYPES = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "application/vnd.ms-excel",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv",
+  "application/csv",
+  "text/comma-separated-values",
 ]);
+
+// Browsers label .csv files inconsistently (text/csv, application/vnd.ms-excel
+// when Excel is installed on Windows, text/plain or application/octet-stream
+// otherwise), so a .csv file name is accepted whatever type it arrives with.
+export function isCsvFileName(name: string): boolean {
+  return /\.csv$/i.test(name.trim());
+}
 
 export const emailAttachmentUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 3 * 1024 * 1024, files: 5 },
   fileFilter: (_req, file, cb) => {
-    if (!ALLOWED_ATTACHMENT_MIME_TYPES.has(file.mimetype)) {
+    if (!ALLOWED_ATTACHMENT_MIME_TYPES.has(file.mimetype) && !isCsvFileName(file.originalname)) {
       cb(new ApiError(422, "That file type isn't supported for email attachments"));
       return;
     }
