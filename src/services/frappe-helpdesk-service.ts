@@ -415,6 +415,10 @@ const customerLabel = (customerNumber: number) => `C-${String(customerNumber).pa
 export const CUSTOMER_PORTAL_QUALIFIES_SQL = `(c.helpdesk_access_manual OR EXISTS (
   SELECT 1 FROM opportunities o WHERE o.lead_id = c.lead_id AND o.stage = 'won' AND o.is_deleted = false))`;
 
+// Bump when the Helpdesk account setup changes so the reconcile redoes every
+// already-synced customer once (2 = contact added to the account member list).
+const CUSTOMER_SYNC_VERSION = 2;
+
 export const INVITE_TTL_DAYS = 7;
 const PORTAL_PATH = "/helpdesk/my-tickets";
 
@@ -451,6 +455,37 @@ async function revokeCustomerPortal(email: string, customerId: string): Promise<
   if (user && user.enabled && user.user_type === "Website User" && user.owner?.toLowerCase() === (await apiUser())) {
     await frappe("PUT", resource("User", email), { enabled: 0 });
   }
+}
+
+// Helpdesk 16 decides which customer account a new ticket belongs to from the
+// account's own member list (HD Customer -> contacts, "HD Customer Member"),
+// NOT from the Contact's links - a contact that is only linked lands its
+// tickets on no account (or some other account it's a member of), so the
+// Field Sales owner never gets them. Only FieldForce's own contact is added
+// or removed; members staff added by hand are kept.
+interface AccountMemberRow {
+  name?: string;
+  contact_name: string;
+  is_manager?: number;
+}
+
+async function setAccountMember(accountName: string, contactName: string, member: boolean): Promise<void> {
+  const account = await getDoc<{ contacts?: AccountMemberRow[] }>("HD Customer", accountName);
+  if (!account) return;
+  const rows = account.contacts ?? [];
+  const has = rows.some((r) => r.contact_name === contactName);
+  if (has === member) return;
+  const kept = rows
+    .filter((r) => r.contact_name !== contactName)
+    .map((r) => ({ name: r.name, contact_name: r.contact_name, is_manager: r.is_manager ?? 0 }));
+  await frappe("PUT", resource("HD Customer", accountName), {
+    contacts: member ? [...kept, { contact_name: contactName, is_manager: 1 }] : kept,
+  });
+}
+
+async function removeAccountMemberByEmail(accountName: string, email: string): Promise<void> {
+  const contactName = await findName("Contact", [["email_id", "=", email]]);
+  if (contactName) await setAccountMember(accountName, contactName, false);
 }
 
 let brandNameCache: string | null = null;
@@ -533,8 +568,13 @@ async function syncCustomerNow(customerId: string, options: { sendInvite?: boole
   if (!customer) return;
   const email = customer.email?.trim().toLowerCase() || null;
 
+  const accountName = `${(customer.company_name || customer.full_name).trim()} (${customerLabel(customer.customer_number)})`;
+
   if (customer.is_deleted || !email || !customer.qualifies) {
-    if (customer.helpdesk_synced_email) await revokeCustomerPortal(customer.helpdesk_synced_email, customerId);
+    if (customer.helpdesk_synced_email) {
+      await removeAccountMemberByEmail(accountName, customer.helpdesk_synced_email);
+      await revokeCustomerPortal(customer.helpdesk_synced_email, customerId);
+    }
     await pool.query("DELETE FROM helpdesk_customer_invites WHERE customer_id = $1", [customerId]);
     await pool.query(
       "UPDATE customers SET helpdesk_synced_email = NULL, helpdesk_synced_owner = NULL, helpdesk_invite_pending = false WHERE id = $1",
@@ -547,13 +587,13 @@ async function syncCustomerNow(customerId: string, options: { sendInvite?: boole
   const ownerEmail = customer.owner_email ?? "";
   // The email changed: the old address's portal login goes away.
   if (customer.helpdesk_synced_email && customer.helpdesk_synced_email !== email) {
+    await removeAccountMemberByEmail(accountName, customer.helpdesk_synced_email);
     await revokeCustomerPortal(customer.helpdesk_synced_email, customerId);
   }
 
-  // Account name carries the FieldForce customer number, so two customers
-  // with the same name never collide in Helpdesk. The owner field decides
-  // which Field Sales person gets this account's tickets.
-  const accountName = `${(customer.company_name || customer.full_name).trim()} (${customerLabel(customer.customer_number)})`;
+  // Account name (built above) carries the FieldForce customer number, so two
+  // customers with the same name never collide in Helpdesk. The owner field
+  // decides which Field Sales person gets this account's tickets.
   const account = await getDoc<Record<string, unknown>>("HD Customer", accountName);
   if (!account) {
     await frappe("POST", resource("HD Customer"), { customer_name: accountName, [OWNER_FIELD]: ownerEmail || undefined });
@@ -570,17 +610,17 @@ async function syncCustomerNow(customerId: string, options: { sendInvite?: boole
   }
 
   // Contact for this email, linked to the account and the portal user.
-  const contactName = await findName("Contact", [["email_id", "=", email]]);
+  let contactName = await findName("Contact", [["email_id", "=", email]]);
   if (!contactName) {
     const [firstName, ...rest] = customer.full_name.trim().split(/\s+/);
-    await frappe("POST", resource("Contact"), {
+    contactName = (await frappe<{ name: string }>("POST", resource("Contact"), {
       first_name: firstName || email,
       last_name: rest.join(" ") || undefined,
       email_ids: [{ email_id: email, is_primary: 1 }],
       phone_nos: customer.phone ? [{ phone: customer.phone, is_primary_mobile_no: 1 }] : [],
       user: email,
       links: [{ link_doctype: "HD Customer", link_name: accountName }],
-    });
+    })).name;
   } else {
     const contact = await getDoc<{ user?: string; links?: { link_doctype: string; link_name: string }[] }>("Contact", contactName);
     const links = contact?.links ?? [];
@@ -590,8 +630,14 @@ async function syncCustomerNow(customerId: string, options: { sendInvite?: boole
     if (!contact?.user) patch.user = email;
     if (Object.keys(patch).length > 0) await frappe("PUT", resource("Contact", contactName), patch);
   }
+  // What Helpdesk actually reads to put a ticket on this account (and so to
+  // its Field Sales owner) - see setAccountMember.
+  await setAccountMember(accountName, contactName, true);
 
-  await pool.query("UPDATE customers SET helpdesk_synced_email = $1, helpdesk_synced_owner = $2 WHERE id = $3", [email, ownerEmail, customerId]);
+  await pool.query(
+    "UPDATE customers SET helpdesk_synced_email = $1, helpdesk_synced_owner = $2, helpdesk_sync_version = $3 WHERE id = $4",
+    [email, ownerEmail, CUSTOMER_SYNC_VERSION, customerId]
+  );
 
   // Invite: when the deal was just Won / an Admin asked for it, or when an
   // already-invited customer's email address changed.
@@ -710,6 +756,7 @@ export async function reconcileHelpdesk(): Promise<{ employees: number; customer
             AND (c.helpdesk_synced_email IS DISTINCT FROM lower(trim(c.email))
                  OR c.helpdesk_synced_owner IS DISTINCT FROM COALESCE(lower(trim(u.email)), '')
                  OR c.helpdesk_invite_pending
+                 OR c.helpdesk_sync_version < ${CUSTOMER_SYNC_VERSION}
                  OR (c.helpdesk_invited_email IS NOT NULL AND c.helpdesk_invited_email <> lower(trim(c.email)))))
         OR (c.helpdesk_synced_email IS NOT NULL
             AND NOT (c.is_deleted = false AND c.email IS NOT NULL AND trim(c.email) <> '' AND ${CUSTOMER_PORTAL_QUALIFIES_SQL}))`

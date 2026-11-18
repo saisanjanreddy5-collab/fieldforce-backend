@@ -2445,6 +2445,9 @@ Regards,', 'active', 4),
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS helpdesk_synced_at TIMESTAMPTZ`,
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS helpdesk_synced_email VARCHAR(255)`,
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS helpdesk_synced_owner VARCHAR(255)`,
+    // Bumped (CUSTOMER_SYNC_VERSION in frappe-helpdesk-service.ts) when the
+    // Helpdesk account setup changes, so already-synced customers are redone once.
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS helpdesk_sync_version INTEGER NOT NULL DEFAULT 0`,
     // Support-portal access for customers (frappe-helpdesk-service.ts): given
     // once a deal is Won (or an Admin grants it early), with a one-click invite.
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS helpdesk_access_manual BOOLEAN NOT NULL DEFAULT false`,
