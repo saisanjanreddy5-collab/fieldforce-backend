@@ -56,6 +56,59 @@ export function readSsoSessionCookie(cookieValue: string | undefined): string | 
   }
 }
 
+// --- Customers (support-portal invite link) ----------------------------------
+//
+// Customers have no FieldForce login. Their invite email's one-click link
+// (GET /sso/customer-invite) proves who they are, and this short-lived cookie
+// carries that proof across the hop through Frappe to /sso/authorize, which
+// then logs them into the customer portal exactly like an employee.
+const SSO_CUSTOMER_COOKIE = "ff_sso_customer";
+const SSO_CUSTOMER_COOKIE_MAX_AGE_MS = 10 * 60 * 1000;
+export const SSO_CUSTOMER_COOKIE_NAME = SSO_CUSTOMER_COOKIE;
+export const SSO_CUSTOMER_COOKIE_MAX_AGE = SSO_CUSTOMER_COOKIE_MAX_AGE_MS;
+
+export function signSsoCustomerCookie(customerId: string): string {
+  return jwt.sign({ id: customerId, purpose: "sso_customer" }, env.JWT_REFRESH_SECRET, { expiresIn: SSO_CUSTOMER_COOKIE_MAX_AGE_MS / 1000 });
+}
+
+export function readSsoCustomerCookie(cookieValue: string | undefined): string | null {
+  if (!cookieValue) return null;
+  try {
+    const payload = jwt.verify(cookieValue, env.JWT_REFRESH_SECRET) as { id: string; purpose: string };
+    return payload.purpose === "sso_customer" ? payload.id : null;
+  } catch {
+    return null;
+  }
+}
+
+// A customer may use the portal only while FieldForce keeps their account
+// active (deal Won / granted, not deleted, same email as synced).
+const ACTIVE_PORTAL_CUSTOMER_SQL = `c.is_deleted = false AND c.helpdesk_synced_email IS NOT NULL
+  AND c.helpdesk_synced_email = lower(trim(c.email))`;
+
+// The invite link's token -> customer id, or null when it's unknown,
+// expired, replaced by a newer invite, or the customer has lost access.
+export async function redeemCustomerInvite(token: unknown): Promise<string | null> {
+  if (typeof token !== "string" || token.length < 20 || token.length > 100) return null;
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const result = await pool.query<{ customer_id: string }>(
+    `UPDATE helpdesk_customer_invites i SET last_used_at = now()
+     FROM customers c
+     WHERE i.token_hash = $1 AND i.expires_at > now() AND c.id = i.customer_id
+       AND i.email = c.helpdesk_synced_email AND ${ACTIVE_PORTAL_CUSTOMER_SQL}
+     RETURNING i.customer_id`,
+    [tokenHash]
+  );
+  return result.rows[0]?.customer_id ?? null;
+}
+
+export async function isActivePortalCustomer(customerId: string): Promise<boolean> {
+  const result = await pool.query(`SELECT 1 FROM customers c WHERE c.id = $1 AND ${ACTIVE_PORTAL_CUSTOMER_SQL}`, [customerId]);
+  return result.rows.length > 0;
+}
+
+export type SsoSubject = { kind: "user"; id: string } | { kind: "customer"; id: string };
+
 function requireSsoConfigured(): { clientId: string; clientSecret: string; redirectUri: string; tokenSecret: string } {
   const { SSO_FRAPPE_CLIENT_ID, SSO_FRAPPE_CLIENT_SECRET, SSO_FRAPPE_REDIRECT_URI, SSO_TOKEN_SECRET } = env;
   if (!SSO_FRAPPE_CLIENT_ID || !SSO_FRAPPE_CLIENT_SECRET || !SSO_FRAPPE_REDIRECT_URI || !SSO_TOKEN_SECRET) {
@@ -75,7 +128,7 @@ function requireSsoConfigured(): { clientId: string; clientSecret: string; redir
 // a URL bar / server log), the real token only ever travels server-to-server
 // at exchangeCodeForToken, which is the whole point of the Authorization
 // Code grant over a simpler Implicit one.
-export async function createAuthorizationCode(userId: string, clientId: string, redirectUri: string): Promise<string> {
+export async function createAuthorizationCode(subject: SsoSubject, clientId: string, redirectUri: string): Promise<string> {
   const { clientId: expectedClientId, redirectUri: expectedRedirectUri } = requireSsoConfigured();
   if (clientId !== expectedClientId) {
     throw new ApiError(400, "Unknown client_id");
@@ -86,8 +139,14 @@ export async function createAuthorizationCode(userId: string, clientId: string, 
 
   const code = crypto.randomBytes(32).toString("hex");
   await pool.query(
-    `INSERT INTO sso_authorization_codes (code, user_id, redirect_uri, expires_at) VALUES ($1, $2, $3, $4)`,
-    [code, userId, redirectUri, new Date(Date.now() + AUTH_CODE_TTL_MS).toISOString()]
+    `INSERT INTO sso_authorization_codes (code, user_id, customer_id, redirect_uri, expires_at) VALUES ($1, $2, $3, $4, $5)`,
+    [
+      code,
+      subject.kind === "user" ? subject.id : null,
+      subject.kind === "customer" ? subject.id : null,
+      redirectUri,
+      new Date(Date.now() + AUTH_CODE_TTL_MS).toISOString(),
+    ]
   );
   return code;
 }
@@ -108,14 +167,16 @@ export async function exchangeCodeForToken(params: {
     throw new ApiError(401, "Invalid client credentials");
   }
 
-  const result = await pool.query<{ user_id: string; redirect_uri: string; expires_at: string; used_at: string | null }>(
-    `SELECT user_id, redirect_uri, expires_at, used_at FROM sso_authorization_codes WHERE code = $1`,
+  const result = await pool.query<{ user_id: string | null; customer_id: string | null; redirect_uri: string; expires_at: string; used_at: string | null }>(
+    `SELECT user_id, customer_id, redirect_uri, expires_at, used_at FROM sso_authorization_codes WHERE code = $1`,
     [params.code]
   );
-  const row = result.rows[0];
-  if (!row || row.redirect_uri !== params.redirectUri) {
+  const found = result.rows[0];
+  if (!found || found.redirect_uri !== params.redirectUri || (!found.user_id && !found.customer_id)) {
     throw new ApiError(400, "Invalid, expired, or already-used authorization code");
   }
+  // Token subject: a user id, or "customer:<id>" for a portal customer.
+  const row = { ...found, user_id: found.user_id ?? `customer:${found.customer_id}` };
 
   if (row.used_at !== null) {
     if (Date.now() - new Date(row.used_at).getTime() > CODE_REPLAY_GRACE_MS) {
@@ -159,6 +220,15 @@ export async function getUserInfoFromAccessToken(authorizationHeader: string | u
   }
   if (payload.aud !== "frappe-helpdesk") {
     throw new ApiError(401, "Invalid access token");
+  }
+
+  if (payload.sub.startsWith("customer:")) {
+    const customer = await pool.query<{ email: string; name: string }>(
+      `SELECT c.helpdesk_synced_email AS email, c.full_name AS name FROM customers c WHERE c.id = $1 AND ${ACTIVE_PORTAL_CUSTOMER_SQL}`,
+      [payload.sub.slice("customer:".length)]
+    );
+    if (!customer.rows[0]) throw new ApiError(401, "Customer no longer has portal access");
+    return customer.rows[0];
   }
 
   const result = await pool.query<{ email: string; name: string; is_active: boolean }>(

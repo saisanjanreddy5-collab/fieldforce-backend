@@ -2445,6 +2445,25 @@ Regards,', 'active', 4),
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS helpdesk_synced_at TIMESTAMPTZ`,
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS helpdesk_synced_email VARCHAR(255)`,
     `ALTER TABLE customers ADD COLUMN IF NOT EXISTS helpdesk_synced_owner VARCHAR(255)`,
+    // Support-portal access for customers (frappe-helpdesk-service.ts): given
+    // once a deal is Won (or an Admin grants it early), with a one-click invite.
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS helpdesk_access_manual BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS helpdesk_invite_pending BOOLEAN NOT NULL DEFAULT false`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS helpdesk_invited_at TIMESTAMPTZ`,
+    `ALTER TABLE customers ADD COLUMN IF NOT EXISTS helpdesk_invited_email VARCHAR(255)`,
+    `CREATE TABLE IF NOT EXISTS helpdesk_customer_invites (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      customer_id UUID NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+      email VARCHAR(255) NOT NULL,
+      token_hash VARCHAR(64) NOT NULL UNIQUE,
+      expires_at TIMESTAMPTZ NOT NULL,
+      last_used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`,
+    // The FieldForce login bridge also signs customers into the portal (invite
+    // link) - a code then belongs to a customer instead of a user.
+    `ALTER TABLE sso_authorization_codes ALTER COLUMN user_id DROP NOT NULL`,
+    `ALTER TABLE sso_authorization_codes ADD COLUMN IF NOT EXISTS customer_id UUID REFERENCES customers(id) ON DELETE CASCADE`,
     // Helpdesk tickets FieldForce assigned to their customer's owner - so an
     // owner change only takes back assignments FieldForce made, never manual ones.
     `CREATE TABLE IF NOT EXISTS helpdesk_ticket_assignments (
