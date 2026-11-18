@@ -11,6 +11,8 @@ const router = Router();
 // then the client_secret, then the access_token this flow itself issued).
 // One-click entry from the CRM's "Support tickets" link - see launch().
 router.get("/launch", ssoRateLimiter, ssoController.launch);
+// A customer's one-click link from their support-portal invite email.
+router.get("/customer-invite", ssoRateLimiter, ssoController.customerInvite);
 router.get("/authorize", ssoRateLimiter, ssoController.authorize);
 router.post("/token", ssoRateLimiter, ssoController.token);
 router.get("/userinfo", ssoRateLimiter, ssoController.userinfo);

@@ -71,11 +71,75 @@ export const launch = asyncHandler(async (req: Request, res: Response) => {
   res.redirect((oneClick ?? fallback)!);
 });
 
+// A customer's page for an invite link that no longer works - points them at
+// the portal's normal sign-in (email them a one-time link), never a dead end.
+function sendInviteExpired(res: Response): void {
+  const portal = ssoService.frappeLoginPageUrl("/helpdesk/my-tickets");
+  const button = portal
+    ? `<a href="${escapeHtml(portal)}" style="display:inline-block;background:#1354e0;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-size:14px">Go to the support portal</a>`
+    : "";
+  res
+    .status(410)
+    .type("html")
+    .send(
+      `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Link expired</title></head>` +
+        `<body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f6f7f9;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px">` +
+        `<div style="max-width:420px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:28px;text-align:center">` +
+        `<h1 style="font-size:20px;margin:0 0 8px;color:#111827">This sign-in link has expired</h1>` +
+        `<p style="color:#4b5563;font-size:14px;line-height:1.5;margin:0 0 20px">No problem - open the support portal and sign in with your email address. We'll email you a one-time sign-in link, no password needed.</p>` +
+        button +
+        `</div></body></html>`
+    );
+}
+
+// The one-click link in a customer's support-portal invite email: proves who
+// they are, then takes the same route into Frappe as an employee's launch -
+// /sso/authorize below recognises the short-lived customer cookie.
+export const customerInvite = asyncHandler(async (req: Request, res: Response) => {
+  const customerId = await ssoService.redeemCustomerInvite(req.query.t);
+  if (!customerId) {
+    sendInviteExpired(res);
+    return;
+  }
+  res.cookie(ssoService.SSO_CUSTOMER_COOKIE_NAME, ssoService.signSsoCustomerCookie(customerId), {
+    httpOnly: true,
+    secure: env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: ssoService.SSO_CUSTOMER_COOKIE_MAX_AGE,
+    path: "/api/sso",
+  });
+  const landing = "/helpdesk/my-tickets";
+  const oneClick = await ssoService.getFrappeOneClickLoginUrl(landing);
+  if (!oneClick) {
+    res.clearCookie(ssoService.SSO_CUSTOMER_COOKIE_NAME, { path: "/api/sso" });
+    sendInviteExpired(res);
+    return;
+  }
+  res.redirect(oneClick);
+});
+
 export const authorize = asyncHandler(async (req: Request, res: Response) => {
   const { response_type, client_id, redirect_uri, state } = req.query as Record<string, string | undefined>;
 
   if (response_type !== "code" || !client_id || !redirect_uri) {
     throw new ApiError(400, "Missing or unsupported response_type/client_id/redirect_uri");
+  }
+
+  // A customer arriving from their invite link (set moments ago by
+  // customerInvite). One-shot: cleared here so it can't be reused, and it
+  // takes priority over any employee session in the same browser - the
+  // person clicking an invite link wants to be that customer.
+  const customerId = ssoService.readSsoCustomerCookie(req.cookies?.[ssoService.SSO_CUSTOMER_COOKIE_NAME]);
+  if (customerId) {
+    res.clearCookie(ssoService.SSO_CUSTOMER_COOKIE_NAME, { path: "/api/sso" });
+    if (await ssoService.isActivePortalCustomer(customerId)) {
+      const code = await ssoService.createAuthorizationCode({ kind: "customer", id: customerId }, client_id, redirect_uri);
+      const callback = new URL(redirect_uri);
+      callback.searchParams.set("code", code);
+      if (state) callback.searchParams.set("state", state);
+      res.redirect(callback.toString());
+      return;
+    }
   }
 
   const userId = ssoService.readSsoSessionCookie(req.cookies?.[ssoService.SSO_SESSION_COOKIE_NAME]);
@@ -97,7 +161,7 @@ export const authorize = asyncHandler(async (req: Request, res: Response) => {
     return;
   }
 
-  const code = await ssoService.createAuthorizationCode(userId, client_id, redirect_uri);
+  const code = await ssoService.createAuthorizationCode({ kind: "user", id: userId }, client_id, redirect_uri);
   const callback = new URL(redirect_uri);
   callback.searchParams.set("code", code);
   if (state) callback.searchParams.set("state", state);

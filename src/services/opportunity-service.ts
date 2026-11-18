@@ -2,6 +2,7 @@ import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { isLeadInOwnerScope, isLeadVisibleToUser, FLC_STAGE, SLC_STAGE } from "./lead-service";
 import { createCustomerFromLead } from "./customer-service";
+import { queueCustomerHelpdeskSyncForLead } from "./frappe-helpdesk-service";
 import { recordAuditEvent, listAuditLogForEntity } from "./audit-log-service";
 
 // Still Call Center's own floor (New/FLC/SLC) - matches
@@ -292,6 +293,10 @@ export async function convertLeadToOpportunity(leadId: string, input: Opportunit
       console.error(`Failed to record creation audit event for opportunity ${result.rows[0].id}:`, err);
     }
 
+    // Created straight into Won: the customer has taken the outlet - give
+    // them their support portal (background, never blocks the save).
+    if (result.rows[0].stage === "won") queueCustomerHelpdeskSyncForLead(leadId, true);
+
     return toPublicOpportunity(result.rows[0]);
   } catch (err) {
     await client.query("ROLLBACK");
@@ -503,6 +508,11 @@ export async function updateOpportunity(id: string, updates: OpportunityInput, r
       actorId: requestingUserId,
       actorName: actorResult.rows[0]?.name ?? null,
     });
+    // Won = the customer took the outlet/franchise: support-portal access
+    // and their invite. Moving away from Won takes the access back.
+    if (updates.stage === "won" || before.stage === "won") {
+      queueCustomerHelpdeskSyncForLead(result.rows[0].lead_id, updates.stage === "won");
+    }
   }
 
   return toPublicOpportunity(result.rows[0]);
@@ -526,10 +536,12 @@ export async function deleteOpportunity(id: string, requestingUserId: string): P
     throw new ApiError(403, "You do not have access to this opportunity");
   }
 
-  await pool.query(
-    "UPDATE opportunities SET is_deleted = true, updated_by = $1, updated_at = now() WHERE id = $2",
+  const archived = await pool.query<{ lead_id: string; stage: string }>(
+    "UPDATE opportunities SET is_deleted = true, updated_by = $1, updated_at = now() WHERE id = $2 RETURNING lead_id, stage",
     [requestingUserId, id]
   );
+  // Archiving a Won deal can take the customer's portal access away.
+  if (archived.rows[0]?.stage === "won") queueCustomerHelpdeskSyncForLead(archived.rows[0].lead_id, false);
 }
 
 // Mirrors deleteOpportunity's own owner-scope check, but against archived
@@ -554,8 +566,9 @@ export async function restoreOpportunity(id: string, requestingUserId: string): 
     throw new ApiError(403, "You do not have access to this archived opportunity");
   }
 
-  await pool.query(
-    "UPDATE opportunities SET is_deleted = false, updated_by = $1, updated_at = now() WHERE id = $2",
+  const restored = await pool.query<{ lead_id: string; stage: string }>(
+    "UPDATE opportunities SET is_deleted = false, updated_by = $1, updated_at = now() WHERE id = $2 RETURNING lead_id, stage",
     [requestingUserId, id]
   );
+  if (restored.rows[0]?.stage === "won") queueCustomerHelpdeskSyncForLead(restored.rows[0].lead_id, true);
 }

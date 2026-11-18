@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { pool } from "../config/db";
 import { ROLES } from "../utils/roles";
 import { externalFetch } from "../utils/external-fetch";
@@ -393,38 +394,154 @@ export async function syncTicketOwnerAssignments(): Promise<{ assigned: number; 
 }
 
 // --- Customers ---------------------------------------------------------------
+//
+// A customer gets a support-portal account only once they've actually taken
+// an outlet/franchise - i.e. one of their deals (opportunities) is Won - or
+// when an Admin grants it by hand for an exception. Being a "Customer" record
+// alone isn't enough: the CRM creates that as soon as a lead becomes an
+// opportunity, long before anything is signed.
+//
+// The account is an HD Customer (the company), a Contact linked to it, and a
+// portal user with the HD Customer role. Customers never get a password: the
+// invite email carries a one-click link (customer-invite in sso-controller.ts,
+// valid INVITE_TTL_DAYS) and after that they sign in with Frappe's emailed
+// one-time link.
 
 // Same "C-00012" label customer-service.ts shows (kept local - importing it
 // from there would make the two services import each other).
 const customerLabel = (customerNumber: number) => `C-${String(customerNumber).padStart(5, "0")}`;
 
-// Gives a FieldForce customer (with an email) their own Helpdesk customer
-// account: an HD Customer (the account), a Contact linked to it, and a portal
-// user with the HD Customer role who signs in by email link.
-export async function syncCustomerHelpdeskAccount(customerId: string): Promise<void> {
+// SQL (over `customers c`) for "should this customer have portal access".
+export const CUSTOMER_PORTAL_QUALIFIES_SQL = `(c.helpdesk_access_manual OR EXISTS (
+  SELECT 1 FROM opportunities o WHERE o.lead_id = c.lead_id AND o.stage = 'won' AND o.is_deleted = false))`;
+
+export const INVITE_TTL_DAYS = 7;
+const PORTAL_PATH = "/helpdesk/my-tickets";
+
+interface CustomerSyncRow {
+  customer_number: number;
+  full_name: string;
+  company_name: string | null;
+  email: string | null;
+  phone: string | null;
+  is_deleted: boolean;
+  owner_email: string | null;
+  qualifies: boolean;
+  helpdesk_synced_email: string | null;
+  helpdesk_invite_pending: boolean;
+  helpdesk_invited_email: string | null;
+}
+
+// Takes portal access away again (deal no longer Won, customer deleted, email
+// removed). Only a portal user FieldForce itself created is disabled - never
+// a staff account or someone who signed up on the portal on their own.
+async function revokeCustomerPortal(email: string): Promise<void> {
+  const user = await getDoc<FrappeUser & { owner?: string }>("User", email);
+  if (user && user.enabled && user.user_type === "Website User" && user.owner?.toLowerCase() === (await apiUser())) {
+    await frappe("PUT", resource("User", email), { enabled: 0 });
+  }
+}
+
+let brandNameCache: string | null = null;
+async function brandName(): Promise<string> {
+  if (!brandNameCache) {
+    const settings = await frappe<{ brand_name?: string }>("GET", resource("HD Settings", "HD Settings")).catch(() => null);
+    brandNameCache = settings?.brand_name?.trim() || "Support";
+  }
+  return brandNameCache;
+}
+
+const escapeHtml = (value: string) =>
+  value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] as string);
+
+// Creates a fresh one-click link (any older link for this customer stops
+// working) and emails it from Helpdesk's own outgoing "Support" mailbox.
+async function sendCustomerInvite(customerId: string, email: string, fullName: string): Promise<void> {
+  const config = frappeConfig();
+  const backend = process.env.PUBLIC_BACKEND_BASE_URL?.trim().replace(/\/+$/, "");
+  if (!config || !backend) throw new FrappeError("PUBLIC_BACKEND_BASE_URL is not set - can't build the invite link", 503);
+
+  const token = crypto.randomBytes(32).toString("base64url");
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const link = `${backend}/api/sso/customer-invite?t=${token}`;
+  const portal = `${config.base}${PORTAL_PATH}`;
+  const brand = await brandName();
+  const firstName = fullName.trim().split(/\s+/)[0] || "there";
+
+  const content =
+    `<div style="font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.6;color:#1f2937;max-width:520px">` +
+    `<p>Hi ${escapeHtml(firstName)},</p>` +
+    `<p>Welcome to ${escapeHtml(brand)}! You now have your own support portal. Whenever you have a question or an issue, raise it there and follow every reply from our team in one place.</p>` +
+    `<p style="margin:24px 0"><a href="${link}" style="background:#1354e0;color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;display:inline-block;font-weight:600">Open my support portal</a></p>` +
+    `<p style="color:#4b5563;font-size:13px">This button signs you in directly - no password needed. It works for ${INVITE_TTL_DAYS} days. ` +
+    `After that, go to <a href="${portal}">${escapeHtml(portal.replace(/^https?:\/\//, ""))}</a> and sign in with this email address (${escapeHtml(email)}); we'll email you a one-time sign-in link.</p>` +
+    `<p>- ${escapeHtml(brand)} Support</p></div>`;
+
+  await pool.query("DELETE FROM helpdesk_customer_invites WHERE customer_id = $1", [customerId]);
+  await pool.query(
+    `INSERT INTO helpdesk_customer_invites (customer_id, email, token_hash, expires_at)
+     VALUES ($1, $2, $3, now() + make_interval(days => $4))`,
+    [customerId, email, tokenHash, INVITE_TTL_DAYS]
+  );
+  await frappe("POST", "/api/method/frappe.core.doctype.communication.email.make", {
+    recipients: email,
+    subject: `Your ${brand} support portal`,
+    content,
+    send_email: 1,
+  });
+}
+
+// Brings one customer's portal access in line with FieldForce. `sendInvite`
+// forces a (new) invite email - the "Send / Resend invite" button.
+// One customer is never synced twice at the same moment (a deal being Won
+// and the customer being created can both queue a sync) - the second run
+// waits and then sees the first one's result, so no duplicate account or
+// invite email.
+const customerSyncs = new Map<string, Promise<void>>();
+
+export async function syncCustomerHelpdeskAccount(customerId: string, options: { sendInvite?: boolean } = {}): Promise<void> {
   if (!isHelpdeskSyncConfigured()) return;
-  const result = await pool.query<{
-    customer_number: number;
-    full_name: string;
-    company_name: string | null;
-    email: string | null;
-    phone: string | null;
-    is_deleted: boolean;
-    owner_email: string | null;
-  }>(
-    `SELECT c.customer_number, c.full_name, c.company_name, c.email, c.phone, c.is_deleted, lower(trim(u.email)) AS owner_email
+  const run = (customerSyncs.get(customerId) ?? Promise.resolve()).catch(() => undefined).then(() => syncCustomerNow(customerId, options));
+  customerSyncs.set(customerId, run);
+  try {
+    await run;
+  } finally {
+    if (customerSyncs.get(customerId) === run) customerSyncs.delete(customerId);
+  }
+}
+
+async function syncCustomerNow(customerId: string, options: { sendInvite?: boolean }): Promise<void> {
+  const result = await pool.query<CustomerSyncRow>(
+    `SELECT c.customer_number, c.full_name, c.company_name, c.email, c.phone, c.is_deleted,
+            lower(trim(u.email)) AS owner_email, ${CUSTOMER_PORTAL_QUALIFIES_SQL} AS qualifies,
+            c.helpdesk_synced_email, c.helpdesk_invite_pending, c.helpdesk_invited_email
      FROM customers c LEFT JOIN users u ON u.id = c.owner_id WHERE c.id = $1`,
     [customerId]
   );
   const customer = result.rows[0];
-  const email = customer?.email?.trim().toLowerCase();
-  if (!customer || customer.is_deleted || !email) return;
+  if (!customer) return;
+  const email = customer.email?.trim().toLowerCase() || null;
+
+  if (customer.is_deleted || !email || !customer.qualifies) {
+    if (customer.helpdesk_synced_email) await revokeCustomerPortal(customer.helpdesk_synced_email);
+    await pool.query("DELETE FROM helpdesk_customer_invites WHERE customer_id = $1", [customerId]);
+    await pool.query(
+      "UPDATE customers SET helpdesk_synced_email = NULL, helpdesk_synced_owner = NULL, helpdesk_invite_pending = false WHERE id = $1",
+      [customerId]
+    );
+    return;
+  }
+
   await ensureHelpdeskVisibilityRules();
   const ownerEmail = customer.owner_email ?? "";
+  // The email changed: the old address's portal login goes away.
+  if (customer.helpdesk_synced_email && customer.helpdesk_synced_email !== email) {
+    await revokeCustomerPortal(customer.helpdesk_synced_email);
+  }
 
   // Account name carries the FieldForce customer number, so two customers
   // with the same name never collide in Helpdesk. The owner field decides
-  // which Field Sales person sees this account's tickets.
+  // which Field Sales person gets this account's tickets.
   const accountName = `${(customer.company_name || customer.full_name).trim()} (${customerLabel(customer.customer_number)})`;
   const account = await getDoc<Record<string, unknown>>("HD Customer", accountName);
   if (!account) {
@@ -433,7 +550,8 @@ export async function syncCustomerHelpdeskAccount(customerId: string): Promise<v
     await frappe("PUT", resource("HD Customer", accountName), { [OWNER_FIELD]: ownerEmail || null });
   }
 
-  // Portal user first (website user, HD Customer role, no password).
+  // Portal user (website user, HD Customer role, no password) - re-enabled
+  // if access had been taken away before.
   const user = await ensureFrappeUser(email, customer.full_name, "Website User");
   const fresh = (await getDoc<FrappeUser>("User", email)) ?? user;
   if (!(fresh.roles ?? []).some((r) => r.role === CUSTOMER_ROLE)) {
@@ -441,10 +559,10 @@ export async function syncCustomerHelpdeskAccount(customerId: string): Promise<v
   }
 
   // Contact for this email, linked to the account and the portal user.
-  let contactName = await findName("Contact", [["email_id", "=", email]]);
+  const contactName = await findName("Contact", [["email_id", "=", email]]);
   if (!contactName) {
     const [firstName, ...rest] = customer.full_name.trim().split(/\s+/);
-    const created = await frappe<{ name: string }>("POST", resource("Contact"), {
+    await frappe("POST", resource("Contact"), {
       first_name: firstName || email,
       last_name: rest.join(" ") || undefined,
       email_ids: [{ email_id: email, is_primary: 1 }],
@@ -452,7 +570,6 @@ export async function syncCustomerHelpdeskAccount(customerId: string): Promise<v
       user: email,
       links: [{ link_doctype: "HD Customer", link_name: accountName }],
     });
-    contactName = created.name;
   } else {
     const contact = await getDoc<{ user?: string; links?: { link_doctype: string; link_name: string }[] }>("Contact", contactName);
     const links = contact?.links ?? [];
@@ -464,6 +581,17 @@ export async function syncCustomerHelpdeskAccount(customerId: string): Promise<v
   }
 
   await pool.query("UPDATE customers SET helpdesk_synced_email = $1, helpdesk_synced_owner = $2 WHERE id = $3", [email, ownerEmail, customerId]);
+
+  // Invite: when the deal was just Won / an Admin asked for it, or when an
+  // already-invited customer's email address changed.
+  const emailChangedSinceInvite = customer.helpdesk_invited_email !== null && customer.helpdesk_invited_email !== email;
+  if (options.sendInvite || customer.helpdesk_invite_pending || emailChangedSinceInvite) {
+    await sendCustomerInvite(customerId, email, customer.full_name);
+    await pool.query(
+      "UPDATE customers SET helpdesk_invite_pending = false, helpdesk_invited_at = now(), helpdesk_invited_email = $1 WHERE id = $2",
+      [email, customerId]
+    );
+  }
 }
 
 export function queueCustomerHelpdeskSync(customerId: string): void {
@@ -471,6 +599,62 @@ export function queueCustomerHelpdeskSync(customerId: string): void {
     console.error(`Helpdesk sync for customer ${customerId} failed (will retry on the next reconcile):`, err instanceof Error ? err.message : err)
   );
 }
+
+// Called when one of a lead's deals changes stage (opportunity-service.ts).
+// The first time a deal is Won, the customer's invite is queued - once
+// invited, winning another deal never re-sends it.
+export function queueCustomerHelpdeskSyncForLead(leadId: string, dealWon: boolean): void {
+  if (!isHelpdeskSyncConfigured()) return;
+  pool
+    .query<{ id: string }>(
+      `UPDATE customers SET helpdesk_invite_pending = (helpdesk_invite_pending OR ($2 AND helpdesk_invited_at IS NULL))
+       WHERE lead_id = $1 AND is_deleted = false RETURNING id`,
+      [leadId, dealWon]
+    )
+    .then((result) => result.rows.forEach((row) => queueCustomerHelpdeskSync(row.id)))
+    .catch((err) => console.error(`Helpdesk sync for lead ${leadId} failed:`, err instanceof Error ? err.message : err));
+}
+
+export interface CustomerPortalStatus {
+  enabled: boolean; // Helpdesk sync is switched on for this server at all
+  qualifies: boolean;
+  manual: boolean;
+  active: boolean;
+  invitedAt: string | null;
+  invitedEmail: string | null;
+}
+
+export async function getCustomerPortalStatus(customerId: string): Promise<CustomerPortalStatus> {
+  const result = await pool.query<{ qualifies: boolean; manual: boolean; synced: string | null; invited_at: string | null; invited_email: string | null }>(
+    `SELECT ${CUSTOMER_PORTAL_QUALIFIES_SQL} AS qualifies, c.helpdesk_access_manual AS manual, c.helpdesk_synced_email AS synced,
+            c.helpdesk_invited_at AS invited_at, c.helpdesk_invited_email AS invited_email
+     FROM customers c WHERE c.id = $1`,
+    [customerId]
+  );
+  const row = result.rows[0];
+  return {
+    enabled: isHelpdeskSyncConfigured(),
+    qualifies: Boolean(row?.qualifies),
+    manual: Boolean(row?.manual),
+    active: Boolean(row?.synced),
+    invitedAt: row?.invited_at ?? null,
+    invitedEmail: row?.invited_email ?? null,
+  };
+}
+
+// The "Give portal access & send invite" / "Resend invite" button. Waits for
+// Frappe so the person clicking sees whether it really worked. `grant` (Admin
+// only, checked by the caller) gives access to a customer with no Won deal.
+export async function inviteCustomerToPortal(customerId: string, grant: boolean): Promise<CustomerPortalStatus> {
+  if (!isHelpdeskSyncConfigured()) throw new FrappeError("The support portal isn't switched on for this server", 503);
+  if (grant) await pool.query("UPDATE customers SET helpdesk_access_manual = true WHERE id = $1", [customerId]);
+  const status = await getCustomerPortalStatus(customerId);
+  if (!status.qualifies) throw new FrappeError("This customer has no Won deal yet - only an Admin can give portal access early", 403);
+  await syncCustomerHelpdeskAccount(customerId, { sendInvite: true });
+  return getCustomerPortalStatus(customerId);
+}
+
+export { FrappeError as HelpdeskError };
 
 // --- Reconcile -----------------------------------------------------------------
 
@@ -508,10 +692,16 @@ export async function reconcileHelpdesk(): Promise<{ employees: number; customer
     // New email, or a new owner (reassigned by an Admin, a lead's owner
     // changing, or a departing rep's book being transferred) - all of them
     // only ever write customers.owner_id, so this one check covers every path.
+    // Also: a deal Won/un-Won since, an invite still waiting to go out, or
+    // access to take away (deal no longer Won, customer deleted, no email).
     `SELECT c.id FROM customers c LEFT JOIN users u ON u.id = c.owner_id
-     WHERE c.is_deleted = false AND c.email IS NOT NULL AND trim(c.email) <> ''
-       AND (c.helpdesk_synced_email IS DISTINCT FROM lower(trim(c.email))
-            OR c.helpdesk_synced_owner IS DISTINCT FROM COALESCE(lower(trim(u.email)), ''))`
+     WHERE (c.is_deleted = false AND c.email IS NOT NULL AND trim(c.email) <> '' AND ${CUSTOMER_PORTAL_QUALIFIES_SQL}
+            AND (c.helpdesk_synced_email IS DISTINCT FROM lower(trim(c.email))
+                 OR c.helpdesk_synced_owner IS DISTINCT FROM COALESCE(lower(trim(u.email)), '')
+                 OR c.helpdesk_invite_pending
+                 OR (c.helpdesk_invited_email IS NOT NULL AND c.helpdesk_invited_email <> lower(trim(c.email)))))
+        OR (c.helpdesk_synced_email IS NOT NULL
+            AND NOT (c.is_deleted = false AND c.email IS NOT NULL AND trim(c.email) <> '' AND ${CUSTOMER_PORTAL_QUALIFIES_SQL}))`
   );
   for (const row of accounts.rows) {
     try {

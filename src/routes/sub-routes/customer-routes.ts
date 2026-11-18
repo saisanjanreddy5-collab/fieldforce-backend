@@ -28,6 +28,9 @@ router.patch("/:id", requirePermission("customers.update"), validateBody(updateC
 // Read-only merged feeds for the detail panel's Transactions/Activity tabs.
 router.get("/:id/transactions", requirePermission("customers.view"), customerController.transactions);
 router.get("/:id/timeline", requirePermission("customers.view"), customerController.timeline);
+// Support-portal access + its invite email (Frappe Helpdesk customer portal).
+router.get("/:id/support-portal", requirePermission("customers.view"), customerController.supportPortalStatus);
+router.post("/:id/support-portal/invite", requirePermission("customers.update"), customerController.supportPortalInvite);
 
 // Contacts/addresses are sub-records of a customer, not independent
 // entities - gated on customers.view/update like everything else here,
