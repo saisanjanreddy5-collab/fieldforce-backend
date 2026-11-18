@@ -8,6 +8,7 @@ import routes from "./routes/routes";
 import { errorHandler, notFoundHandler } from "./middleware/error-middleware";
 import { startMailSyncScheduler } from "./services/microsoft-mail-sync-service";
 import { startCallReminderScheduler } from "./services/call-reminder-service";
+import { startHelpdeskSyncScheduler } from "./services/frappe-helpdesk-service";
 
 async function start(): Promise<void> {
   await pool.query("SELECT 1");
@@ -76,6 +77,8 @@ async function start(): Promise<void> {
 
   startMailSyncScheduler();
   startCallReminderScheduler();
+  // Keeps Frappe Helpdesk agents/customers in step with FieldForce.
+  startHelpdeskSyncScheduler();
 }
 
 start().catch((err) => {

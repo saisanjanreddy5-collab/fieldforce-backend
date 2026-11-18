@@ -2,6 +2,7 @@ import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { recordAuditEvent } from "./audit-log-service";
 import { ROLES } from "../utils/roles";
+import { queueRoleHelpdeskSync } from "./frappe-helpdesk-service";
 
 interface RolePermissionRow {
   role: string;
@@ -266,6 +267,9 @@ export async function setRolePermission(role: string, permission: string, grante
   } else {
     await pool.query("DELETE FROM role_permissions WHERE role = $1 AND permission = $2", [role, permission]);
   }
+  // Support access for a whole role changed - add/remove everyone on that
+  // role as Helpdesk agents to match.
+  if (permission === "support_tickets.view") queueRoleHelpdeskSync(role);
 }
 
 // Discards every grant/revoke made from this screen and restores exactly
@@ -291,6 +295,7 @@ export async function resetRoleToDefault(role: string): Promise<void> {
       await client.query("INSERT INTO role_permissions (role, permission) VALUES ($1, $2)", [role, permission]);
     }
     await client.query("COMMIT");
+    queueRoleHelpdeskSync(role);
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;
@@ -328,6 +333,7 @@ export async function grantAdminAccessToRole(targetRole: string, actorId: string
       await client.query("INSERT INTO role_permissions (role, permission) VALUES ($1, $2)", [targetRole, permission]);
     }
     await client.query("COMMIT");
+    queueRoleHelpdeskSync(targetRole);
   } catch (err) {
     await client.query("ROLLBACK");
     throw err;

@@ -10,6 +10,67 @@ import * as ssoService from "../services/sso-service";
 // client code, not our frontend. That's a deliberate exception to this
 // codebase's usual sendSuccess()/sendError() convention everywhere else.
 
+// This endpoint's own public URL for the current request - built from the
+// configured public address when one is set, because behind nginx
+// req.protocol/host can read "http" / "localhost:8000", and the CRM login
+// page (safeSsoContinue) rightly refuses to send anyone back to such a link.
+function selfUrl(req: Request): string {
+  const publicBase = process.env.PUBLIC_BACKEND_BASE_URL?.replace(/\/+$/, "");
+  return `${publicBase || `${req.protocol}://${req.get("host")}`}${req.originalUrl}`;
+}
+
+function redirectToCrmLogin(req: Request, res: Response): void {
+  res.redirect(`${env.FRONTEND_URL}/login?ssoContinue=${encodeURIComponent(selfUrl(req))}`);
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch] as string);
+}
+
+// A plain, branded page instead of a raw JSON error - someone without
+// Helpdesk access (e.g. Call Center) who reaches this flow lands here, in a
+// normal browser tab.
+function sendNoHelpdeskAccess(res: Response): void {
+  const back = escapeHtml(env.FRONTEND_URL);
+  res
+    .status(403)
+    .type("html")
+    .send(
+      `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>No access to Support</title></head>` +
+        `<body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f6f7f9;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px">` +
+        `<div style="max-width:420px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:28px;text-align:center">` +
+        `<h1 style="font-size:20px;margin:0 0 8px;color:#111827">No access to Support tickets</h1>` +
+        `<p style="color:#4b5563;font-size:14px;line-height:1.5;margin:0 0 20px">Your FieldForce account doesn't have access to the support helpdesk. If you think you need it, ask your administrator.</p>` +
+        `<a href="${back}" style="display:inline-block;background:#1354e0;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-size:14px">Back to FieldForce</a>` +
+        `</div></body></html>`
+    );
+}
+
+// The CRM's "Support tickets" link: one click from the CRM straight into
+// Frappe Helpdesk with no Frappe login form. Frappe 16 only accepts a login
+// it started itself, so this asks Frappe for a fresh "Login with FieldForce"
+// link (carrying Frappe's own login state) and sends the browser to it -
+// Frappe then calls /sso/authorize below, which recognises the CRM session
+// cookie and logs the user straight in.
+export const launch = asyncHandler(async (req: Request, res: Response) => {
+  const userId = ssoService.readSsoSessionCookie(req.cookies?.[ssoService.SSO_SESSION_COOKIE_NAME]);
+  if (!userId) {
+    redirectToCrmLogin(req, res);
+    return;
+  }
+  if (!(await ssoService.canUseHelpdesk(userId))) {
+    sendNoHelpdeskAccess(res);
+    return;
+  }
+  const landing = ssoService.safeHelpdeskPath(req.query.to);
+  const oneClick = await ssoService.getFrappeOneClickLoginUrl(landing);
+  const fallback = ssoService.frappeLoginPageUrl(landing);
+  if (!oneClick && !fallback) {
+    throw new ApiError(503, "Support helpdesk is not configured on this server yet");
+  }
+  res.redirect((oneClick ?? fallback)!);
+});
+
 export const authorize = asyncHandler(async (req: Request, res: Response) => {
   const { response_type, client_id, redirect_uri, state } = req.query as Record<string, string | undefined>;
 
@@ -25,13 +86,14 @@ export const authorize = asyncHandler(async (req: Request, res: Response) => {
     // they have. The login page itself does a full-page redirect back here
     // (not an SPA navigate) once login succeeds, so this handler runs again
     // and takes the branch below.
-    // Built from the configured public address when one is set - behind
-    // nginx, req.protocol/host can read "http" / "localhost:8000", and the
-    // login page (safeSsoContinue) rightly refuses to follow such a link.
-    const publicBase = process.env.PUBLIC_BACKEND_BASE_URL?.replace(/\/+$/, "");
-    const selfUrl = `${publicBase || `${req.protocol}://${req.get("host")}`}${req.originalUrl}`;
-    const loginUrl = `${env.FRONTEND_URL}/login?ssoContinue=${encodeURIComponent(selfUrl)}`;
-    res.redirect(loginUrl);
+    redirectToCrmLogin(req, res);
+    return;
+  }
+
+  // Blocks anyone whose role has no Support access (Call Center) even if
+  // they try Frappe's own "Login with FieldForce" button directly.
+  if (!(await ssoService.canUseHelpdesk(userId))) {
+    sendNoHelpdeskAccess(res);
     return;
   }
 

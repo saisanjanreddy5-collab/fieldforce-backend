@@ -9,6 +9,8 @@ const router = Router();
 // (authorize) call these without a FieldForce Bearer token. Each one does
 // its own, different proof of identity instead (the ff_sso_session cookie,
 // then the client_secret, then the access_token this flow itself issued).
+// One-click entry from the CRM's "Support tickets" link - see launch().
+router.get("/launch", ssoRateLimiter, ssoController.launch);
 router.get("/authorize", ssoRateLimiter, ssoController.authorize);
 router.post("/token", ssoRateLimiter, ssoController.token);
 router.get("/userinfo", ssoRateLimiter, ssoController.userinfo);

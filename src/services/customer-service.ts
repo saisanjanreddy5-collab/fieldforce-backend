@@ -1,6 +1,7 @@
 import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { ROLES } from "../utils/roles";
+import { queueCustomerHelpdeskSync } from "./frappe-helpdesk-service";
 import { recordAuditEvent, listAuditLogForEntity } from "./audit-log-service";
 import { listActivitiesForLead } from "./activity-service";
 import { listLegacyTicketsForLead } from "./legacy-ticket-history-service";
@@ -145,13 +146,14 @@ export async function createCustomerFromLead(lead: {
   territory: string | null;
   credit_limit_requested: string | null;
 }): Promise<void> {
-  await pool.query(
+  const created = await pool.query<{ id: string }>(
     `INSERT INTO customers (
        lead_id, full_name, contact_name, phone, alt_phone, email, company_name, category,
        owner_id, city, zone_id, state_id, district_id, area_id, pincode, address_line1, address_line2,
        territory, credit_limit
      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
-     ON CONFLICT (lead_id) DO NOTHING`,
+     ON CONFLICT (lead_id) DO NOTHING
+     RETURNING id`,
     [
       lead.id,
       lead.full_name,
@@ -178,6 +180,9 @@ export async function createCustomerFromLead(lead: {
       0,
     ]
   );
+  // A brand-new customer with an email gets their support-portal account
+  // in Frappe Helpdesk (background - never slows the conversion down).
+  if (created.rows[0]) queueCustomerHelpdeskSync(created.rows[0].id);
 }
 
 // Called from lead-service.ts's updateLead (a single lead's owner changing)
@@ -451,6 +456,10 @@ export async function updateCustomer(
       });
     }
   }
+
+  // A new owner changes which Field Sales person sees this customer's
+  // support tickets in Helpdesk - push it now rather than at the next reconcile.
+  if (updates.ownerId !== undefined) queueCustomerHelpdeskSync(customerId);
 
   return toPublicCustomer(result.rows[0]);
 }

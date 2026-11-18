@@ -2,6 +2,7 @@ import { pool } from "../config/db";
 import { ApiError } from "../utils/ApiError";
 import { getLevelSecurityTier } from "./level-service";
 import { Role, ROLES } from "../utils/roles";
+import { queueEmployeeHelpdeskSync } from "./frappe-helpdesk-service";
 
 // EMP-001, EMP-002, ... - picks up from whatever the highest real numeric
 // code already is, same MAX()+1 convention lead_number/claim_number already
@@ -416,5 +417,10 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
     `SELECT u.*, ep.pincodes, st.sales_team_ids FROM users u ${PINCODES_JOIN} ${SALES_TEAMS_JOIN} WHERE u.id = $1`,
     [id]
   );
+  // Level/role, name or active-state changes move their Helpdesk access too
+  // (background - a Helpdesk hiccup never fails saving the user).
+  if (updates.levelId !== undefined || updates.isActive !== undefined || updates.name !== undefined) {
+    queueEmployeeHelpdeskSync(id);
+  }
   return toPublicUser(final.rows[0]);
 }
