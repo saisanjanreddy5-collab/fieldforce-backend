@@ -487,19 +487,27 @@ export const SLC_STAGE = "SLC";
 // (the owner stays recorded as whoever it was originally given to; who
 // actually worked it shows up correctly in the activity log via created_by/
 // assigned_to, which already records the real actor, never the owner).
-// Deliberately keyed off l.status being exactly New/FLC/SLC (not "owner's
-// role is call_center") - a Qualified lead still owned by the SLC agent who
-// just qualified it (before Send to Field) is NOT covered by this: that
-// handoff window is still single-owner by design, same as today.
 // Client-confirmed, explicit: EVERY active Call Center Executive can see and
 // work ANY lead still at New, FLC, or SLC - there is no FLC/SLC team split
 // any more (removed by explicit request; see resolveTierAssignee, and
 // UserFormWizard.tsx no longer offers a Sales team field for this role). A
 // freshly imported or manually created batch is visible to the whole Call
 // Center floor immediately, however it was created.
+//
+// Client-confirmed, explicit: a Qualified lead also stays on the whole Call
+// Center floor until it is actually sent to Field Sales - whoever qualified
+// it (often an Admin) must not pull it out of every Call Center queue.
+// sendToField never changes status, only owner, so "still on the floor"
+// means Qualified with an owner who is not a Field Sales employee ('agent').
 const TIER_TEAMMATE_CLAUSE = `
   OR (
-    l.status IN ('New', '${FLC_STAGE}', '${SLC_STAGE}')
+    (
+      l.status IN ('New', '${FLC_STAGE}', '${SLC_STAGE}')
+      OR (
+        l.status = 'Qualified'
+        AND NOT EXISTS (SELECT 1 FROM users ou WHERE ou.id = l.owner_id AND ou.role = 'agent')
+      )
+    )
     AND EXISTS (SELECT 1 FROM users ru WHERE ru.id = $1 AND ru.role = 'call_center')
   )
 `;

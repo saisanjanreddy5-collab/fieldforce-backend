@@ -240,13 +240,8 @@ export async function qualifyLead(leadId: string, requestingUserId: string, ipAd
   }
 
   // Whoever actually marks this Qualified becomes its owner at that exact
-  // moment. Qualified is the one point where single-owner visibility kicks
-  // back in (TIER_TEAMMATE_CLAUSE stops covering a lead once it's Qualified -
-  // see that comment in lead-service.ts), so without this, a Call Center
-  // Executive who worked a colleague's FLC/SLC lead the whole way through
-  // would lose all access the instant they qualified it, with no Send to
-  // Field button for them. Setting owner here guarantees the person who just
-  // did the work can immediately carry it through themselves.
+  // moment (the whole Call Center floor still sees it until it's sent to
+  // Field Sales - see TIER_TEAMMATE_CLAUSE in lead-service.ts).
   return updateLead(leadId, { status: QUALIFIED_STAGE, ownerId: requestingUserId }, requestingUserId, ipAddress);
 }
 
