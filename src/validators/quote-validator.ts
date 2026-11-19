@@ -29,6 +29,13 @@ export const listQuotesQuerySchema = z.object({
   opportunityId: z.string().uuid().optional(),
   status: z.string().optional(),
   search: z.string().optional(),
+  // Salesperson = the lead's owner (who the deal belongs to).
+  ownerId: z.string().uuid().optional(),
+  category: z.string().optional(),
+  createdFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").optional(),
+  createdTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD").optional(),
+  minTotal: z.coerce.number().min(0).optional(),
+  maxTotal: z.coerce.number().min(0).optional(),
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(500).default(50),
 });

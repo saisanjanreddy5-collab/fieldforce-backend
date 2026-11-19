@@ -33,6 +33,12 @@ export function isAlreadyRegisteredMessage(message: string): boolean {
   return /already\s*(exists|registered)/i.test(message);
 }
 
+// SKIA's answer when the CMR token isn't accepted on that SKIA system:
+// HTTP 401/403, or a message like "Invalid CMR token".
+export function isTokenRejection(status: number, message: string): boolean {
+  return status === 401 || status === 403 || /(invalid|expired|wrong).{0,20}token|token.{0,20}(invalid|expired)/i.test(message);
+}
+
 // Every call here originates from this CRM pushing an already-approved FOFO
 // handoff, never from the store app itself - so is_from_cmr is always true,
 // not a per-call choice.
@@ -70,7 +76,17 @@ export async function registerFofoUser(input: RegisterFofoUserInput): Promise<Re
     } catch {
       // keep the generic name
     }
-    throw new ApiError(502, `SKIA FOFO user registration failed (${server}): ${message}`);
+    // SKIA refusing our CMR token is a setup problem on their side for this
+    // server (e.g. their test system's token was reset) - say so in plain
+    // words, so it isn't read as a CRM bug. Nothing was saved: the lead is
+    // only marked pushed after SKIA accepts (see pushToOnboardingAppOnce).
+    if (isTokenRejection(response.status, message)) {
+      throw new ApiError(
+        502,
+        `Not pushed - SKIA's onboarding system (${server}) refused FieldForce's access token ("${message}"). Nothing was saved on this lead. The SKIA team needs to issue a valid token for this server; then push again.`
+      );
+    }
+    throw new ApiError(502, `Not pushed - SKIA's onboarding system (${server}) rejected the registration: ${message}. Nothing was saved on this lead.`);
   }
   return { alreadyRegistered: false };
 }
