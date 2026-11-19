@@ -10,14 +10,7 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
-  const query = req.validatedQuery as unknown as {
-    leadId?: string;
-    opportunityId?: string;
-    status?: string;
-    search?: string;
-    page: number;
-    limit: number;
-  };
+  const query = req.validatedQuery as unknown as quoteService.ListQuotesFilters;
   const result = await quoteService.listQuotes(req.user!.id, query);
   sendSuccess(res, result);
 });

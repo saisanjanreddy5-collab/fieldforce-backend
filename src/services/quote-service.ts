@@ -35,6 +35,14 @@ export interface ListQuotesFilters {
   opportunityId?: string;
   status?: string;
   search?: string;
+  // Salesperson = the lead's owner (who the deal belongs to), not whoever
+  // happened to create the quote.
+  ownerId?: string;
+  category?: string;
+  createdFrom?: string;
+  createdTo?: string;
+  minTotal?: number;
+  maxTotal?: number;
   page: number;
   limit: number;
 }
@@ -56,6 +64,9 @@ interface QuoteListRow extends QuoteRow {
   opportunity_name: string | null;
   created_by_name: string | null;
   grand_total: string;
+  lead_category: string | null;
+  lead_owner_id: string | null;
+  lead_owner_name: string | null;
 }
 
 interface QuoteVersionRow {
@@ -121,6 +132,9 @@ function toPublicQuoteListItem(row: QuoteListRow) {
     opportunityName: row.opportunity_name,
     createdByName: row.created_by_name,
     grandTotal: Number(row.grand_total),
+    leadCategory: row.lead_category,
+    ownerId: row.lead_owner_id,
+    ownerName: row.lead_owner_name,
   };
 }
 
@@ -339,11 +353,13 @@ export async function listQuotesForLead(leadId: string, requestingUserId: string
 
   const result = await pool.query<QuoteListRow>(
     `SELECT q.*, l.full_name AS lead_full_name, o.name AS opportunity_name, u.name AS created_by_name,
+       l.category AS lead_category, l.owner_id AS lead_owner_id, ow.name AS lead_owner_name,
        qv.grand_total
      FROM quotes q
      JOIN leads l ON l.id = q.lead_id
      LEFT JOIN opportunities o ON o.id = q.opportunity_id
      LEFT JOIN users u ON u.id = q.created_by
+     LEFT JOIN users ow ON ow.id = l.owner_id
      JOIN quote_versions qv ON qv.quote_id = q.id AND qv.version_number = q.current_version
      WHERE q.lead_id = $1
      ORDER BY q.created_at DESC`,
@@ -358,11 +374,13 @@ export async function listQuotesForOpportunity(opportunityId: string, requesting
 
   const result = await pool.query<QuoteListRow>(
     `SELECT q.*, l.full_name AS lead_full_name, o.name AS opportunity_name, u.name AS created_by_name,
+       l.category AS lead_category, l.owner_id AS lead_owner_id, ow.name AS lead_owner_name,
        qv.grand_total
      FROM quotes q
      JOIN leads l ON l.id = q.lead_id
      LEFT JOIN opportunities o ON o.id = q.opportunity_id
      LEFT JOIN users u ON u.id = q.created_by
+     LEFT JOIN users ow ON ow.id = l.owner_id
      JOIN quote_versions qv ON qv.quote_id = q.id AND qv.version_number = q.current_version
      WHERE q.opportunity_id = $1
      ORDER BY q.created_at DESC`,
@@ -407,12 +425,37 @@ export async function listQuotes(requestingUserId: string, filters: ListQuotesFi
     params.push(`%${filters.search}%`);
     conditions.push(`(l.full_name ILIKE $${params.length} OR o.name ILIKE $${params.length} OR CAST(q.quote_number AS TEXT) ILIKE $${params.length})`);
   }
+  if (filters.ownerId) {
+    params.push(filters.ownerId);
+    conditions.push(`l.owner_id = $${params.length}`);
+  }
+  if (filters.category) {
+    params.push(filters.category);
+    conditions.push(`l.category = $${params.length}`);
+  }
+  if (filters.createdFrom) {
+    params.push(filters.createdFrom);
+    conditions.push(`q.created_at >= $${params.length}::date`);
+  }
+  if (filters.createdTo) {
+    params.push(filters.createdTo);
+    conditions.push(`q.created_at < ($${params.length}::date + interval '1 day')`);
+  }
+  if (filters.minTotal !== undefined) {
+    params.push(filters.minTotal);
+    conditions.push(`qv.grand_total >= $${params.length}`);
+  }
+  if (filters.maxTotal !== undefined) {
+    params.push(filters.maxTotal);
+    conditions.push(`qv.grand_total <= $${params.length}`);
+  }
 
   const countResult = await pool.query<{ count: string }>(
     `${SUBTREE_CTE}
      SELECT COUNT(*) FROM quotes q
      JOIN leads l ON l.id = q.lead_id
      LEFT JOIN opportunities o ON o.id = q.opportunity_id
+     JOIN quote_versions qv ON qv.quote_id = q.id AND qv.version_number = q.current_version
      WHERE ${conditions.join(" AND ")}`,
     params
   );
@@ -424,11 +467,13 @@ export async function listQuotes(requestingUserId: string, filters: ListQuotesFi
   const result = await pool.query<QuoteListRow>(
     `${SUBTREE_CTE}
      SELECT q.*, l.full_name AS lead_full_name, o.name AS opportunity_name, u.name AS created_by_name,
+       l.category AS lead_category, l.owner_id AS lead_owner_id, ow.name AS lead_owner_name,
        qv.grand_total
      FROM quotes q
      JOIN leads l ON l.id = q.lead_id
      LEFT JOIN opportunities o ON o.id = q.opportunity_id
      LEFT JOIN users u ON u.id = q.created_by
+     LEFT JOIN users ow ON ow.id = l.owner_id
      JOIN quote_versions qv ON qv.quote_id = q.id AND qv.version_number = q.current_version
      WHERE ${conditions.join(" AND ")}
      ORDER BY q.created_at DESC
