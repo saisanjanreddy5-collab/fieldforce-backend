@@ -1,4 +1,5 @@
 import { pool } from "../config/db";
+import { BUSINESS_TIMEZONE } from "../utils/business-time";
 import { Role, ROLES } from "../utils/roles";
 
 // Mirrors frontend/src/components/opportunities/stages.ts STAGE_DEFAULT_PROBABILITY -
@@ -16,7 +17,6 @@ const STAGE_DEFAULT_PROBABILITY: Record<string, number> = {
   lost: 0,
 };
 
-const BUSINESS_TIMEZONE = "Asia/Kolkata";
 
 interface PersonRow {
   id: string;
@@ -77,7 +77,7 @@ export interface TeamRollupGroup {
 // running in UTC would otherwise show last month's numbers from midnight
 // to 05:30 IST on the 1st of every month.
 function monthBoundaries(): { start: string; end: string } {
-  const [year, month] = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit" })
+  const [year, month] = new Intl.DateTimeFormat("en-CA", { timeZone: BUSINESS_TIMEZONE, year: "numeric", month: "2-digit" })
     .format(new Date())
     .split("-")
     .map(Number);
@@ -113,7 +113,11 @@ export async function getTeamRollup(requestingUserId: string, requestingRole: Ro
   if (managerIds.length === 0) return [];
 
   const peopleResult = await pool.query<PersonRow>(
-    `SELECT id, name, role, designation, territory, manager_id, sales_team_id
+    // A person can sit on several teams (user_sales_teams) - the rollup labels
+    // a manager's group with the first one by name.
+    `SELECT id, name, role, designation, territory, manager_id,
+       (SELECT ust.sales_team_id FROM user_sales_teams ust JOIN sales_teams t ON t.id = ust.sales_team_id
+        WHERE ust.user_id = users.id ORDER BY t.name LIMIT 1) AS sales_team_id
      FROM users
      WHERE status = 'active' AND (id = ANY($1) OR manager_id = ANY($1))
      ORDER BY (manager_id IS NULL) DESC, name ASC`,
@@ -154,7 +158,7 @@ export async function getTeamRollup(requestingUserId: string, requestingRole: Ro
        COALESCE((
          SELECT SUM(o.value) FROM opportunities o
          JOIN leads l ON l.id = o.lead_id
-         WHERE l.owner_id = t.user_id AND o.stage = 'won' AND o.is_deleted = false
+         WHERE l.owner_id = t.user_id AND o.stage = 'won' AND o.is_deleted = false AND l.is_deleted = false
            AND (o.won_at AT TIME ZONE '${BUSINESS_TIMEZONE}')::date BETWEEN t.period_start AND t.period_end
        ), 0) AS achieved_amount
      FROM targets t

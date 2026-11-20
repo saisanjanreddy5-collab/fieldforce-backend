@@ -1,13 +1,11 @@
 import { pool } from "../config/db";
 import { ADMIN_AWARE_SUBTREE_CTE } from "../utils/subtree";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { totalPathDistanceKm } from "../utils/geo";
 
 // A user's own attendance is visible to themselves and to everyone above
-// them in their reporting chain - the same Rule A idea used for leads.
-// Admin-aware: an Admin sees the whole company here, not just their own
-// reporting line (see utils/subtree.ts).
-const SUBTREE_CTE = ADMIN_AWARE_SUBTREE_CTE;
+// them in their reporting chain - the same Rule A idea used for leads - and
+// to every Admin (ADMIN_AWARE_SUBTREE_CTE).
 
 interface AttendanceRow {
   id: string;
@@ -107,7 +105,7 @@ export async function getMyHistory(userId: string) {
 
 async function isUserInRequesterSubtree(targetUserId: string, requestingUserId: string): Promise<boolean> {
   const result = await pool.query(
-    `${SUBTREE_CTE}
+    `${ADMIN_AWARE_SUBTREE_CTE}
      SELECT 1 FROM subtree WHERE id = $2`,
     [requestingUserId, targetUserId]
   );
@@ -129,7 +127,7 @@ export async function getUserHistory(targetUserId: string, requestingUserId: str
 
 export async function getTeamStatus(requestingUserId: string) {
   const result = await pool.query(
-    `${SUBTREE_CTE}
+    `${ADMIN_AWARE_SUBTREE_CTE}
      SELECT
        u.id AS "userId",
        u.name,

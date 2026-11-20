@@ -10,7 +10,7 @@ import {
   isActivityVisibleToUser,
   updateActivity,
 } from "../services/activity-service";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { ROLES, Role } from "../utils/roles";
 
 // Phase 3C correction pass:

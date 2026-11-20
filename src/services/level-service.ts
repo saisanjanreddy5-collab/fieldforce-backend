@@ -1,5 +1,6 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { recordAuditEvent } from "./audit-log-service";
+import { ApiError } from "../utils/api-error";
 import { Role, ROLES } from "../utils/roles";
 
 export const RECORD_SCOPES = [
@@ -30,6 +31,7 @@ interface LevelRow {
   can_view_call_recordings: boolean;
   can_see_unmasked_pii: boolean;
   created_at: string;
+  archived_at: string | null;
   current_headcount: string;
 }
 
@@ -92,6 +94,8 @@ function toPublicLevel(row: LevelRow) {
     canSeeUnmaskedPii: row.can_see_unmasked_pii,
     currentHeadcount: Number(row.current_headcount ?? 0),
     createdAt: row.created_at,
+    isArchived: row.archived_at !== null,
+    archivedAt: row.archived_at,
   };
 }
 
@@ -105,7 +109,7 @@ const HEADCOUNT_JOIN = `
 
 // The real security tier a level's people get at login - so picking a
 // Level in the People wizard is not just a display label, it actually
-// determines the account's requireRole/requirePermission access. See
+// determines the account's role and so its requirePermission access. See
 // auth-service.ts's registerUser and user-service.ts's updateUser.
 export async function getLevelSecurityTier(levelId: string): Promise<Role> {
   const result = await pool.query<{ security_tier: Role }>("SELECT security_tier FROM levels WHERE id = $1", [levelId]);
@@ -118,6 +122,59 @@ export async function getLevelSecurityTier(levelId: string): Promise<Role> {
 export interface ListLevelsFilters {
   page: number;
   limit: number;
+}
+
+// An archived level can't be given to anyone new. Someone already on it keeps
+// it - re-saving their profile with the same level is fine.
+export async function assertLevelAssignable(levelId: string, currentLevelId?: string | null): Promise<void> {
+  if (levelId === currentLevelId) return;
+  const result = await pool.query<{ name: string; archived_at: string | null }>("SELECT name, archived_at FROM levels WHERE id = $1", [levelId]);
+  if (result.rows[0]?.archived_at) {
+    throw new ApiError(422, `"${result.rows[0].name}" is archived - restore it before giving it to anyone`);
+  }
+}
+
+// Archive = "pause" a role. Deliberately touches nothing but the level row:
+// the people on it keep their level and access, and every lead, customer,
+// opportunity and history row they own stays exactly where it is.
+export async function archiveLevel(id: string, actorId: string, ipAddress?: string | null) {
+  const level = await getLevelById(id);
+  if (level.isArchived) throw new ApiError(409, "This role is already archived");
+  if (level.securityTier === ROLES.ADMIN) {
+    const otherAdminLevels = await pool.query(
+      "SELECT 1 FROM levels WHERE security_tier = $1 AND archived_at IS NULL AND id <> $2 LIMIT 1",
+      [ROLES.ADMIN, id]
+    );
+    if ((otherAdminLevels.rowCount ?? 0) === 0) {
+      throw new ApiError(409, "This is the last active Admin role - keep it, so an Admin can always be appointed");
+    }
+  }
+  await pool.query("UPDATE levels SET archived_at = now(), archived_by = $2 WHERE id = $1 AND archived_at IS NULL", [id, actorId]);
+  await recordLevelEvent(level, "archived", actorId, ipAddress);
+  return getLevelById(id);
+}
+
+export async function restoreLevel(id: string, actorId: string, ipAddress?: string | null) {
+  const level = await getLevelById(id);
+  if (!level.isArchived) throw new ApiError(409, "This role is not archived");
+  await pool.query("UPDATE levels SET archived_at = NULL, archived_by = NULL WHERE id = $1", [id]);
+  await recordLevelEvent(level, "restored", actorId, ipAddress);
+  return getLevelById(id);
+}
+
+async function recordLevelEvent(level: { id: string; name: string; currentHeadcount: number }, action: "archived" | "restored", actorId: string, ipAddress?: string | null) {
+  const people = `${level.currentHeadcount} ${level.currentHeadcount === 1 ? "person" : "people"} on it, unchanged`;
+  await recordAuditEvent({
+    entityType: "level",
+    entityId: level.id,
+    entityLabel: level.name,
+    action: `level_${action}`,
+    summary: `Role ${action} - ${level.name} (${people})`,
+    oldValue: action === "archived" ? "Active" : "Archived",
+    newValue: action === "archived" ? "Archived" : "Active",
+    actorId,
+    ipAddress,
+  });
 }
 
 export async function listLevels(filters: ListLevelsFilters) {
@@ -145,9 +202,12 @@ async function getLevelById(id: string) {
 }
 
 export async function createLevel(input: CreateLevelInput) {
-  const existing = await pool.query<{ id: string }>("SELECT id FROM levels WHERE name = $1", [input.name]);
+  const existing = await pool.query<{ id: string; archived_at: string | null }>("SELECT id, archived_at FROM levels WHERE name = $1", [input.name]);
   if (existing.rows.length > 0) {
-    throw new ApiError(409, "A level with this name already exists");
+    throw new ApiError(
+      409,
+      existing.rows[0].archived_at ? "An archived role already has this name - restore it instead" : "A level with this name already exists"
+    );
   }
 
   const result = await pool.query<{ id: string }>(

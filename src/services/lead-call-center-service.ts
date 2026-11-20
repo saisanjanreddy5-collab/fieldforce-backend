@@ -1,5 +1,5 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { recordAuditEvent } from "./audit-log-service";
 import {
   createLead,
@@ -392,7 +392,6 @@ export async function sendToField(
 
     const updated = await updateLead(leadId, { ownerId: fallback.id }, requestingUserId, ipAddress);
     await shareLeadBackToSender(leadId, requestingUserId);
-    const actor = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
     await recordAuditEvent({
       entityType: "lead",
       entityId: leadId,
@@ -402,7 +401,6 @@ export async function sendToField(
       oldValue: facts.pincode ? `No coverage for pincode ${facts.pincode}` : "No pincode on file",
       newValue: fallback.name,
       actorId: requestingUserId,
-      actorName: actor.rows[0]?.name ?? null,
       ipAddress,
     });
     return updated;

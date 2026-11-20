@@ -1,25 +1,13 @@
+import type { PoolClient } from "pg";
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { recordAuditEvent, listAuditLogForEntity } from "./audit-log-service";
 import { bulkImportRowSchema } from "../validators/lead-validator";
 import { createCustomerFromLead, syncCustomerOwnerFromLead } from "./customer-service";
 import { listActivitiesForLead, listCommentsForActivities } from "./activity-service";
 import * as whatsappService from "./whatsapp-service";
-
-// Rule A (hierarchy-based visibility): a lead is visible to its owner and to
-// everyone directly above the owner in the reporting chain. Walking UP from a
-// specific lead's owner would need one query per lead, so instead we walk
-// DOWN from the requesting user to find their entire subtree (themselves +
-// every direct/indirect report). A lead is then visible via Rule A exactly
-// when its owner is somewhere in that subtree - which is equivalent to "the
-// requesting user is on the owner's upward chain".
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
+import { SUBTREE_CTE } from "../utils/subtree";
+import { cleanImportedMobile, last10Digits } from "../utils/phone";
 
 interface LeadRow {
   id: string;
@@ -583,25 +571,18 @@ export async function listDistinctTerritories(): Promise<string[]> {
 const TERMINAL_LEAD_STATUSES = ["Converted", "Closed Lost"];
 const TERMINAL_STATUS_SQL = TERMINAL_LEAD_STATUSES.map((s) => `'${s}'`).join(", ");
 
-// Compares only the last 10 digits after stripping everything but digits,
-// so "9876543210", "+91 98765 43210" and "091-9876543210" are all
-// recognized as the same number even though nothing in this app enforces
-// a single phone format at entry time.
-function normalizePhone(phone: string): string {
-  return phone.replace(/\D/g, "").slice(-10);
-}
-
-// SQL twin of normalizePhone - written exactly like idx_leads_phone_last10
-// (model.ts) so Postgres can use that index for every match below.
-const phoneKey = (column: string) => `RIGHT(regexp_replace(${column}, '\\D', '', 'g'), 10)`;
+// leads.phone_key is the stored SQL twin of last10Digits (a generated
+// column with its own index, model.ts), so every match below is a plain
+// indexed equality instead of re-computing the number on every row - which
+// made the Duplicates count compare every lead with every other lead.
 
 // Another active lead with the same mobile number as `alias`, oldest first.
 function activeTwinCondition(alias: string, twin: string): string {
   return `${twin}.is_deleted = false AND ${twin}.id <> ${alias}.id
     AND ${twin}.status NOT IN (${TERMINAL_STATUS_SQL})
     AND ${alias}.status NOT IN (${TERMINAL_STATUS_SQL})
-    AND length(${phoneKey(`${alias}.phone`)}) = 10
-    AND ${phoneKey(`${twin}.phone`)} = ${phoneKey(`${alias}.phone`)}`;
+    AND length(${alias}.phone_key) = 10
+    AND ${twin}.phone_key = ${alias}.phone_key`;
 }
 
 // The "Possible duplicate" tag: computed live, so it covers duplicates
@@ -629,8 +610,10 @@ export interface ActiveLeadMatch {
   ownerName: string | null;
 }
 
-async function findActiveLead(whereSql: string, value: string, excludeLeadId?: string): Promise<ActiveLeadMatch | null> {
-  const result = await pool.query<{ id: string; full_name: string; lead_number: number | null; status: string; owner_name: string | null }>(
+type Queryable = Pick<PoolClient, "query">;
+
+async function findActiveLead(whereSql: string, value: string, excludeLeadId?: string, db: Queryable = pool): Promise<ActiveLeadMatch | null> {
+  const result = await db.query<{ id: string; full_name: string; lead_number: number | null; status: string; owner_name: string | null }>(
     `SELECT l.id, l.full_name, l.lead_number, l.status, u.name AS owner_name
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
@@ -647,10 +630,10 @@ async function findActiveLead(whereSql: string, value: string, excludeLeadId?: s
   return { id: row.id, fullName: row.full_name, leadNumber: row.lead_number, status: row.status, ownerName: row.owner_name };
 }
 
-async function findActiveLeadByPhone(phone: string, excludeLeadId?: string): Promise<ActiveLeadMatch | null> {
-  const normalized = normalizePhone(phone);
+async function findActiveLeadByPhone(phone: string, excludeLeadId?: string, db: Queryable = pool): Promise<ActiveLeadMatch | null> {
+  const normalized = last10Digits(phone);
   if (normalized.length < 10) return null;
-  return findActiveLead(`${phoneKey("l.phone")} = $1`, normalized, excludeLeadId);
+  return findActiveLead("l.phone_key = $1", normalized, excludeLeadId, db);
 }
 
 async function findActiveLeadByEmail(email: string, excludeLeadId?: string): Promise<ActiveLeadMatch | null> {
@@ -681,25 +664,10 @@ export async function checkLeadDuplicates(input: { phone?: string; email?: strin
   return { phone, email };
 }
 
-// Serializes check-then-insert per mobile number, so two people saving the
-// same number at the same moment can't both slip past the duplicate check.
-async function withPhoneLock<T>(phone: string | undefined, fn: () => Promise<T>): Promise<T> {
-  const normalized = phone ? normalizePhone(phone) : "";
-  if (normalized.length < 10) return fn();
-  const client = await pool.connect();
-  try {
-    await client.query("SELECT pg_advisory_lock(hashtext($1))", [`lead-phone:${normalized}`]);
-    return await fn();
-  } finally {
-    await client.query("SELECT pg_advisory_unlock(hashtext($1))", [`lead-phone:${normalized}`]).catch(() => undefined);
-    client.release();
-  }
-}
-
 // A website/QR visitor whose number is already an active lead: no second
 // lead - the enquiry is logged on the existing lead's History instead, so
 // whoever already works it sees it.
-async function recordRepeatInquiry(match: ActiveLeadMatch, input: CreateLeadInput, ipAddress?: string | null) {
+async function recordRepeatInquiry(match: ActiveLeadMatch, input: CreateLeadInput, ipAddress: string | null | undefined, db: Queryable) {
   const details = [
     `Via: ${input.inquirySource ?? input.source ?? "unknown source"}`,
     input.fullName && input.fullName !== match.fullName ? `Name given: ${input.fullName}` : null,
@@ -718,7 +686,7 @@ async function recordRepeatInquiry(match: ActiveLeadMatch, input: CreateLeadInpu
     actorId: null,
     actorName: null,
     ipAddress,
-  });
+  }, db);
 }
 
 // Used to route an inbound WhatsApp reply to the right lead. Unlike
@@ -728,13 +696,13 @@ async function recordRepeatInquiry(match: ActiveLeadMatch, input: CreateLeadInpu
 // (an old finished lead plus a new one, or duplicates from before the
 // one-active-lead-per-number block), the most recently updated one wins.
 export async function findLeadIdByPhone(phone: string): Promise<string | null> {
-  const normalized = normalizePhone(phone);
+  const normalized = last10Digits(phone);
   if (normalized.length < 10) return null;
 
   const result = await pool.query<{ id: string }>(
     `SELECT id FROM leads
      WHERE is_deleted = false
-       AND RIGHT(regexp_replace(phone, '\\D', '', 'g'), 10) = $1
+       AND phone_key = $1
      ORDER BY updated_at DESC
      LIMIT 1`,
     [normalized]
@@ -779,23 +747,61 @@ export async function createLead(
   ipAddress?: string | null,
   options?: CreateLeadOptions
 ) {
-  return withPhoneLock(input.phone, async () => {
-    const existing = input.phone ? await findActiveLeadByPhone(input.phone) : null;
+  // Who it goes to is worked out first (read-only lookups), so the
+  // transaction below holds one connection briefly and never waits on another.
+  const { ownerId, status } = await resolveStartingOwner(input, creatorId, options);
+
+  // The duplicate check, the lead, its consent and their History entries all
+  // happen in one transaction. The per-number lock makes two people saving
+  // the same mobile number at the same moment take turns, so the second one
+  // sees the first one's lead instead of slipping past the check.
+  const phoneKey = input.phone ? last10Digits(input.phone) : "";
+  const client = await pool.connect();
+  let existing: ActiveLeadMatch | null = null;
+  let lead: LeadRow | null = null;
+  try {
+    await client.query("BEGIN");
+    if (phoneKey.length === 10) {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`lead-phone:${phoneKey}`]);
+      existing = await findActiveLeadByPhone(phoneKey, undefined, client);
+    }
     if (existing) {
       if (options?.onDuplicatePhone !== "attach") throw duplicatePhoneError(existing);
-      await recordRepeatInquiry(existing, input, ipAddress);
-      return getLeadById(existing.id, creatorId, { skipVisibilityCheck: true });
+      await recordRepeatInquiry(existing, input, ipAddress, client);
+    } else {
+      lead = await insertLead(client, input, creatorId, ownerId, status, ipAddress);
     }
-    return insertLead(input, creatorId, ipAddress, options);
-  });
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  if (existing) return getLeadById(existing.id, creatorId, { skipVisibilityCheck: true });
+  const saved = lead as LeadRow;
+
+  // Fire-and-forget, after the lead is committed: sendWelcomeMessageForLead
+  // never throws (it logs its own failures), so a WhatsApp outage never fails
+  // lead creation, and nobody waits on WhatsApp's response time.
+  // welcome_message_sent only flips true on a real confirmed send.
+  if (saved.phone && !options?.skipWelcomeMessage) {
+    const leadId = saved.id;
+    whatsappService
+      .sendWelcomeMessageForLead(leadId, saved.phone, saved.full_name, creatorId)
+      .then((sent) => (sent ? pool.query("UPDATE leads SET welcome_message_sent = true WHERE id = $1", [leadId]) : undefined))
+      .catch((err) => console.error(`Welcome message bookkeeping failed for lead ${leadId}:`, err));
+  }
+
+  return toPublicLead(saved);
 }
 
-async function insertLead(
+async function resolveStartingOwner(
   input: CreateLeadInput,
   creatorId: string,
-  ipAddress?: string | null,
   options?: CreateLeadOptions
-) {
+): Promise<{ ownerId: string | null; status: string | undefined }> {
   let ownerId: string | null;
   // input.status is only ever non-undefined for a trusted internal caller
   // (see CreateLeadInput's own comment on that field) - every real
@@ -814,7 +820,17 @@ async function insertLead(
   } else {
     ownerId = input.ownerId ?? (await resolveAutoAssignee(input, creatorId));
   }
+  return { ownerId, status };
+}
 
+async function insertLead(
+  db: Queryable,
+  input: CreateLeadInput,
+  creatorId: string,
+  ownerId: string | null,
+  status: string | undefined,
+  ipAddress?: string | null
+): Promise<LeadRow> {
   const { columns, placeholders, values } = buildInsert({
     full_name: input.fullName,
     contact_name: input.contactName,
@@ -823,10 +839,8 @@ async function insertLead(
     qualified_person: input.qualifiedPerson,
     financial_status: input.financialStatus,
     // 'New' (capital N) matches pipeline_stages' real key for this stage -
-    // same reasoning as 'Converted' on the createCustomerFromLead path
-    // below. Used to default to lowercase 'new' here, silently diverging
-    // from the Title-Case value the Leads list's own Stage filter and the
-    // Dashboard's status breakdown actually group/filter by. A marketing lead
+    // the Title-Case value the Leads list's Stage filter and the
+    // Dashboard's status breakdown group/filter by. A marketing lead
     // defaults to the FLC stage instead (set above), not 'New'.
     status: status ?? "New",
     prospect_status: input.prospectStatus,
@@ -890,7 +904,7 @@ async function insertLead(
     updated_by: creatorId,
   });
 
-  const result = await pool.query<LeadRow>(
+  const result = await db.query<LeadRow>(
     `INSERT INTO leads (${columns.join(", ")}) VALUES (${placeholders.join(", ")}) RETURNING *`,
     values
   );
@@ -899,7 +913,7 @@ async function insertLead(
 
   if (input.consent) {
     const captured = input.consent.captured ?? false;
-    await pool.query(
+    await db.query(
       `INSERT INTO consents (lead_id, captured, method, purposes, evidence_ref, notes, captured_at, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
@@ -915,7 +929,6 @@ async function insertLead(
     );
 
     if (captured) {
-      const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [creatorId]);
       await recordAuditEvent({
         entityType: "consent",
         entityId: lead.id,
@@ -925,28 +938,12 @@ async function insertLead(
         oldValue: null,
         newValue: input.consent.purposes ?? "Unspecified purpose",
         actorId: creatorId,
-        actorName: actorResult.rows[0]?.name ?? null,
         ipAddress,
-      });
+      }, db);
     }
   }
 
-  // Fire-and-forget: sendWelcomeMessageForLead never throws (it swallows and
-  // logs its own failures) - a WhatsApp outage or missing/unconfigured
-  // integration must never fail lead creation itself. welcome_message_sent
-  // only flips true on a real confirmed send, never optimistically.
-  // Genuinely not awaited: the lead is already saved, so the person (or
-  // public QR/website form) gets their answer immediately instead of
-  // waiting on WhatsApp's response time.
-  if (lead.phone && !options?.skipWelcomeMessage) {
-    const leadId = lead.id;
-    whatsappService
-      .sendWelcomeMessageForLead(leadId, lead.phone, lead.full_name, creatorId)
-      .then((sent) => (sent ? pool.query("UPDATE leads SET welcome_message_sent = true WHERE id = $1", [leadId]) : undefined))
-      .catch((err) => console.error(`Welcome message bookkeeping failed for lead ${leadId}:`, err));
-  }
-
-  return toPublicLead(lead);
+  return lead;
 }
 
 export interface BulkImportResult {
@@ -962,7 +959,7 @@ const MAX_BULK_IMPORT_ROWS = 5000;
 // row keeps each row's own write atomic (createLead's single INSERT) while
 // letting one bad row get reported and skipped without aborting the rest
 // of the batch. The only addition here is a within-this-file duplicate
-// guard (same normalizePhone used everywhere else), since two rows in the
+// guard (same last10Digits used everywhere else), since two rows in the
 // same spreadsheet can share a phone number in a way createLead's
 // one-row-at-a-time duplicate check can't see on its own.
 export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId: string): Promise<BulkImportResult> {
@@ -995,7 +992,7 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
 
     try {
       if (row.phone) {
-        const normalized = normalizePhone(row.phone);
+        const normalized = last10Digits(row.phone);
         if (normalized.length === 10 && seenPhones.has(normalized)) {
           result.skipped.push({ row: rowNumber, reason: "Duplicate phone number within this file" });
           continue;
@@ -1012,28 +1009,11 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
       const assignedOwnerId = row.assignedToEmail
         ? await resolveCallCenterExecutiveByEmail(row.assignedToEmail)
         : null;
-      // Spreadsheets carry phones as "+91 98765 43210", "098765-43210", ...
       // Store the clean 10-digit form whenever one can be read, so these
       // leads match the format the Edit form requires instead of blocking
-      // every later edit until someone retypes the number. A value that
-      // doesn't yield 10 digits is kept as typed - never guessed.
-      // Only unambiguous forms of ONE Indian mobile number are cleaned:
-      // 10 digits, or a 0 / 91 / 091 prefix + 10 digits. Anything else (two
-      // numbers in one cell, an extra-digit typo) is kept exactly as typed -
-      // trimming it to "the last 10 digits" would silently turn it into a
-      // stranger's number.
-      const cleanPhone = (value: string | undefined) => {
-        if (!value) return value;
-        const digits = value.replace(/\D/g, "");
-        const isOneMobile =
-          digits.length === 10 ||
-          (digits.length === 11 && digits.startsWith("0")) ||
-          (digits.length === 12 && digits.startsWith("91")) ||
-          (digits.length === 13 && digits.startsWith("091"));
-        return isOneMobile ? digits.slice(-10) : value;
-      };
+      // every later edit until someone retypes the number.
       await createLead(
-        { ...row, phone: cleanPhone(row.phone), altPhone: cleanPhone(row.altPhone), ownerId: assignedOwnerId ?? undefined },
+        { ...row, phone: cleanImportedMobile(row.phone), altPhone: cleanImportedMobile(row.altPhone), ownerId: assignedOwnerId ?? undefined },
         creatorId,
         undefined,
         { requiresQualification: true, skipWelcomeMessage: true }
@@ -1165,7 +1145,7 @@ export async function getLeadById(
 // decides what a filter means, so "Export" always matches exactly whatever
 // the admin currently has filtered on screen instead of a second, drifting
 // implementation of the same rules.
-export function buildLeadFilterConditions(
+function buildLeadFilterConditions(
   requestingUserId: string,
   filters: Omit<ListLeadsFilters, "page" | "limit">
 ): { conditions: string[]; params: unknown[] } {
@@ -1267,20 +1247,15 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
   const { conditions, params } = buildLeadFilterConditions(requestingUserId, filters);
   const whereClause = conditions.join(" AND ");
 
-  // A lightweight companion COUNT using the exact same WHERE/params (minus
-  // limit/offset) - needed for a real "X of Y leads" and to know whether
-  // more pages exist, now that the frontend no longer loads everything at
-  // once.
-  const countResult = await pool.query<{ count: string }>(
-    `${SUBTREE_CTE} SELECT COUNT(*) FROM leads l WHERE ${whereClause}`,
-    params
-  );
-
   const limit = filters.limit;
   const offset = (filters.page - 1) * filters.limit;
   const listParams = [...params, limit, offset];
 
-  const result = await pool.query<LeadRow>(
+  // The total (for "X of Y" and paging) and the page itself run at the same
+  // time, not one after the other.
+  const [countResult, result] = await Promise.all([
+    pool.query<{ count: string }>(`${SUBTREE_CTE} SELECT COUNT(*) FROM leads l WHERE ${whereClause}`, params),
+    pool.query<LeadRow>(
     `${SUBTREE_CTE}
      SELECT l.*, u.name AS owner_name, u.role AS owner_role,
        ${DUPLICATE_LEAD_COLUMNS},
@@ -1297,10 +1272,11 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
      LEFT JOIN users u ON u.id = l.owner_id
      ${duplicateLeadJoin("l")}
      WHERE ${whereClause}
-     ORDER BY ${filters.duplicatesOnly ? `${phoneKey("l.phone")}, l.created_at ASC` : "l.created_at DESC"}
+     ORDER BY ${filters.duplicatesOnly ? "l.phone_key, l.created_at ASC" : "l.created_at DESC"}
      LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
-    listParams
-  );
+      listParams
+    ),
+  ]);
 
   return { leads: result.rows.map(toPublicLead), total: Number(countResult.rows[0].count) };
 }
@@ -1380,11 +1356,12 @@ export async function listLeadsForExport(
     `${SUBTREE_CTE}
      SELECT l.id, l.lead_number, l.full_name, l.phone, l.email, l.company_name, l.category, l.status,
        COALESCE(l.source, l.inquiry_source) AS source, l.inquiry_source, l.territory, l.expected_value,
-       l.owner_id, u.name AS owner_name, u.role AS owner_role, st.name AS owner_team_name,
+       l.owner_id, u.name AS owner_name, u.role AS owner_role,
+       -- A person can sit on several teams (user_sales_teams).
+       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM user_sales_teams ust JOIN sales_teams t ON t.id = ust.sales_team_id WHERE ust.user_id = u.id) AS owner_team_name,
        l.created_at, l.updated_at, l.internal_notes, l.rm_remark, l.lg_remark
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
-     LEFT JOIN sales_teams st ON st.id = u.sales_team_id
      WHERE ${whereClause}
      ORDER BY l.lead_number ASC`,
     params
@@ -1587,7 +1564,7 @@ export async function updateLead(
   const statusAfter = updates.status ?? before?.status;
   if (
     updates.phone &&
-    normalizePhone(updates.phone) !== normalizePhone(before?.phone ?? "") &&
+    last10Digits(updates.phone) !== last10Digits(before?.phone ?? "") &&
     statusAfter &&
     !TERMINAL_LEAD_STATUSES.includes(statusAfter)
   ) {
@@ -1736,9 +1713,6 @@ export async function updateLead(
   const after = result.rows[0];
 
   if (before) {
-    const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
-    const actorName = actorResult.rows[0]?.name ?? null;
-
     if (updates.category !== undefined && updates.category !== before.category) {
       await recordAuditEvent({
         entityType: "lead",
@@ -1749,7 +1723,6 @@ export async function updateLead(
         oldValue: before.category,
         newValue: after.category,
         actorId: requestingUserId,
-        actorName,
         ipAddress,
       });
     }
@@ -1775,7 +1748,6 @@ export async function updateLead(
           oldValue: before[field.column],
           newValue: after[field.column],
           actorId: requestingUserId,
-          actorName,
           ipAddress,
         });
       }
@@ -1818,7 +1790,6 @@ export async function updateLead(
         oldValue: `${before.status} · ${oldOwnerName}`,
         newValue: `${after.status} · ${newOwnerName}`,
         actorId: requestingUserId,
-        actorName,
         ipAddress,
       });
     } else if (statusChanged) {
@@ -1831,7 +1802,6 @@ export async function updateLead(
         oldValue: before.status,
         newValue: after.status,
         actorId: requestingUserId,
-        actorName,
         ipAddress,
       });
     }
@@ -1870,7 +1840,6 @@ export async function updateLead(
           oldValue: oldOwnerName,
           newValue: newOwnerName,
           actorId: requestingUserId,
-          actorName,
           ipAddress,
         });
       }
@@ -1909,7 +1878,6 @@ export async function updateLead(
         oldValue: oldDisplay,
         newValue: newDisplay,
         actorId: requestingUserId,
-        actorName,
         ipAddress,
       });
     }
@@ -1925,7 +1893,6 @@ export async function deleteLead(leadId: string, requestingUserId: string, ipAdd
   }
 
   const leadResult = await pool.query<{ full_name: string }>("SELECT full_name FROM leads WHERE id = $1", [leadId]);
-  const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
 
   await pool.query(
     "UPDATE leads SET is_deleted = true, updated_by = $1, updated_at = now() WHERE id = $2",
@@ -1942,7 +1909,6 @@ export async function deleteLead(leadId: string, requestingUserId: string, ipAdd
       oldValue: "Active",
       newValue: "Deleted",
       actorId: requestingUserId,
-      actorName: actorResult.rows[0]?.name ?? null,
       ipAddress,
     });
   }
@@ -1971,7 +1937,6 @@ export async function restoreLead(leadId: string, requestingUserId: string, ipAd
   }
 
   const leadResult = await pool.query<{ full_name: string }>("SELECT full_name FROM leads WHERE id = $1", [leadId]);
-  const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
 
   await pool.query(
     "UPDATE leads SET is_deleted = false, updated_by = $1, updated_at = now() WHERE id = $2",
@@ -1988,7 +1953,6 @@ export async function restoreLead(leadId: string, requestingUserId: string, ipAd
       oldValue: "Deleted",
       newValue: "Active",
       actorId: requestingUserId,
-      actorName: actorResult.rows[0]?.name ?? null,
       ipAddress,
     });
   }

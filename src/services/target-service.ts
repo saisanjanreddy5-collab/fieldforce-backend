@@ -1,6 +1,8 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { BUSINESS_TIMEZONE } from "../utils/business-time";
+import { ApiError } from "../utils/api-error";
 import { Role, ROLES } from "../utils/roles";
+import { SUBTREE_CTE } from "../utils/subtree";
 
 interface TargetRow {
   id: string;
@@ -37,7 +39,6 @@ export interface UpdateTargetInput {
 // app (nothing set a convention before this), chosen because this is an
 // India-based business. See config/db.ts for the separate DATE-column fix;
 // this is unrelated (won_at is a real moment in time, correctly TIMESTAMPTZ).
-const BUSINESS_TIMEZONE = "Asia/Kolkata";
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");
@@ -98,17 +99,6 @@ function toPublicTarget(row: TargetRow) {
   };
 }
 
-// Same visibility shape as listUsers: an Admin sees everyone's targets, a
-// Manager only their own reporting subtree - so this can't be used to see
-// another branch's numbers by passing a different userId.
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
-
 // One LATERAL join computes achieved-in-period entirely in Postgres - no
 // opportunities are ever loaded into JS just to sum them.
 const ACHIEVED_JOIN = `
@@ -119,6 +109,7 @@ const ACHIEVED_JOIN = `
     WHERE l.owner_id = t.user_id
       AND o.stage = 'won'
       AND o.is_deleted = false
+      AND l.is_deleted = false
       AND (o.won_at AT TIME ZONE '${BUSINESS_TIMEZONE}')::date BETWEEN t.period_start AND t.period_end
   ) achieved ON true
 `;
@@ -132,6 +123,9 @@ export interface ListTargetsFilters {
   limit: number;
 }
 
+// Same visibility shape as listUsers: an Admin sees everyone's targets, a
+// Manager only their own reporting subtree - so this can't be used to see
+// another branch's numbers by passing a different userId.
 export async function listTargets(requestingUserId: string, requestingRole: Role, filters: ListTargetsFilters) {
   const limit = filters.limit;
   const offset = (filters.page - 1) * filters.limit;

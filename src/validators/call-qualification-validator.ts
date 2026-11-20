@@ -2,7 +2,7 @@ import { z } from "zod";
 
 // The business's own real call-disposition values, taken directly from
 // their existing manual call-tracking spreadsheet - not invented here.
-export const CALL_DISPOSITIONS = [
+const CALL_DISPOSITIONS = [
   "Ringing",
   "Not Reachable",
   "Switched Off",

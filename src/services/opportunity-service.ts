@@ -1,9 +1,10 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { isLeadInOwnerScope, isLeadVisibleToUser, FLC_STAGE, SLC_STAGE } from "./lead-service";
 import { createCustomerFromLead } from "./customer-service";
-import { queueCustomerHelpdeskSyncForLead } from "./frappe-helpdesk-service";
+import { queueCustomerHelpdeskSync, queueCustomerHelpdeskSyncForLead } from "./frappe-helpdesk-service";
 import { recordAuditEvent, listAuditLogForEntity } from "./audit-log-service";
+import { SUBTREE_CTE } from "../utils/subtree";
 
 // Still Call Center's own floor (New/FLC/SLC) - matches
 // lead-call-center-service.ts's own isCallCenterTierStage, duplicated here
@@ -13,17 +14,6 @@ const NEW_STAGE = "New";
 function isCallCenterTierStage(stage: string): boolean {
   return stage === NEW_STAGE || stage === FLC_STAGE || stage === SLC_STAGE;
 }
-
-// Reuses the same "subtree" idea as leads: an opportunity is visible to a
-// user exactly when the lead it belongs to is visible to that user (Rule A
-// hierarchy chain, or Rule B explicit share on the lead).
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
 
 interface OpportunityRow {
   id: string;
@@ -119,6 +109,9 @@ function toPublicOpportunityListItem(row: OpportunityListRow) {
   };
 }
 
+// An opportunity is visible to a user exactly when the lead it belongs to is
+// visible to that user (Rule A hierarchy chain, or Rule B explicit share on
+// the lead).
 export async function isOpportunityVisibleToUser(opportunityId: string, userId: string): Promise<boolean> {
   const result = await pool.query(
     `${SUBTREE_CTE}
@@ -250,21 +243,15 @@ export async function convertLeadToOpportunity(leadId: string, input: Opportunit
       ]
     );
 
-    await client.query("COMMIT");
+    // The customer is created in the same transaction as the opportunity and
+    // the lead's Converted status - all three happen or none do (it used to
+    // run after COMMIT with its errors swallowed, so a converted lead could
+    // silently end up with no customer). Idempotent: a lead converted again
+    // keeps its existing customer.
+    const newCustomerId = await createCustomerFromLead(leadResult.rows[0], client);
 
-    // A customer is never created directly - this is the only place
-    // convertLeadToOpportunity's own 'Converted' write can reach, since it's
-    // a raw-SQL UPDATE that never passes through lead-service.ts's updateLead
-    // (the other place this same auto-creation happens, for a direct status
-    // edit). Idempotent (ON CONFLICT (lead_id) DO NOTHING inside
-    // createCustomerFromLead) and caught, not rethrown: the opportunity
-    // already committed above, so a failure here must not tell the caller
-    // the conversion failed when it actually succeeded.
-    try {
-      await createCustomerFromLead(leadResult.rows[0]);
-    } catch (err) {
-      console.error(`Failed to auto-create customer for converted lead ${leadId}:`, err);
-    }
+    await client.query("COMMIT");
+    if (newCustomerId) queueCustomerHelpdeskSync(newCustomerId);
 
     // The real fix for "Opportunity History doesn't show who created it" -
     // the created_by column on the row itself was always correct, but
@@ -496,7 +483,6 @@ export async function updateOpportunity(id: string, updates: OpportunityInput, r
   // change and gets silently overwritten the next time the deal moves.
   // Same pattern updateLead's own status_changed audit entry already uses.
   if (before && updates.stage !== undefined && updates.stage !== before.stage) {
-    const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
     await recordAuditEvent({
       entityType: "opportunity",
       entityId: id,
@@ -506,7 +492,6 @@ export async function updateOpportunity(id: string, updates: OpportunityInput, r
       oldValue: before.stage,
       newValue: updates.stage,
       actorId: requestingUserId,
-      actorName: actorResult.rows[0]?.name ?? null,
     });
     // Won = the customer took the outlet/franchise: support-portal access
     // and their invite. Moving away from Won takes the access back.

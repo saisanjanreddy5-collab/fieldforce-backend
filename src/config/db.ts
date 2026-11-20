@@ -1,5 +1,6 @@
 import { Pool, types } from "pg";
 import { env } from "./env";
+import { BUSINESS_TIMEZONE } from "../utils/business-time";
 
 // node-postgres's default DATE (OID 1082) parser builds a JS Date at
 // local-server-timezone midnight, which then serializes to JSON as a UTC
@@ -14,6 +15,18 @@ types.setTypeParser(types.builtins.DATE, (value) => value);
 
 export const pool = new Pool({
   connectionString: env.DATABASE_URL,
+  // Keep connections open between requests. pg's defaults (close after 10 s
+  // idle, keep none) made the first page load after any short pause re-open
+  // every connection - measured at ~0.5 s per page load on the dev box.
+  max: 20,
+  min: 4,
+  idleTimeoutMillis: 300_000,
+  connectionTimeoutMillis: 10_000,
+  keepAlive: true,
+  // India time for every query (see utils/business-time.ts) - CURRENT_DATE,
+  // date_trunc("month", ...) and "YYYY-MM-DD"::date comparisons used UTC,
+  // so reports, leave and transfers disagreed about what "today" was.
+  options: `-c timezone=${BUSINESS_TIMEZONE}`,
   // Safety net: no single query may hold a connection forever. Nothing in
   // normal use comes close to this; it only cuts off a runaway query before
   // it can exhaust the pool and take the whole API down with it.

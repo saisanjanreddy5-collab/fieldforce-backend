@@ -2,14 +2,11 @@ import { pool } from "../config/db";
 import { createLead } from "../services/lead-service";
 import { createActivityForLead, deleteActivity } from "../services/activity-service";
 
-// Covers the client-reported bug: the system let activities be created for
-// different users against the SAME lead at the SAME date/time, with zero
-// validation - two field reps both getting assigned to visit the same
-// client at the same hour, nobody finding out until they bump into each
-// other at the door. Fixed in activity-service.ts's insertActivity via
-// assertNoSchedulingConflict: same lead + same activity type + within a
-// 15-minute window + still active (not completed/cancelled) now blocks the
-// second create with a clear 409.
+// Covers rule 2 of activity-service.ts's assertSlotIsFree: two activities of
+// the same type on the SAME lead within 15 minutes of each other (two reps
+// both booked to visit the same client at the same hour) - the second create
+// is refused with a 409 while the first is still active (not completed/
+// cancelled/archived).
 
 let failures = 0;
 function assertTrue(label: string, condition: boolean): void {
@@ -77,21 +74,26 @@ async function main(): Promise<void> {
     );
     assertTrue("A different activity type at the same time on the same lead is allowed", Boolean(differentType.id));
 
-    // 5. The exact same time slot on a DIFFERENT lead is unrelated and must
-    // succeed - the check is scoped per lead, not global.
-    const otherLead = await createActivityForLead(
-      leadB.id,
-      { type: "site_visit", subject: "Visit on a different lead", dueDate: iso(0), assignedTo: cc1Id },
-      testadminId
-    );
-    assertTrue("The same time slot on a different lead is allowed", Boolean(otherLead.id));
+    // 5. One person can't be in two places: cc1 already has a call 10:05-10:20,
+    // so a visit for cc1 on a DIFFERENT lead at 10:10 is refused too.
+    let blockedPersonClash = false;
+    try {
+      await createActivityForLead(
+        leadB.id,
+        { type: "site_visit", subject: "Visit on a different lead", dueDate: iso(10), assignedTo: cc1Id },
+        testadminId
+      );
+    } catch {
+      blockedPersonClash = true;
+    }
+    assertTrue("The same person double-booked on a different lead is refused", blockedPersonClash);
 
     // 6. Once the original activity is archived (deleteActivity soft-deletes
     // it), it no longer occupies the slot, so the same time now succeeds.
     await deleteActivity(first.id, testadminId);
     const afterCancel = await createActivityForLead(
       leadA.id,
-      { type: "site_visit", subject: "Re-scheduled visit", dueDate: iso(0), assignedTo: cc1Id },
+      { type: "site_visit", subject: "Re-scheduled visit", dueDate: iso(0), assignedTo: testadminId },
       testadminId
     );
     assertTrue("The same slot is free again once the original activity is archived", Boolean(afterCancel.id));

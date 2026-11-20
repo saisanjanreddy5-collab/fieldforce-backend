@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const ADDRESS_TYPES = ["billing", "shipping"] as const;
+const ADDRESS_TYPES = ["billing", "shipping"] as const;
 
 export const createAddressSchema = z.object({
   type: z.enum(ADDRESS_TYPES),

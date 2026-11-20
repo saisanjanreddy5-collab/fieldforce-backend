@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
+import compression from "compression";
 import { env } from "./config/env";
 import { pool } from "./config/db";
 import { createTables } from "./models/model";
@@ -9,6 +10,7 @@ import { errorHandler, notFoundHandler } from "./middleware/error-middleware";
 import { startMailSyncScheduler } from "./services/microsoft-mail-sync-service";
 import { startCallReminderScheduler } from "./services/call-reminder-service";
 import { startHelpdeskSyncScheduler } from "./services/frappe-helpdesk-service";
+import { startScheduledTransferScheduler } from "./services/scheduled-transfer-service";
 
 async function start(): Promise<void> {
   await pool.query("SELECT 1");
@@ -48,9 +50,7 @@ async function start(): Promise<void> {
   // Default express.json() limit is 100kb - fine for every other route, but
   // the bulk lead import sends its whole sheet as one JSON request (see
   // bulkImportLeads's own MAX_BULK_IMPORT_ROWS = 5000), and a real multi-
-  // hundred-row sheet routinely exceeds 100kb on its own. That made large
-  // imports fail outright with a generic 500 before a single row was even
-  // read - confirmed by a real failed import, not guessed. 10mb comfortably
+  // hundred-row sheet routinely exceeds 100kb on its own. 10mb comfortably
   // covers 5,000 rows even with long free-text fields (notes, addresses).
   // Bulk import parses its own (up to 10mb) body inside its route, only
   // AFTER login + permission checks - parsing 10mb for an anonymous caller
@@ -65,6 +65,8 @@ async function start(): Promise<void> {
   });
   app.use(express.urlencoded({ extended: true }));
   app.use(cookieParser());
+  // gzip every JSON response - a page of leads is ~36 KB raw, a few KB zipped.
+  app.use(compression());
 
   app.use("/api", routes);
 
@@ -79,6 +81,7 @@ async function start(): Promise<void> {
   startCallReminderScheduler();
   // Keeps Frappe Helpdesk agents/customers in step with FieldForce.
   startHelpdeskSyncScheduler();
+  startScheduledTransferScheduler();
 }
 
 start().catch((err) => {

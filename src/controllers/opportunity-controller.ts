@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { asyncHandler } from "../utils/asyncHandler";
+import { asyncHandler } from "../utils/async-handler";
 import { sendSuccess } from "../utils/response";
 import * as opportunityService from "../services/opportunity-service";
 import * as teamRollupService from "../services/team-rollup-service";

@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { pool } from "../config/db";
 
 export interface AuditEventInput {
@@ -13,18 +14,20 @@ export interface AuditEventInput {
   oldValue?: string | null;
   newValue?: string | null;
   actorId: string | null;
-  actorName: string | null;
+  // Leave out to record the actor's current name (looked up from actorId
+  // inside the INSERT); pass it only for an actor that is not a user row,
+  // e.g. "Helpdesk sync".
+  actorName?: string | null;
   ipAddress?: string | null;
 }
 
-// Real writer, called from the actual mutation points (updateLead,
-// deleteLead, the three real decide* functions, updateAssignmentRule, the
-// consent capture inside createLead) - never a bulk backfill or synthetic
-// event. A row only exists here because something genuinely happened.
-export async function recordAuditEvent(input: AuditEventInput): Promise<void> {
-  await pool.query(
+// Called from the real mutation points - a row only exists here because
+// something genuinely happened. Pass `db` (a transaction's client) to
+// record it as part of that transaction.
+export async function recordAuditEvent(input: AuditEventInput, db: Pick<PoolClient, "query"> = pool): Promise<void> {
+  await db.query(
     `INSERT INTO audit_log (entity_type, entity_id, entity_label, action, summary, old_value, new_value, actor_id, actor_name, ip_address)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9, (SELECT name FROM users WHERE id = $8)),$10)`,
     [
       input.entityType,
       input.entityId,
@@ -34,7 +37,7 @@ export async function recordAuditEvent(input: AuditEventInput): Promise<void> {
       input.oldValue ?? null,
       input.newValue ?? null,
       input.actorId,
-      input.actorName,
+      input.actorName ?? null,
       input.ipAddress ?? null,
     ]
   );
@@ -71,13 +74,8 @@ function toPublicEvent(row: AuditLogRow) {
   };
 }
 
-// Was a silent, unconditional LIMIT 100 with no way to page further - real
-// audit history beyond the most recent 100 events was permanently
-// unreachable through this endpoint. Now genuinely paginated: callers can
-// walk the whole table via page/limit, and total tells them when to stop.
-// Scoped to one entity - powers the Customer detail panel's Activity tab
-// (merged alongside real Activities and Support Tickets), not a general
-// listing endpoint.
+// Every event for one record - feeds the Customer Activity tab and the
+// Lead/Opportunity History timelines.
 export async function listAuditLogForEntity(entityType: string, entityId: string) {
   const result = await pool.query<AuditLogRow>(
     "SELECT * FROM audit_log WHERE entity_type = $1 AND entity_id = $2 ORDER BY created_at DESC",

@@ -1,7 +1,7 @@
 import { pool } from "../config/db";
 import { createLead } from "../services/lead-service";
 import { qualifyLead, escalateToSlc, logCallDisposition } from "../services/lead-call-center-service";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 
 // Verifies the client's "remove TLC" revision actually took effect end to
 // end: a lead created today lands at FLC, can't be Qualified before SLC,

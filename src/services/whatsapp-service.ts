@@ -1,10 +1,12 @@
 import crypto from "crypto";
+import { secretsMatch } from "../utils/safe-compare";
 import { externalFetch, MEDIA_TIMEOUT_MS } from "../utils/external-fetch";
 import fs from "fs";
 import path from "path";
 import multer from "multer";
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
+import { toWhatsappNumber } from "../utils/phone";
 import { WHATSAPP_BASE_URL, WHATSAPP_MEDIA_BASE_URL, isWhatsappConfigured } from "../config/whatsapp";
 import { env } from "../config/env";
 import { createActivityForLead } from "./activity-service";
@@ -158,13 +160,7 @@ function requestHeaders(): Record<string, string> {
 // requesting user to scope-check against (the creator's own insert already
 // establishes access), so that check stays in sendTextMessage, not here.
 async function postWhatsappMessage(leadId: string, phone: string, body: string, sentBy: string, activitySubject: string) {
-  // Leads are entered as plain 10-digit Indian mobile numbers with no
-  // country code (same assumption normalizePhone in lead-service.ts makes),
-  // but WhatsApp's API needs the full international MSISDN - a bare
-  // 10-digit number silently fails to actually deliver even though the API
-  // accepts the request and returns a message id.
-  const digits = phone.replace(/\D/g, "");
-  const to = digits.length === 10 ? `91${digits}` : digits;
+  const to = toWhatsappNumber(phone);
   const response = await externalFetch(`${WHATSAPP_BASE_URL}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
     method: "POST",
     headers: requestHeaders(),
@@ -241,8 +237,7 @@ async function postWhatsappMediaMessage(
   sentBy: string,
   activitySubject: string
 ) {
-  const digits = phone.replace(/\D/g, "");
-  const to = digits.length === 10 ? `91${digits}` : digits;
+  const to = toWhatsappNumber(phone);
   const response = await externalFetch(`${WHATSAPP_BASE_URL}/${env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
     method: "POST",
     headers: requestHeaders(),
@@ -405,7 +400,7 @@ export async function listMessagesForLead(leadId: string, requestingUserId: stri
 // isn't set up yet, not that it should be unguarded.
 export function isWebhookSecretValid(providedSecret: string | undefined): boolean {
   if (!env.WHATSAPP_WEBHOOK_SECRET) return false;
-  return providedSecret === env.WHATSAPP_WEBHOOK_SECRET;
+  return secretsMatch(providedSecret, env.WHATSAPP_WEBHOOK_SECRET);
 }
 
 // Best-effort shape based on Meta's public WhatsApp Cloud API webhook

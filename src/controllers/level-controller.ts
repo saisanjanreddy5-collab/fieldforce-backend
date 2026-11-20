@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { asyncHandler } from "../utils/asyncHandler";
+import { asyncHandler } from "../utils/async-handler";
 import { sendSuccess } from "../utils/response";
 import * as levelService from "../services/level-service";
 
@@ -17,4 +17,14 @@ export const create = asyncHandler(async (req: Request, res: Response) => {
 export const update = asyncHandler(async (req: Request, res: Response) => {
   const level = await levelService.updateLevel(String(req.params.id), req.body);
   sendSuccess(res, level, "Level updated");
+});
+
+export const archive = asyncHandler(async (req: Request, res: Response) => {
+  const level = await levelService.archiveLevel(String(req.params.id), req.user!.id, req.ip);
+  sendSuccess(res, level, "Role archived");
+});
+
+export const restore = asyncHandler(async (req: Request, res: Response) => {
+  const level = await levelService.restoreLevel(String(req.params.id), req.user!.id, req.ip);
+  sendSuccess(res, level, "Role restored");
 });

@@ -3,9 +3,9 @@ import { externalFetch } from "../utils/external-fetch";
 import multer from "multer";
 import { pool } from "../config/db";
 import { env } from "../config/env";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { GRAPH_BASE_URL, MS_SCOPES, isMicrosoftConfigured, msAuthorizeUrl, msTokenUrl } from "../config/microsoft";
-import { createActivityForLead } from "./activity-service";
+import { assertSlotIsFree, createActivityForLead } from "./activity-service";
 import { getLeadById, isLeadInOwnerScope } from "./lead-service";
 
 // Graph's sendMail action accepts attachments inline, base64-encoded, in
@@ -406,6 +406,19 @@ export async function createTeamsMeetingForLead(
     throw new ApiError(422, "This lead has no email address on file");
   }
 
+  // Checked before Microsoft sends the lead an invite - a clashing meeting
+  // must never reach their inbox.
+  const durationMinutes = Math.max(1, Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60_000));
+  await assertSlotIsFree({
+    type: "teams_meeting",
+    status: "pending",
+    dueDate: startTime,
+    assigneeId: requestingUserId,
+    leadId,
+    opportunityId: null,
+    details: { durationMinutes },
+  });
+
   const accessToken = await getValidAccessToken(requestingUserId);
 
   // A dedicated "online meeting" (POST /me/onlineMeetings) needs the
@@ -450,7 +463,7 @@ export async function createTeamsMeetingForLead(
       subject,
       dueDate: startTime,
       status: "pending",
-      details: { joinUrl },
+      details: { joinUrl, durationMinutes },
       externalRefId: event.id,
     },
     requestingUserId

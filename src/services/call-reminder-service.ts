@@ -59,7 +59,7 @@ async function sendReminderEmail(row: DueCallRow): Promise<void> {
 // anything older than a day overdue - a callback someone never acted on
 // last week shouldn't suddenly email-bomb them the moment this feature
 // ships; it's a timely nudge, not a backlog alarm.
-export async function sendDueCallReminders(): Promise<void> {
+async function sendDueCallReminders(): Promise<void> {
   const result = await pool.query<DueCallRow>(
     `SELECT a.id, a.due_date, l.full_name AS lead_full_name, l.phone AS lead_phone,
        a.assigned_to, mc.ms_account_email AS rep_email, u.name AS rep_name
@@ -104,9 +104,8 @@ export async function sendDueCallReminders(): Promise<void> {
 
 const REMINDER_INTERVAL_MS = 2 * 60 * 1000;
 
-// Deliberately a plain setInterval, matching microsoft-mail-sync-service.ts's
-// own startMailSyncScheduler - this app's one established pattern for a
-// recurring background job, not a new job-queue dependency for a second one.
+// Deliberately a plain setInterval, same as every other background job here
+// (see microsoft-mail-sync-service.ts's startMailSyncScheduler).
 // A pass that runs longer than the interval (slow Microsoft Graph) must not
 // overlap the next one - both would pick up the same not-yet-marked
 // reminders and email the rep twice.

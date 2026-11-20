@@ -1,6 +1,7 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { Role, ROLES } from "../utils/roles";
+import { SUBTREE_CTE } from "../utils/subtree";
 
 interface UserIncentivePlanRow {
   id: string;
@@ -45,17 +46,6 @@ function toPublicAssignment(row: UserIncentivePlanRow) {
   };
 }
 
-// Foundation only (see Phase 1C scope note) - no UI calls this yet. Visible
-// the same way targets are (per-person record -> subtree-scoped), not the
-// same way plans/rules are (org-wide config).
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
-
 export interface ListUserIncentivePlansFilters {
   userId?: string;
   archived?: boolean;
@@ -63,6 +53,8 @@ export interface ListUserIncentivePlansFilters {
   limit: number;
 }
 
+// Visible the same way targets are (per-person record -> subtree-scoped), not
+// the same way plans/rules are (org-wide config).
 export async function listUserIncentivePlans(requestingUserId: string, requestingRole: Role, filters: ListUserIncentivePlansFilters) {
   const limit = filters.limit;
   const offset = (filters.page - 1) * filters.limit;

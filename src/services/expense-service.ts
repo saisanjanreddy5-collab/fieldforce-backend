@@ -3,11 +3,12 @@ import path from "path";
 import crypto from "crypto";
 import multer from "multer";
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { recordAuditEvent } from "./audit-log-service";
 import { ROLES } from "../utils/roles";
+import { SUBTREE_CTE } from "../utils/subtree";
 
-export const EXPENSE_TYPE_KEYS = [
+const EXPENSE_TYPE_KEYS = [
   "travel",
   "fuel",
   "lodging",
@@ -295,21 +296,6 @@ export async function listTeamClaims(managerId: string) {
   return result.rows.map(toPublicExpenseClaim);
 }
 
-// Same manager-subtree rule leads/opportunities/activities already use -
-// not just direct reports like listTeamClaims above, the full reporting
-// chain beneath the requester. Built for the mobile API handoff: "pick a
-// month, optionally one specific person, see every real claim in scope" -
-// nothing here existed before (listTeamClaims has no date filter at all and
-// stops at direct reports), so this is new query capability, not a
-// relabeling of something that already worked this way.
-const EXPENSE_SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
-
 export interface SearchExpenseClaimsFilters {
   userId?: string;
   from?: string;
@@ -318,6 +304,8 @@ export interface SearchExpenseClaimsFilters {
   limit: number;
 }
 
+// The full reporting chain beneath the requester (not just direct reports
+// like listTeamClaims above), for any date range, optionally one person.
 export async function searchExpenseClaims(requestingUserId: string, filters: SearchExpenseClaimsFilters) {
   const conditions: string[] = ["u.id IN (SELECT id FROM subtree)"];
   const params: unknown[] = [requestingUserId];
@@ -338,13 +326,13 @@ export async function searchExpenseClaims(requestingUserId: string, filters: Sea
   const whereClause = conditions.join(" AND ");
 
   const countResult = await pool.query<{ count: string }>(
-    `${EXPENSE_SUBTREE_CTE} SELECT COUNT(*) FROM expense_claims ec JOIN users u ON u.id = ec.user_id WHERE ${whereClause}`,
+    `${SUBTREE_CTE} SELECT COUNT(*) FROM expense_claims ec JOIN users u ON u.id = ec.user_id WHERE ${whereClause}`,
     params
   );
 
   const listParams = [...params, filters.limit, (filters.page - 1) * filters.limit];
   const result = await pool.query<ExpenseClaimRow>(
-    `${EXPENSE_SUBTREE_CTE}
+    `${SUBTREE_CTE}
      ${CLAIM_SELECT}
      WHERE ${whereClause}
      ORDER BY ec.expense_date DESC
@@ -522,7 +510,6 @@ export async function decideExpenseClaim(
     throw new ApiError(409, "This claim has already been decided");
   }
 
-  const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [deciderId]);
   const label = `${claim.title} - ${claim.claim_number ? `EXP-${claim.claim_number}` : claimId}`;
   await recordAuditEvent({
     entityType: "expense_claim",
@@ -533,7 +520,6 @@ export async function decideExpenseClaim(
     oldValue: "Pending",
     newValue: decision === "approved" ? "Approved" : "Rejected",
     actorId: deciderId,
-    actorName: actorResult.rows[0]?.name ?? null,
     ipAddress,
   });
 
@@ -566,7 +552,7 @@ export async function getClaimFile(claimId: string, requestingUserId: string): P
   const isInvolved =
     claim.user_id === requestingUserId || claim.approver_id === requestingUserId || claim.second_approver_id === requestingUserId;
   if (!isInvolved && !(await isAdminUser(requestingUserId))) {
-    const inSubtree = await pool.query(`${EXPENSE_SUBTREE_CTE} SELECT 1 FROM subtree WHERE id = $2`, [requestingUserId, claim.user_id]);
+    const inSubtree = await pool.query(`${SUBTREE_CTE} SELECT 1 FROM subtree WHERE id = $2`, [requestingUserId, claim.user_id]);
     if ((inSubtree.rowCount ?? 0) === 0) {
       throw new ApiError(403, "You do not have access to this receipt");
     }

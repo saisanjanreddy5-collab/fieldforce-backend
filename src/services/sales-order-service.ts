@@ -1,5 +1,5 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { isCustomerInScope } from "./customer-service";
 import { recordAuditEvent } from "./audit-log-service";
 
@@ -121,7 +121,6 @@ export async function deleteOrder(orderId: string, requestingUserId: string): Pr
   // destroyed; this audit entry plus the archived row itself are both kept.
   await pool.query("UPDATE sales_orders SET is_deleted = true WHERE id = $1", [orderId]);
 
-  const actorName = (await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId])).rows[0]?.name ?? null;
   await recordAuditEvent({
     entityType: "sales_order",
     entityId: orderId,
@@ -131,7 +130,6 @@ export async function deleteOrder(orderId: string, requestingUserId: string): Pr
     oldValue: `₹${existing.amount} · ${existing.status}`,
     newValue: "Deleted",
     actorId: requestingUserId,
-    actorName,
   });
 }
 

@@ -1,8 +1,10 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
-import { getLevelSecurityTier } from "./level-service";
+import { ApiError } from "../utils/api-error";
+import { assertLevelAssignable, getLevelSecurityTier } from "./level-service";
 import { Role, ROLES } from "../utils/roles";
 import { queueEmployeeHelpdeskSync } from "./frappe-helpdesk-service";
+import { clearPermissionCache } from "./permission-service";
+import { SUBTREE_CTE } from "../utils/subtree";
 
 // EMP-001, EMP-002, ... - picks up from whatever the highest real numeric
 // code already is, same MAX()+1 convention lead_number/claim_number already
@@ -149,11 +151,7 @@ export async function listUsers(requestingUserId: string, requestingRole: Role, 
   }
 
   const countResult = await pool.query<{ count: string }>(
-    `WITH RECURSIVE subtree AS (
-       SELECT id FROM users WHERE id = $1
-       UNION
-       SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-     )
+    `${SUBTREE_CTE}
      SELECT COUNT(*) FROM users u
      INNER JOIN subtree s ON u.id = s.id
      WHERE u.is_active = true`,
@@ -161,11 +159,7 @@ export async function listUsers(requestingUserId: string, requestingRole: Role, 
   );
 
   const result = await pool.query<UserRow>(
-    `WITH RECURSIVE subtree AS (
-       SELECT id FROM users WHERE id = $1
-       UNION
-       SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-     )
+    `${SUBTREE_CTE}
      SELECT u.*, ep.pincodes, st.sales_team_ids FROM users u
      INNER JOIN subtree s ON u.id = s.id
      ${PINCODES_JOIN}
@@ -214,11 +208,7 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
         throw new ApiError(400, "A person cannot report to themselves");
       }
       const loop = await pool.query(
-        `WITH RECURSIVE subtree AS (
-           SELECT id FROM users WHERE id = $1
-           UNION
-           SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-         )
+        `${SUBTREE_CTE}
          SELECT 1 FROM subtree WHERE id = $2 LIMIT 1`,
         [id, newManagerId]
       );
@@ -286,6 +276,7 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
   // can move anyone INTO the admin tier.
   if (updates.levelId) {
     const current = await pool.query<{ level_id: string | null }>("SELECT level_id FROM users WHERE id = $1", [id]);
+    await assertLevelAssignable(updates.levelId, current.rows[0]?.level_id);
     const levelChanges = current.rows[0]?.level_id !== updates.levelId;
     if (levelChanges && id === changedBy) {
       throw new ApiError(403, "You can't change your own level - ask another Admin");
@@ -350,68 +341,97 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
     }
   }
 
-  // A full replace, not a diff - pincodes isn't a users column (it's the
-  // separate employee_pincodes table), so it's handled here regardless of
-  // whether any other field changed, and submitting [] deliberately clears
-  // every pincode this person covers.
-  if (updates.pincodes !== undefined) {
-    await pool.query("DELETE FROM employee_pincodes WHERE user_id = $1", [id]);
-    if (updates.pincodes.length > 0) {
-      await pool.query(
-        `INSERT INTO employee_pincodes (user_id, pincode)
-         SELECT $1, * FROM unnest($2::varchar[])
-         ON CONFLICT (user_id, pincode) DO NOTHING`,
-        [id, updates.pincodes]
-      );
+  // Every write below happens together or not at all - a failure halfway
+  // must not leave someone with their pincodes or teams already wiped.
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // Turning off login or moving someone out of the Admin level: one at a
+    // time, then re-checked inside this transaction, so two Admins can't
+    // disable each other at the same moment and leave nobody in charge.
+    const touchesAdminAccess = updates.isActive === false || (role !== undefined && role !== ROLES.ADMIN);
+    if (touchesAdminAccess) {
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('last-active-admin'))");
     }
-  }
-
-  // Same full-replace pattern as pincodes above - a full replace, not a
-  // diff, and submitting [] deliberately clears every team this person is
-  // staffed on.
-  if (updates.salesTeamIds !== undefined) {
-    await pool.query("DELETE FROM user_sales_teams WHERE user_id = $1", [id]);
-    if (updates.salesTeamIds.length > 0) {
-      await pool.query(
-        `INSERT INTO user_sales_teams (user_id, sales_team_id)
-         SELECT $1, * FROM unnest($2::uuid[])
-         ON CONFLICT (user_id, sales_team_id) DO NOTHING`,
-        [id, updates.salesTeamIds]
-      );
+    // A full replace, not a diff - pincodes isn't a users column (it's the
+    // separate employee_pincodes table), so it's handled here regardless of
+    // whether any other field changed, and submitting [] deliberately clears
+    // every pincode this person covers.
+    if (updates.pincodes !== undefined) {
+      await client.query("DELETE FROM employee_pincodes WHERE user_id = $1", [id]);
+      if (updates.pincodes.length > 0) {
+        await client.query(
+          `INSERT INTO employee_pincodes (user_id, pincode)
+           SELECT $1, * FROM unnest($2::varchar[])
+           ON CONFLICT (user_id, pincode) DO NOTHING`,
+          [id, updates.pincodes]
+        );
+      }
     }
-  }
 
-  if (setClauses.length === 0) {
-    const existing = await pool.query<UserRow>(
-      `SELECT u.*, ep.pincodes, st.sales_team_ids FROM users u ${PINCODES_JOIN} ${SALES_TEAMS_JOIN} WHERE u.id = $1`,
-      [id]
+    // Same full-replace pattern as pincodes above - a full replace, not a
+    // diff, and submitting [] deliberately clears every team this person is
+    // staffed on.
+    if (updates.salesTeamIds !== undefined) {
+      await client.query("DELETE FROM user_sales_teams WHERE user_id = $1", [id]);
+      if (updates.salesTeamIds.length > 0) {
+        await client.query(
+          `INSERT INTO user_sales_teams (user_id, sales_team_id)
+           SELECT $1, * FROM unnest($2::uuid[])
+           ON CONFLICT (user_id, sales_team_id) DO NOTHING`,
+          [id, updates.salesTeamIds]
+        );
+      }
+    }
+
+    if (setClauses.length === 0) {
+      const existing = await client.query<UserRow>(
+        `SELECT u.*, ep.pincodes, st.sales_team_ids FROM users u ${PINCODES_JOIN} ${SALES_TEAMS_JOIN} WHERE u.id = $1`,
+        [id]
+      );
+      if (existing.rows.length === 0) {
+        throw new ApiError(404, "User not found");
+      }
+      await client.query("COMMIT");
+      return toPublicUser(existing.rows[0]);
+    }
+
+    setClauses.push("updated_at = now()");
+    params.push(id);
+
+    const result = await client.query<UserRow>(
+      `UPDATE users SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING *`,
+      params
     );
-    if (existing.rows.length === 0) {
+    if (result.rows.length === 0) {
       throw new ApiError(404, "User not found");
     }
-    return toPublicUser(existing.rows[0]);
-  }
 
-  setClauses.push("updated_at = now()");
-  params.push(id);
-
-  const result = await pool.query<UserRow>(
-    `UPDATE users SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING *`,
-    params
-  );
-  if (result.rows.length === 0) {
-    throw new ApiError(404, "User not found");
-  }
-
-  if (managerIdProvided) {
-    const newManagerId = result.rows[0].manager_id;
-    if (newManagerId !== previousManagerId) {
-      await pool.query(
-        `INSERT INTO manager_change_log (user_id, old_manager_id, new_manager_id, changed_by) VALUES ($1, $2, $3, $4)`,
-        [id, previousManagerId, newManagerId, changedBy]
-      );
+    if (managerIdProvided) {
+      const newManagerId = result.rows[0].manager_id;
+      if (newManagerId !== previousManagerId) {
+        await client.query(
+          `INSERT INTO manager_change_log (user_id, old_manager_id, new_manager_id, changed_by) VALUES ($1, $2, $3, $4)`,
+          [id, previousManagerId, newManagerId, changedBy]
+        );
+      }
     }
+
+
+    if (touchesAdminAccess) {
+      const remaining = await client.query<{ count: string }>("SELECT COUNT(*) FROM users WHERE role = $1 AND is_active = true", [ROLES.ADMIN]);
+      if (Number(remaining.rows[0].count) < 1) {
+        throw new ApiError(400, "At least one active Admin account must remain");
+      }
+    }
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
   }
+  clearPermissionCache();
 
   const final = await pool.query<UserRow>(
     `SELECT u.*, ep.pincodes, st.sales_team_ids FROM users u ${PINCODES_JOIN} ${SALES_TEAMS_JOIN} WHERE u.id = $1`,

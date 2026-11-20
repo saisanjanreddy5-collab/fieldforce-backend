@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
-import { asyncHandler } from "../utils/asyncHandler";
+import { asyncHandler } from "../utils/async-handler";
 import { sendSuccess } from "../utils/response";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import * as leadDocumentService from "../services/lead-document-service";
 import * as leadService from "../services/lead-service";
 

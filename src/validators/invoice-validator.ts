@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { decimal12_2 } from "./money";
 
-export const INVOICE_STATUSES = ["unpaid", "partially_paid", "paid"] as const;
+const INVOICE_STATUSES = ["unpaid", "partially_paid", "paid"] as const;
 
 export const createInvoiceSchema = z.object({
   salesOrderId: z.string().uuid().nullable().optional(),

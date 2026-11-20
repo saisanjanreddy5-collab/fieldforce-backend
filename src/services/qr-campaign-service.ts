@@ -1,6 +1,6 @@
 import geoip from "geoip-lite";
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import * as leadService from "./lead-service";
 import * as leadCategoryService from "./lead-category-service";
 import * as leadDocumentService from "./lead-document-service";
@@ -331,10 +331,8 @@ export async function submitPublicCapture(
       existingBusiness: fieldConfig.existingStore && input.existingStore ? "Yes" : undefined,
       preferredLanguage: fieldConfig.preferredLanguage ? input.preferredLanguage?.trim() || undefined : undefined,
       source: "qr",
-      // inquirySource alone used to leave Inquiry Category permanently blank
-      // for every QR-sourced lead - the frontend locks that field (can't be
-      // hand-typed) whenever captureChannel isn't manual_entry, so with
-      // nothing setting it here it just stayed empty forever.
+      // Must be set here: the frontend locks Inquiry Category (can't be
+      // hand-typed) whenever captureChannel isn't manual_entry.
       inquiryCategory: "QR Code",
       inquirySource: `QR code — ${row.name}`,
       captureChannel: "qr",

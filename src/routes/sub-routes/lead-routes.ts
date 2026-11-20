@@ -7,8 +7,7 @@ import { emailAttachmentUpload } from "../../services/microsoft-service";
 import * as smartfloController from "../../controllers/smartflo-controller";
 import * as whatsappController from "../../controllers/whatsapp-controller";
 import * as quoteController from "../../controllers/quote-controller";
-import { requireAuth, requireRole } from "../../middleware/auth-middleware";
-import { ROLES } from "../../utils/roles";
+import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission, requireAnyPermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
 import {
@@ -121,7 +120,7 @@ router.get("/:id/timeline", requireAnyPermission("leads.view", "leads.queue_view
 
 router.post("/:id/call-dispositions", requirePermission("leads.call_log"), validateBody(logCallDispositionSchema), leadController.logCallDisposition);
 router.post("/:id/start-flc", requirePermission("leads.call_log"), leadController.startFlc);
-router.post("/:id/claim", requireRole(ROLES.CALL_CENTER), leadController.claim);
+router.post("/:id/claim", requirePermission("leads.claim"), leadController.claim);
 router.post("/:id/qualify", requirePermission("leads.qualify"), leadController.qualify);
 router.post("/:id/escalate-to-slc", requirePermission("leads.escalate"), leadController.escalateToSlc);
 router.get("/:id/swap-candidates", requirePermission("leads.reassign"), leadController.getSwapCandidates);

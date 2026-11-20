@@ -1,17 +1,10 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
+import { withAdvisoryLock } from "../utils/db-lock";
+import { BUSINESS_TIMEZONE } from "../utils/business-time";
 import { isLeadInOwnerScope, isLeadVisibleToUser } from "./lead-service";
 import { isOpportunityVisibleToUser } from "./opportunity-service";
-
-// An activity is visible whenever the lead it (directly or, via an
-// opportunity, indirectly) belongs to is visible - same Rule A/B as leads.
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
+import { SUBTREE_CTE } from "../utils/subtree";
 
 interface ActivityRow {
   id: string;
@@ -168,59 +161,114 @@ const TYPE_LABEL: Record<string, string> = {
   internal: "internal action",
 };
 
-// Two different field reps getting independently assigned to visit (or
-// call) the same lead at the same time is wasted effort, not a feature -
-// this is the one place both createActivityForLead and
-// createActivityForOpportunity funnel through, so the check lives here
-// once rather than being duplicated per entry point. Scoped to same
-// lead/opportunity + same activity type + a time window, not an exact
-// timestamp match, since "10:00" and "10:05" are the same real conflict and
-// exact-match would be trivial to dodge by a few seconds. Terminal
-// activities (completed/cancelled) never count as a conflict - they're not
-// occupying a slot anymore.
+// ---- Scheduling clashes (checked on create, reschedule and reassign) ----
+//
+// 1. One person, one slot: calls, Teams meetings and site visits occupy the
+//    assigned person's time (their own durationMinutes, else a default
+//    length), so a second one that overlaps is refused - whichever lead or
+//    opportunity it is for. One person can't be on two calls at 12:00.
+// 2. Same lead/opportunity, same kind of activity within 15 minutes is a
+//    duplicate - two reps both booked to visit the same client at the same
+//    hour - for every type.
+// Finished (completed/cancelled) activities never count. The refusal names
+// the clash and suggests the person's next free time.
+const TIME_BOUND_DEFAULT_MINUTES: Record<string, number> = { call: 15, teams_meeting: 30, site_visit: 60 };
 const DUPLICATE_WINDOW_MINUTES = 15;
 
-async function assertNoSchedulingConflict(
-  input: ActivityInput,
-  leadId: string | null,
-  opportunityId: string | null
-): Promise<void> {
-  const status = input.status ?? "pending";
-  if (!input.dueDate || status === "completed" || status === "cancelled") return;
+// SQL for an existing activity's end time, matching durationOf() below.
+const ACTIVITY_END_SQL = `a.due_date + make_interval(mins => CASE
+    WHEN a.details->>'durationMinutes' ~ '^[0-9]+$' AND (a.details->>'durationMinutes')::int > 0 THEN (a.details->>'durationMinutes')::int
+    WHEN a.type = 'teams_meeting' THEN 30
+    WHEN a.type = 'site_visit' THEN 60
+    ELSE 15 END)`;
 
-  const scopeColumn = leadId ? "lead_id" : "opportunity_id";
-  const scopeId = leadId ?? opportunityId;
-  if (!scopeId) return;
+function durationOf(type: string, details?: Record<string, unknown> | null): number {
+  const own = Number(details?.durationMinutes);
+  return Number.isInteger(own) && own > 0 ? own : TIME_BOUND_DEFAULT_MINUTES[type] ?? 15;
+}
 
-  const conflict = await pool.query<{ due_date: string; assigned_to_name: string | null }>(
-    `SELECT a.due_date, u.name AS assigned_to_name
-     FROM activities a
-     LEFT JOIN users u ON u.id = a.assigned_to
-     WHERE a.${scopeColumn} = $1
-       AND a.type = $2
-       AND a.is_deleted = false
-       AND a.status NOT IN ('completed', 'cancelled')
-       AND a.due_date IS NOT NULL
-       AND a.due_date BETWEEN $3::timestamptz - (INTERVAL '1 minute' * ${DUPLICATE_WINDOW_MINUTES})
-                           AND $3::timestamptz + (INTERVAL '1 minute' * ${DUPLICATE_WINDOW_MINUTES})
-     LIMIT 1`,
-    [scopeId, input.type, input.dueDate]
-  );
+const formatTime = (date: Date) =>
+  date.toLocaleString("en-IN", { timeZone: BUSINESS_TIMEZONE, day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 
-  if ((conflict.rowCount ?? 0) > 0) {
-    const existing = conflict.rows[0];
-    const when = new Date(existing.due_date).toLocaleString("en-IN", {
-      timeZone: "Asia/Kolkata",
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
-    const label = TYPE_LABEL[input.type ?? ""] ?? input.type;
-    const forWhom = existing.assigned_to_name ? ` for ${existing.assigned_to_name}` : "";
-    throw new ApiError(
-      409,
-      `This ${leadId ? "lead" : "opportunity"} already has a ${label} scheduled${forWhom} around ${when} - cancel or reschedule it before adding another at the same time.`
+export interface SlotRequest {
+  activityId?: string; // when rescheduling, never clashes with itself
+  type: string;
+  status: string;
+  dueDate: string | null;
+  assigneeId: string;
+  leadId: string | null;
+  opportunityId: string | null;
+  details?: Record<string, unknown> | null;
+}
+
+export async function assertSlotIsFree(req: SlotRequest): Promise<void> {
+  if (!req.dueDate || req.status === "completed" || req.status === "cancelled") return;
+  const start = new Date(req.dueDate);
+  const excludeId = req.activityId ?? null;
+
+  // Rule 2: the same lead/opportunity already has this kind of activity then.
+  const scopeColumn = req.leadId ? "lead_id" : "opportunity_id";
+  const scopeId = req.leadId ?? req.opportunityId;
+  if (scopeId) {
+    const duplicate = await pool.query<{ due_date: string; assigned_to_name: string | null }>(
+      `SELECT a.due_date, u.name AS assigned_to_name
+       FROM activities a
+       LEFT JOIN users u ON u.id = a.assigned_to
+       WHERE a.${scopeColumn} = $1 AND a.type = $2
+         AND a.is_deleted = false AND a.status NOT IN ('completed', 'cancelled') AND a.due_date IS NOT NULL
+         AND a.due_date BETWEEN $3::timestamptz - make_interval(mins => ${DUPLICATE_WINDOW_MINUTES})
+                            AND $3::timestamptz + make_interval(mins => ${DUPLICATE_WINDOW_MINUTES})
+         AND ($4::uuid IS NULL OR a.id <> $4)
+       LIMIT 1`,
+      [scopeId, req.type, start.toISOString(), excludeId]
     );
+    const existing = duplicate.rows[0];
+    if (existing) {
+      const label = TYPE_LABEL[req.type] ?? req.type;
+      const forWhom = existing.assigned_to_name ? ` for ${existing.assigned_to_name}` : "";
+      const message = `This ${req.leadId ? "lead" : "opportunity"} already has a ${label} scheduled${forWhom} at ${formatTime(new Date(existing.due_date))} - reschedule or cancel that one before adding another at the same time.`;
+      throw new ApiError(409, message, { dueDate: [message] });
+    }
   }
+
+  // Rule 1: the person is already busy then.
+  if (!(req.type in TIME_BOUND_DEFAULT_MINUTES)) return;
+  const minutes = durationOf(req.type, req.details);
+  const busy = await pool.query<{ type: string; start_at: Date; end_at: Date; lead_name: string | null; person: string | null }>(
+    `SELECT a.type, a.due_date AS start_at, ${ACTIVITY_END_SQL} AS end_at,
+            COALESCE(l.full_name, ol.full_name) AS lead_name, u.name AS person
+     FROM activities a
+     LEFT JOIN leads l ON l.id = a.lead_id
+     LEFT JOIN opportunities o ON o.id = a.opportunity_id
+     LEFT JOIN leads ol ON ol.id = o.lead_id
+     LEFT JOIN users u ON u.id = a.assigned_to
+     WHERE a.assigned_to = $1
+       AND a.type IN ('call', 'teams_meeting', 'site_visit')
+       AND a.is_deleted = false AND a.status NOT IN ('completed', 'cancelled') AND a.due_date IS NOT NULL
+       AND ($2::uuid IS NULL OR a.id <> $2)
+       AND a.due_date < $3::timestamptz + interval '2 days'
+       AND ${ACTIVITY_END_SQL} > $3::timestamptz - interval '1 day'
+     ORDER BY a.due_date`,
+    [req.assigneeId, excludeId, start.toISOString()]
+  );
+  const end = new Date(start.getTime() + minutes * 60_000);
+  const clash = busy.rows.find((b) => new Date(b.start_at) < end && new Date(b.end_at) > start);
+  if (!clash) return;
+
+  // Next free time: step past whatever overlaps until a gap of this length opens up.
+  let candidate = start;
+  for (let i = 0; i < 50; i++) {
+    const candidateEnd = new Date(candidate.getTime() + minutes * 60_000);
+    const overlapping = busy.rows.filter((b) => new Date(b.start_at) < candidateEnd && new Date(b.end_at) > candidate);
+    if (overlapping.length === 0) break;
+    candidate = new Date(Math.max(...overlapping.map((b) => new Date(b.end_at).getTime())));
+  }
+
+  const who = clash.person ?? "This person";
+  const what = TYPE_LABEL[clash.type] ?? clash.type;
+  const withWhom = clash.lead_name ? ` with ${clash.lead_name}` : "";
+  const message = `${who} already has a ${what}${withWhom} from ${formatTime(new Date(clash.start_at))} to ${formatTime(new Date(clash.end_at))}. The next free time is ${formatTime(candidate)}.`;
+  throw new ApiError(409, message, { dueDate: [message], suggestedDueDate: [candidate.toISOString()] });
 }
 
 async function insertActivity(
@@ -233,7 +281,19 @@ async function insertActivity(
     throw new ApiError(422, "Activity type is required");
   }
 
-  await assertNoSchedulingConflict(input, leadId, opportunityId);
+  const assigneeId = input.assignedTo ?? requestingUserId;
+  // One booking at a time per person, so two people scheduling the same
+  // person at the same moment can't both pass the clash check.
+  return withAdvisoryLock(`activity-slots:${assigneeId}`, async () => {
+  await assertSlotIsFree({
+    type: input.type!,
+    status: input.status ?? "pending",
+    dueDate: input.dueDate ?? null,
+    assigneeId,
+    leadId,
+    opportunityId,
+    details: input.details,
+  });
 
   const result = await pool.query<ActivityRow>(
     `INSERT INTO activities (
@@ -258,6 +318,7 @@ async function insertActivity(
   );
 
   return toPublicActivity(result.rows[0]);
+  });
 }
 
 export async function createActivityForLead(leadId: string, input: ActivityInput, requestingUserId: string) {
@@ -422,12 +483,30 @@ export async function updateActivity(id: string, updates: ActivityInput, request
   setClauses.push("updated_at = now()");
   params.push(id);
 
-  const result = await pool.query<ActivityRow>(
-    `UPDATE activities SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING *`,
-    params
-  );
-
-  return toPublicActivity(result.rows[0]);
+  const current = (await pool.query<ActivityRow>("SELECT * FROM activities WHERE id = $1", [id])).rows[0];
+  if (!current) throw new ApiError(404, "Activity not found");
+  const assigneeId = updates.assignedTo ?? current.assigned_to ?? requestingUserId;
+  // Rescheduling or reassigning gets the same clash check as creating.
+  const movesSlot = updates.dueDate !== undefined || updates.assignedTo !== undefined || updates.details !== undefined || updates.status !== undefined;
+  return withAdvisoryLock(`activity-slots:${assigneeId}`, async () => {
+    if (movesSlot) {
+      await assertSlotIsFree({
+        activityId: id,
+        type: current.type,
+        status: updates.status ?? current.status,
+        dueDate: updates.dueDate ?? current.due_date,
+        assigneeId,
+        leadId: current.lead_id,
+        opportunityId: current.opportunity_id,
+        details: updates.details ?? current.details,
+      });
+    }
+    const result = await pool.query<ActivityRow>(
+      `UPDATE activities SET ${setClauses.join(", ")} WHERE id = $${params.length} RETURNING *`,
+      params
+    );
+    return toPublicActivity(result.rows[0]);
+  });
 }
 
 // Called by the Smartflo webhook, which has no CRM user session - it

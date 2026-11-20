@@ -1,6 +1,7 @@
 import { pool } from "../config/db";
+import { secretsMatch } from "../utils/safe-compare";
 import { externalFetch } from "../utils/external-fetch";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { SMARTFLO_BASE_URL, isSmartfloConfigured } from "../config/smartflo";
 import { env } from "../config/env";
 import { createActivityForLead, mergeActivityDetailsByExternalRefId } from "./activity-service";
@@ -117,7 +118,7 @@ export async function initiateCallForLead(
 // means the integration isn't set up yet, not that it should be unguarded.
 export function isWebhookSecretValid(providedSecret: string | undefined): boolean {
   if (!env.SMARTFLO_WEBHOOK_SECRET) return false;
-  return providedSecret === env.SMARTFLO_WEBHOOK_SECRET;
+  return secretsMatch(providedSecret, env.SMARTFLO_WEBHOOK_SECRET);
 }
 
 function parseSeconds(value: string | number | undefined): number | undefined {

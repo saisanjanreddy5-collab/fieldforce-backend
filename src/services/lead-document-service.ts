@@ -3,12 +3,12 @@ import path from "path";
 import crypto from "crypto";
 import multer from "multer";
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 
-export const DOCUMENT_TYPES = ["pan_card", "gst_certificate", "shop_photos", "rent_agreement", "cancelled_cheque", "consent_form"] as const;
+const DOCUMENT_TYPES = ["pan_card", "gst_certificate", "shop_photos", "rent_agreement", "cancelled_cheque", "consent_form"] as const;
 export type DocumentType = (typeof DOCUMENT_TYPES)[number];
 
-export const DOCUMENT_TYPE_LABELS: Record<DocumentType, string> = {
+const DOCUMENT_TYPE_LABELS: Record<DocumentType, string> = {
   pan_card: "PAN card",
   gst_certificate: "GST certificate",
   shop_photos: "Shop photos",
@@ -78,7 +78,7 @@ export const documentUpload = multer({
 // One row per real document type per lead - created lazily on first view,
 // same idempotent-lazy-create spirit as scheduled-transfer-service's
 // applyDueTransfers.
-export async function ensureDocumentRows(leadId: string): Promise<void> {
+async function ensureDocumentRows(leadId: string): Promise<void> {
   for (const docType of DOCUMENT_TYPES) {
     await pool.query(
       `INSERT INTO lead_documents (lead_id, doc_type) VALUES ($1, $2)

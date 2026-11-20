@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { decimal12_2 } from "./money";
 
-export const SALES_ORDER_STATUSES = ["confirmed", "delivered", "cancelled"] as const;
+const SALES_ORDER_STATUSES = ["confirmed", "delivered", "cancelled"] as const;
 
 export const createSalesOrderSchema = z.object({
   orderDate: z.string().trim().optional(),

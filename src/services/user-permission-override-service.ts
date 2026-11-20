@@ -1,5 +1,6 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
+import { clearPermissionCache } from "./permission-service";
 
 interface OverrideRow {
   id: string;
@@ -66,6 +67,7 @@ export async function createOverride(
      RETURNING id`,
     [userId, permission, grantType, reason ?? null, expiresAt ?? null, createdBy]
   );
+  clearPermissionCache();
   const result2 = await pool.query<OverrideRow>(
     `SELECT o.*, creator.name AS created_by_name, clearer.name AS cleared_by_name
      FROM user_permission_overrides o ${NAME_JOIN} WHERE o.id = $1`,
@@ -82,6 +84,7 @@ export async function clearOverride(id: string, clearedBy: string) {
   if (result.rows.length === 0) {
     throw new ApiError(404, "Active override not found");
   }
+  clearPermissionCache();
 }
 
 // Clears every currently-active override for this person in one action,
@@ -91,5 +94,6 @@ export async function clearAllOverridesForUser(userId: string, clearedBy: string
     "UPDATE user_permission_overrides SET cleared_by = $1, cleared_at = now() WHERE user_id = $2 AND cleared_at IS NULL",
     [clearedBy, userId]
   );
+  clearPermissionCache();
   return result.rowCount ?? 0;
 }

@@ -1,4 +1,4 @@
-import { getPermissionsForRole } from "./permission-service";
+import { getEffectivePermissions } from "./permission-service";
 import * as leaveService from "./leave-service";
 import * as expenseService from "./expense-service";
 import * as fofoOnboardingService from "./fofo-onboarding-service";
@@ -209,8 +209,8 @@ export interface ApprovalHistoryResult {
 // a sane 300 rows (see listDecidedByUser/listDecidedStepsByUser), so a true
 // cross-source SQL OFFSET isn't worth the complexity at this volume; page/
 // limit slice the merged, newest-first feed instead.
-export async function getApprovalHistory(userId: string, role: string, page: number, limit: number): Promise<ApprovalHistoryResult> {
-  const permissions = await getPermissionsForRole(role);
+export async function getApprovalHistory(userId: string, page: number, limit: number): Promise<ApprovalHistoryResult> {
+  const { permissions } = await getEffectivePermissions(userId);
   const [leaveItems, expenseItems, fofoItems] = await Promise.all([
     permissions.includes("leave_requests.approve") ? buildLeaveHistoryItems(userId) : Promise.resolve([]),
     permissions.includes("expense_claims.approve") ? buildExpenseHistoryItems(userId) : Promise.resolve([]),
@@ -234,8 +234,8 @@ export interface ApprovalInboxStats {
   avgDecisionHours: number | null;
 }
 
-export async function getApprovalInbox(userId: string, role: string): Promise<{ items: ApprovalQueueItem[]; stats: ApprovalInboxStats }> {
-  const permissions = await getPermissionsForRole(role);
+export async function getApprovalInbox(userId: string): Promise<{ items: ApprovalQueueItem[]; stats: ApprovalInboxStats }> {
+  const { permissions } = await getEffectivePermissions(userId);
   const [leaveItems, expenseItems, fofoItems] = await Promise.all([
     permissions.includes("leave_requests.approve") ? buildLeaveItems(userId) : Promise.resolve([]),
     permissions.includes("expense_claims.approve") ? buildExpenseItems(userId) : Promise.resolve([]),

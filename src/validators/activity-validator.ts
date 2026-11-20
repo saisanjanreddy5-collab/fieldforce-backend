@@ -4,7 +4,7 @@ import { z } from "zod";
 // a type allowed there but missing here means rows can be created (activity
 // creation doesn't go through this schema) but never filtered by via
 // GET /activities?type=..., which does.
-export const ACTIVITY_TYPES = ["call", "email", "teams_meeting", "site_visit", "whatsapp", "internal", "support_ticket"] as const;
+const ACTIVITY_TYPES = ["call", "email", "teams_meeting", "site_visit", "whatsapp", "internal", "support_ticket"] as const;
 
 // externalRefId is set only by the server itself (Smartflo click-to-call)
 // - never accepted from a request, or a copied id would let a caller graft
