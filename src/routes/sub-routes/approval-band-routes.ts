@@ -13,11 +13,9 @@ const router = Router();
 
 router.use(requireAuth);
 
-// A new module, so every route wires to requirePermission from day one per
-// the post-Phase-3 rule - manager+ can see the configured ladder, only
-// admins can change it. Nothing here is consulted by any real
-// approval/workflow logic - see the Phase 8 note in models/model.ts and
-// approval-band-service.ts.
+// Manager+ can see the configured ladder, only admins can change it. Only
+// the 'expense_claim' bands drive a live decision (expense-service.ts's
+// resolveSecondApprover); see approval-band-service.ts.
 router.get(
   "/",
   requirePermission("approval_bands.view"),

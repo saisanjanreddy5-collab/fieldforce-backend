@@ -5,10 +5,8 @@ import { CALL_CENTER_UNIVERSAL_VISIBILITY_CLAUSE } from "./lead-service";
 // Same subtree-visibility rule leads/opportunities already use everywhere
 // else (owner in the requester's reporting subtree, or explicitly shared) -
 // global search never shows a record the Leads/Opportunities pages
-// themselves wouldn't show this same user.
-// Admin-aware: an Admin sees the whole company here, not just their own
-// reporting line (see utils/subtree.ts).
-const SUBTREE_CTE = ADMIN_AWARE_SUBTREE_CTE;
+// themselves wouldn't show this same user. An Admin's subtree is the whole
+// company (ADMIN_AWARE_SUBTREE_CTE).
 
 const BASE_VISIBILITY = `
   l.owner_id IN (SELECT id FROM subtree)
@@ -68,7 +66,7 @@ export async function globalSearch(requestingUserId: string, query: string): Pro
   const term = `%${query}%`;
 
   const leadsResult = await pool.query<LeadResultRow>(
-    `${SUBTREE_CTE}
+    `${ADMIN_AWARE_SUBTREE_CTE}
      SELECT l.id, l.full_name, l.company_name, l.phone, l.email, l.category, l.status
      FROM leads l
      WHERE l.is_deleted = false AND ${LEAD_VISIBILITY_CLAUSE}
@@ -79,7 +77,7 @@ export async function globalSearch(requestingUserId: string, query: string): Pro
   );
 
   const opportunitiesResult = await pool.query<OpportunityResultRow>(
-    `${SUBTREE_CTE}
+    `${ADMIN_AWARE_SUBTREE_CTE}
      SELECT o.id, o.name, l.full_name AS lead_full_name, o.stage, o.value
      FROM opportunities o
      JOIN leads l ON l.id = o.lead_id

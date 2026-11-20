@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
-import { asyncHandler } from "../utils/asyncHandler";
-import { ApiError } from "../utils/ApiError";
+import { asyncHandler } from "../utils/async-handler";
+import { ApiError } from "../utils/api-error";
 import { env } from "../config/env";
 import * as ssoService from "../services/sso-service";
 

@@ -1,7 +1,8 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
+import { SUBTREE_CTE } from "../utils/subtree";
 
-export const TRANSFER_TYPES = ["territory", "bulk_reassign", "exit"] as const;
+const TRANSFER_TYPES = ["territory", "bulk_reassign", "exit"] as const;
 export type TransferType = (typeof TRANSFER_TYPES)[number];
 
 interface ScheduledTransferRow {
@@ -40,22 +41,18 @@ function toPublicTransfer(row: ScheduledTransferRow) {
   };
 }
 
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
-
-// The lazy-apply step the user asked for instead of a job scheduler: any
-// 'scheduled' row whose effective_date has arrived gets its real data
-// change made right now, then flips to 'completed'. Called at the top of
-// every read, so nobody needs to remember to run this - the next person
-// who opens Reporting lines (or Territory & targets) triggers it.
+// Applies every 'scheduled' row whose effective date has arrived (India
+// time), then marks it 'completed'. Runs in the background every 15
+// minutes (startScheduledTransferScheduler), and again whenever someone opens
+// the transfers list so it is always current there. Row locks make
+// overlapping runs safe.
 async function applyDueTransfers(): Promise<void> {
   const due = await pool.query<ScheduledTransferRow>(
-    "SELECT * FROM scheduled_transfers WHERE status = 'scheduled' AND effective_date <= CURRENT_DATE ORDER BY effective_date ASC, created_at ASC"
+    // "Today" in India time - the server's own date is UTC, which ran a
+    // transfer dated today only after 5:30 AM IST, or a day early late at night.
+    `SELECT * FROM scheduled_transfers
+     WHERE status = 'scheduled' AND effective_date <= (now() AT TIME ZONE 'Asia/Kolkata')::date
+     ORDER BY effective_date ASC, created_at ASC`
   );
 
   for (const row of due.rows) {
@@ -69,6 +66,17 @@ async function applyDueTransfers(): Promise<void> {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      // Two people opening the page at the same moment must not both apply
+      // the same transfer: lock this row, and skip it if someone else has it
+      // or already finished it.
+      const claimed = await client.query(
+        "SELECT 1 FROM scheduled_transfers WHERE id = $1 AND status = 'scheduled' FOR UPDATE SKIP LOCKED",
+        [row.id]
+      );
+      if ((claimed.rowCount ?? 0) === 0) {
+        await client.query("ROLLBACK");
+        continue;
+      }
       if (row.transfer_type === "bulk_reassign" && row.from_user_id && row.to_user_id) {
         await client.query("UPDATE leads SET owner_id = $1, updated_at = now() WHERE owner_id = $2 AND is_deleted = false", [
           row.to_user_id,
@@ -105,6 +113,27 @@ async function applyDueTransfers(): Promise<void> {
       client.release();
     }
   }
+}
+
+const TRANSFER_CHECK_INTERVAL_MS = 15 * 60_000;
+let transferCheckRunning = false;
+
+async function runDueTransfers(): Promise<void> {
+  if (transferCheckRunning) return;
+  transferCheckRunning = true;
+  try {
+    await applyDueTransfers();
+  } catch (err) {
+    console.error("Scheduled transfers check failed:", err instanceof Error ? err.message : err);
+  } finally {
+    transferCheckRunning = false;
+  }
+}
+
+// A transfer dated today happens today, whether or not anyone opens the page.
+export function startScheduledTransferScheduler(): void {
+  void runDueTransfers();
+  setInterval(() => void runDueTransfers(), TRANSFER_CHECK_INTERVAL_MS);
 }
 
 export interface ListScheduledTransfersFilters {

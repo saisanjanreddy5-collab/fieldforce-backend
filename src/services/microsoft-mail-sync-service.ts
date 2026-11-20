@@ -114,7 +114,7 @@ async function saveDeltaLink(userId: string, deltaLink: string): Promise<void> {
 // reply, since none of it is new, it's just however much mail already
 // existed. Only once that baseline is established does a later pass's
 // results mean "arrived since last time" and get matched/logged for real.
-export async function syncMailboxForUser(userId: string, accessToken: string, storedDeltaLink: string | null): Promise<number> {
+async function syncMailboxForUser(userId: string, accessToken: string, storedDeltaLink: string | null): Promise<number> {
   const isInitialSync = !storedDeltaLink;
   let url = storedDeltaLink ?? INITIAL_DELTA_URL;
   let loggedCount = 0;
@@ -174,9 +174,10 @@ export async function syncAllConnectedMailboxes(): Promise<void> {
 
 const SYNC_INTERVAL_MS = 3 * 60 * 1000;
 
-// Deliberately a plain setInterval, not a new job-queue dependency - this is
-// the one and only background job in this codebase today, and a single
-// process-wide timer is the whole mechanism a project this size needs.
+// Deliberately a plain setInterval, not a job-queue dependency - every
+// background job here (mail sync, call reminders, Helpdesk reconcile,
+// scheduled transfers) is a single process-wide timer started from
+// server.ts, which is all a project this size needs.
 // A sync longer than the interval (first sync of a big inbox, slow Graph)
 // must not overlap the next one - both would log the same inbound emails.
 let mailSyncRunning = false;

@@ -1,8 +1,9 @@
 import crypto from "crypto";
+import { secretsMatch } from "../utils/safe-compare";
 import jwt from "jsonwebtoken";
 import { pool } from "../config/db";
 import { env } from "../config/env";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 
 // Long-lived "is this browser already logged into FieldForce" proof, read by
 // GET /sso/authorize so a second visit (Frappe redirecting back here) never
@@ -163,7 +164,7 @@ export async function exchangeCodeForToken(params: {
 }): Promise<{ accessToken: string; expiresIn: number }> {
   const { clientId: expectedClientId, clientSecret: expectedClientSecret, tokenSecret } = requireSsoConfigured();
 
-  if (params.clientId !== expectedClientId || params.clientSecret !== expectedClientSecret) {
+  if (!secretsMatch(params.clientId, expectedClientId) || !secretsMatch(params.clientSecret, expectedClientSecret)) {
     throw new ApiError(401, "Invalid client credentials");
   }
 

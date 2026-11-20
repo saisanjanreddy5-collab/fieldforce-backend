@@ -1,6 +1,7 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { Role, ROLES } from "../utils/roles";
+import { SUBTREE_CTE } from "../utils/subtree";
 
 export const COMMISSION_BASES = ["collected_revenue", "invoiced_revenue", "gross_margin", "units_sold"] as const;
 export type CommissionBasis = (typeof COMMISSION_BASES)[number];
@@ -41,14 +42,6 @@ function toPublicCommission(row: UserCommissionRow) {
     updatedAt: row.updated_at,
   };
 }
-
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
 
 export interface ListUserCommissionsFilters {
   userId?: string;

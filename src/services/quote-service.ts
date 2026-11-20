@@ -1,8 +1,9 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { isLeadInOwnerScope, isLeadVisibleToUser } from "./lead-service";
 import { isOpportunityVisibleToUser } from "./opportunity-service";
 import { recordAuditEvent } from "./audit-log-service";
+import { SUBTREE_CTE } from "../utils/subtree";
 
 export interface QuoteLineItemInput {
   description: string;
@@ -393,14 +394,6 @@ export async function listQuotesForOpportunity(opportunityId: string, requesting
 // leads/opportunities (a quote is visible exactly when its lead is),
 // applied once via a join rather than re-querying isLeadVisibleToUser per
 // row.
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
-
 export async function listQuotes(requestingUserId: string, filters: ListQuotesFilters) {
   const conditions: string[] = [
     `(l.owner_id IN (SELECT id FROM subtree)

@@ -1,19 +1,12 @@
 import crypto from "crypto";
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import * as leadService from "./lead-service";
 import * as leadDocumentService from "./lead-document-service";
 import { getNumericSetting } from "./app-settings-service";
 import { recordAuditEvent } from "./audit-log-service";
 import { registerFofoUser } from "./skia-fofo-service";
-
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
+import { SUBTREE_CTE } from "../utils/subtree";
 
 // A deal size above which the "Regional Head" condition actually applies -
 // real, not cosmetic: below this, the third approval step is auto-marked
@@ -106,7 +99,7 @@ async function deriveApprovalChain(leadId: string, ownerId: string, expectedValu
   }
 }
 
-export async function listApprovalSteps(leadId: string, ownerId: string, expectedValue: number | null) {
+async function listApprovalSteps(leadId: string, ownerId: string, expectedValue: number | null) {
   await deriveApprovalChain(leadId, ownerId, expectedValue);
 
   const result = await pool.query<ApprovalStepRow & { approver_name: string | null }>(
@@ -184,10 +177,10 @@ export async function decideStep(
     throw new ApiError(422, "This step has already been decided");
   }
 
-  const [leadResult, actorResult] = await Promise.all([
-    pool.query<{ full_name: string; store_name: string | null }>("SELECT full_name, store_name FROM leads WHERE id = $1", [step.lead_id]),
-    pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]),
-  ]);
+  const leadResult = await pool.query<{ full_name: string; store_name: string | null }>(
+    "SELECT full_name, store_name FROM leads WHERE id = $1",
+    [step.lead_id]
+  );
   const leadLabel = leadResult.rows[0]?.store_name ?? leadResult.rows[0]?.full_name ?? "Unknown lead";
   await recordAuditEvent({
     entityType: "fofo_approval_step",
@@ -198,7 +191,6 @@ export async function decideStep(
     oldValue: "Pending",
     newValue: decision === "approved" ? "Approved" : "Rejected",
     actorId: requestingUserId,
-    actorName: actorResult.rows[0]?.name ?? null,
     ipAddress,
   });
 

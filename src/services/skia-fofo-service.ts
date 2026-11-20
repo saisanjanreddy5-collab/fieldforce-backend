@@ -1,8 +1,8 @@
 import { env } from "../config/env";
 import { externalFetch } from "../utils/external-fetch";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 
-export function isSkiaFofoConfigured(): boolean {
+function isSkiaFofoConfigured(): boolean {
   return Boolean(env.SKIA_FOFO_REGISTRATION_URL && env.SKIA_FOFO_CMR_TOKEN);
 }
 
@@ -35,7 +35,7 @@ export function isAlreadyRegisteredMessage(message: string): boolean {
 
 // SKIA's answer when the CMR token isn't accepted on that SKIA system:
 // HTTP 401/403, or a message like "Invalid CMR token".
-export function isTokenRejection(status: number, message: string): boolean {
+function isTokenRejection(status: number, message: string): boolean {
   return status === 401 || status === 403 || /(invalid|expired|wrong).{0,20}token|token.{0,20}(invalid|expired)/i.test(message);
 }
 

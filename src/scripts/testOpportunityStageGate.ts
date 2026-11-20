@@ -2,7 +2,7 @@ import { pool } from "../config/db";
 import { createLead } from "../services/lead-service";
 import { convertLeadToOpportunity } from "../services/opportunity-service";
 import { escalateToSlc, logCallDisposition, qualifyLead, sendToField, startFlc } from "../services/lead-call-center-service";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 
 // Covers "Opportunity Creation Allowed for Leads in Call Center Stage 1" -
 // convertLeadToOpportunity had zero check on the lead's own stage, so even

@@ -1,29 +1,13 @@
 import { pool } from "../config/db";
 import { customerLabel } from "./customer-service";
 import { ACTIVITY_VISIBILITY_CLAUSE } from "./activity-service";
-
-// Same hierarchy-visibility shape as every other module (Leads, Customers,
-// Activity Calendar) - walk DOWN from the requesting user to find their
-// subtree.
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
+import { SUBTREE_CTE } from "../utils/subtree";
 
 // A call is visible exactly when its lead is - matches
 // activity-service.ts's own listActivitiesForUser/isActivityVisibleToUser
 // (the lead's owner, or an explicit lead_shares grant), NOT "whoever placed
-// the call" (a.assigned_to). This used to be the lead's owner/subtree
-// check but was built against assigned_to instead - a real authorization
-// drift, not a stylistic difference: a manager whose subordinate has
-// share-only access to someone else's lead could see that call here with
-// no access to the lead anywhere else in the app, while a call placed by
-// someone outside the manager's team on a lead the manager genuinely owns
-// would vanish from this module despite showing in that lead's own
-// Activity tab.
+// the call" (a.assigned_to) - otherwise a manager could see calls on leads
+// they have no access to, and miss calls on leads they do own.
 // Deleted (archived) calls never count anywhere in Call Center - not in the
 // queue, the stats, or the call log.
 const VISIBILITY_CLAUSE = `(a.is_deleted = false AND ${ACTIVITY_VISIBILITY_CLAUSE})`;
@@ -194,12 +178,8 @@ interface CallCenterStatsRow {
   overdue_in_queue_count: string;
 }
 
-// The stat cards used to be computed client-side over whatever page of
-// calls happened to be loaded (capped at 200), so connectedPercent/
-// recordedPercent/avgHandleSeconds silently became a skewed sample once an
-// org passed 200 historical calls, while still being labeled "of all
-// calls". Real aggregates, computed here over every call this user can
-// see - not a page of them - so they stay correct regardless of volume.
+// Stat-card aggregates over every call this user can see - not one loaded
+// page of them - so they stay correct regardless of volume.
 // "Today" is anchored to Asia/Kolkata, matching activity-service.ts's own
 // getCalendarStats, not the viewer's browser clock.
 // external_ref_id IS NOT NULL on every "completed" subquery below is the

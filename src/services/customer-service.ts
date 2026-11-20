@@ -1,5 +1,6 @@
+import type { PoolClient } from "pg";
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { ROLES } from "../utils/roles";
 import { queueCustomerHelpdeskSync } from "./frappe-helpdesk-service";
 import { recordAuditEvent, listAuditLogForEntity } from "./audit-log-service";
@@ -8,20 +9,7 @@ import { listLegacyTicketsForLead } from "./legacy-ticket-history-service";
 import { listOrderRowsForCustomer, countOpenOrders } from "./sales-order-service";
 import { listInvoiceRowsForCustomer, countOverdueInvoices } from "./invoice-service";
 import { listPaymentRowsForCustomer, sumClearedPayments } from "./payment-service";
-
-// Same hierarchy-visibility rule as leads/activities/expenses/leave: a
-// customer is visible to its owner and to everyone above the owner in the
-// reporting chain, found by walking DOWN from the requesting user (see
-// lead-service.ts's own SUBTREE_CTE for the full rationale - this is the
-// identical pattern, just over customers.owner_id instead of
-// leads.owner_id).
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
+import { SUBTREE_CTE } from "../utils/subtree";
 
 // Mirrors lead-service.ts's UNASSIGNED_ADMIN_CLAUSE exactly: admin is a
 // global role, not a node in the reporting chain, so it gets an
@@ -119,12 +107,10 @@ function toPublicCustomer(row: CustomerRow) {
   };
 }
 
-// Called from lead-service.ts's updateLead the moment a lead's status
-// transitions to 'converted'. Takes the lead's already-fetched row instead
-// of re-querying it, and never throws - a failure here (e.g. a race where
-// the lead was converted twice concurrently) should not fail the lead
-// update itself, which is why ON CONFLICT DO NOTHING plus a try/catch guard
-// the caller instead of propagating.
+// Creates the customer for a lead that has just become Converted (idempotent:
+// ON CONFLICT (lead_id) DO NOTHING). Pass `db` to do it inside the
+// conversion's own transaction - then the caller starts the Helpdesk sync
+// after COMMIT with the returned id; on the default pool it starts here.
 export async function createCustomerFromLead(lead: {
   id: string;
   full_name: string;
@@ -145,8 +131,8 @@ export async function createCustomerFromLead(lead: {
   address_line2: string | null;
   territory: string | null;
   credit_limit_requested: string | null;
-}): Promise<void> {
-  const created = await pool.query<{ id: string }>(
+}, db: Pick<PoolClient, "query"> = pool): Promise<string | null> {
+  const created = await db.query<{ id: string }>(
     `INSERT INTO customers (
        lead_id, full_name, contact_name, phone, alt_phone, email, company_name, category,
        owner_id, city, zone_id, state_id, district_id, area_id, pincode, address_line1, address_line2,
@@ -182,7 +168,9 @@ export async function createCustomerFromLead(lead: {
   );
   // A brand-new customer with an email gets their support-portal account
   // in Frappe Helpdesk (background - never slows the conversion down).
-  if (created.rows[0]) queueCustomerHelpdeskSync(created.rows[0].id);
+  const customerId = created.rows[0]?.id ?? null;
+  if (customerId && db === pool) queueCustomerHelpdeskSync(customerId);
+  return customerId;
 }
 
 // Called from lead-service.ts's updateLead (a single lead's owner changing)
@@ -395,9 +383,6 @@ export async function updateCustomer(
   );
 
   if (before) {
-    const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
-    const actorName = actorResult.rows[0]?.name ?? null;
-
     if (updates.creditLimit !== undefined && updates.creditLimit !== Number(before.credit_limit)) {
       await recordAuditEvent({
         entityType: "customer",
@@ -408,7 +393,6 @@ export async function updateCustomer(
         oldValue: before.credit_limit,
         newValue: String(updates.creditLimit),
         actorId: requestingUserId,
-        actorName,
       });
     }
     if (updates.outstandingBalance !== undefined && updates.outstandingBalance !== Number(before.outstanding_balance)) {
@@ -421,7 +405,6 @@ export async function updateCustomer(
         oldValue: before.outstanding_balance,
         newValue: String(updates.outstandingBalance),
         actorId: requestingUserId,
-        actorName,
       });
     }
     if (updates.ownerId !== undefined && updates.ownerId !== before.owner_id) {
@@ -439,7 +422,6 @@ export async function updateCustomer(
         oldValue: before.owner_id ? nameById.get(before.owner_id) ?? "Unassigned" : "Unassigned",
         newValue: updates.ownerId ? nameById.get(updates.ownerId) ?? "Unassigned" : "Unassigned",
         actorId: requestingUserId,
-        actorName,
       });
     }
     if (updates.creditCategory !== undefined && updates.creditCategory !== before.credit_category) {
@@ -452,7 +434,6 @@ export async function updateCustomer(
         oldValue: before.credit_category ?? "Unrated",
         newValue: updates.creditCategory ?? "Unrated",
         actorId: requestingUserId,
-        actorName,
       });
     }
   }

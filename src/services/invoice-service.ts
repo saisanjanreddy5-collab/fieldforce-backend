@@ -1,5 +1,5 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { isCustomerInScope } from "./customer-service";
 import { recordAuditEvent } from "./audit-log-service";
 
@@ -166,7 +166,6 @@ export async function deleteInvoice(invoiceId: string, requestingUserId: string)
   // the one place that records who archived a real financial record and
   // when, matching the seriousness updateCustomer's own credit/balance
   // changes already get.
-  const actorName = (await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId])).rows[0]?.name ?? null;
   await recordAuditEvent({
     entityType: "invoice",
     entityId: invoiceId,
@@ -176,7 +175,6 @@ export async function deleteInvoice(invoiceId: string, requestingUserId: string)
     oldValue: `₹${existing.amount} · ${existing.status}`,
     newValue: "Deleted",
     actorId: requestingUserId,
-    actorName,
   });
 }
 

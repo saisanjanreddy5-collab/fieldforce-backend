@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { asyncHandler } from "../utils/asyncHandler";
+import { asyncHandler } from "../utils/async-handler";
 import { sendSuccess } from "../utils/response";
 import * as auditLogService from "../services/audit-log-service";
 import * as consentRegisterService from "../services/consent-register-service";

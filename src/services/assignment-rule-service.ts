@@ -1,5 +1,5 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { recordAuditEvent } from "./audit-log-service";
 
 interface AssignmentRuleRow {
@@ -119,7 +119,6 @@ export async function updateAssignmentRule(
   if (before && requestingUserId) {
     const ruleLabel = `${before.state_name ?? "All states"}${before.category ? ` - ${before.category}` : ""}`;
     if (before.assigned_user_id !== after.assigned_user_id) {
-      const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
       await recordAuditEvent({
         entityType: "assignment_rule",
         entityId: id,
@@ -129,11 +128,9 @@ export async function updateAssignmentRule(
         oldValue: before.assigned_user_name,
         newValue: after.assigned_user_name,
         actorId: requestingUserId,
-        actorName: actorResult.rows[0]?.name ?? null,
         ipAddress,
       });
     } else if (before.is_active !== after.is_active) {
-      const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [requestingUserId]);
       await recordAuditEvent({
         entityType: "assignment_rule",
         entityId: id,
@@ -143,7 +140,6 @@ export async function updateAssignmentRule(
         oldValue: before.is_active ? "Active" : "Inactive",
         newValue: after.is_active ? "Active" : "Inactive",
         actorId: requestingUserId,
-        actorName: actorResult.rows[0]?.name ?? null,
         ipAddress,
       });
     }

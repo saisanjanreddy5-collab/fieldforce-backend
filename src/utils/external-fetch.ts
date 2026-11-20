@@ -1,4 +1,4 @@
-import { ApiError } from "./ApiError";
+import { ApiError } from "./api-error";
 
 // Every call this backend makes to an outside service (WhatsApp/K3,
 // Smartflo, Microsoft Graph, SKIA's onboarding app) goes through here.

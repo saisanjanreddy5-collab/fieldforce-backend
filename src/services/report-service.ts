@@ -1,12 +1,9 @@
 import { pool } from "../config/db";
 import { ADMIN_AWARE_SUBTREE_CTE } from "../utils/subtree";
 
-// Same subtree-scoping convention as dashboard-service.ts and everywhere
-// else - a report always reflects the requesting user's own reporting
-// chain, never a company-wide bypass for admin.
-// Admin-aware: an Admin sees the whole company here, not just their own
-// reporting line (see utils/subtree.ts).
-const SUBTREE_CTE = ADMIN_AWARE_SUBTREE_CTE;
+// Same subtree-scoping convention as dashboard-service.ts - a report
+// reflects the requesting user's own reporting chain, except that an Admin
+// sees the whole company (ADMIN_AWARE_SUBTREE_CTE).
 
 // A lead counts as "qualified" once an opportunity created from it has
 // moved past the initial 'new' stage - the real stage list already used by
@@ -30,7 +27,7 @@ export async function getSalespersonPerformance(requestingUserId: string, filter
   if (filters.zoneId) params.push(filters.zoneId);
 
   const result = await pool.query(
-    `${SUBTREE_CTE}
+    `${ADMIN_AWARE_SUBTREE_CTE}
      SELECT
        u.id AS "userId",
        u.name,
@@ -74,7 +71,7 @@ export async function getSalespersonPerformance(requestingUserId: string, filter
 // number.
 export async function getStateWiseReport(requestingUserId: string) {
   const result = await pool.query(
-    `${SUBTREE_CTE}
+    `${ADMIN_AWARE_SUBTREE_CTE}
      SELECT
        st.id AS "stateId",
        st.name AS "stateName",
@@ -106,7 +103,7 @@ export async function getStateWiseReport(requestingUserId: string) {
 // (no orders/invoicing system exists) so they're always null.
 export async function getB2BGroupPerformance(requestingUserId: string) {
   const result = await pool.query(
-    `${SUBTREE_CTE}
+    `${ADMIN_AWARE_SUBTREE_CTE}
      SELECT
        COALESCE(l.category, 'Uncategorized') AS "category",
        COUNT(*) FILTER (WHERE l.status = 'Converted') AS "accounts",
@@ -134,7 +131,7 @@ export async function getB2BGroupPerformance(requestingUserId: string) {
 // campaign budget is tracked anywhere in FieldForce.
 export async function getLeadSourceROI(requestingUserId: string) {
   const result = await pool.query(
-    `${SUBTREE_CTE}
+    `${ADMIN_AWARE_SUBTREE_CTE}
      SELECT
        COALESCE(l.inquiry_source, 'Unspecified') AS "source",
        COUNT(DISTINCT l.id) AS "leads",
@@ -166,7 +163,7 @@ export async function getLeadSourceROI(requestingUserId: string) {
 // so those are always null.
 export async function getFofoCohortRetention(requestingUserId: string) {
   const result = await pool.query(
-    `${SUBTREE_CTE}
+    `${ADMIN_AWARE_SUBTREE_CTE}
      SELECT
        date_trunc('month', l.pushed_at) AS "cohortMonth",
        COUNT(*) AS "stores"
@@ -230,11 +227,11 @@ export async function getCallCenterPerformance(requestingUserId: string, filters
   }
 
   const result = await pool.query(
-    `${SUBTREE_CTE}
+    `${ADMIN_AWARE_SUBTREE_CTE}
      SELECT
        u.id AS "userId",
        u.name,
-       st.name AS "team",
+       (SELECT string_agg(t.name, ', ' ORDER BY t.name) FROM user_sales_teams ust JOIN sales_teams t ON t.id = ust.sales_team_id WHERE ust.user_id = u.id) AS "team",
        COALESCE(calls.total, 0) AS "callsMade",
        COALESCE(calls.ringing, 0) AS "ringing",
        COALESCE(calls.not_reachable, 0) AS "notReachable",
@@ -247,7 +244,6 @@ export async function getCallCenterPerformance(requestingUserId: string, filters
        COALESCE(esc.count, 0) AS "escalatedOrQualified"
      FROM subtree s
      JOIN users u ON u.id = s.id
-     LEFT JOIN sales_teams st ON st.id = u.sales_team_id
      LEFT JOIN (
        SELECT created_by,
          COUNT(*) AS total,
@@ -320,7 +316,7 @@ export async function getFieldSalesPerformance(requestingUserId: string, filters
   }
 
   const result = await pool.query(
-    `${SUBTREE_CTE}
+    `${ADMIN_AWARE_SUBTREE_CTE}
      SELECT
        u.id AS "userId",
        u.name,

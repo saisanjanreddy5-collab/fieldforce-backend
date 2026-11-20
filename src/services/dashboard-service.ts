@@ -5,36 +5,34 @@ import { ADMIN_AWARE_SUBTREE_CTE } from "../utils/subtree";
 // everyone below them in the reporting chain) - the same Rule A idea used
 // everywhere else. An individual agent's subtree is just themselves, so they
 // see personal numbers; a manager's subtree includes their whole team, so
-// the same queries naturally roll up into team-wide numbers.
-// Admin-aware: an Admin sees the whole company here, not just their own
-// reporting line (see utils/subtree.ts).
-const SUBTREE_CTE = ADMIN_AWARE_SUBTREE_CTE;
+// the same queries naturally roll up into team-wide numbers; an Admin's
+// covers the whole company (ADMIN_AWARE_SUBTREE_CTE).
 
 export async function getOverview(requestingUserId: string) {
   const [totalLeadsResult, totalOpportunitiesResult, pipelineValueResult, conversionResult, activeResult] =
     await Promise.all([
       pool.query<{ count: string }>(
-        `${SUBTREE_CTE}
+        `${ADMIN_AWARE_SUBTREE_CTE}
          SELECT COUNT(*) FROM leads l
          WHERE l.is_deleted = false AND l.owner_id IN (SELECT id FROM subtree)`,
         [requestingUserId]
       ),
       pool.query<{ count: string }>(
-        `${SUBTREE_CTE}
+        `${ADMIN_AWARE_SUBTREE_CTE}
          SELECT COUNT(*) FROM opportunities o
          JOIN leads l ON l.id = o.lead_id
          WHERE o.is_deleted = false AND l.is_deleted = false AND l.owner_id IN (SELECT id FROM subtree)`,
         [requestingUserId]
       ),
       pool.query<{ total: string | null }>(
-        `${SUBTREE_CTE}
+        `${ADMIN_AWARE_SUBTREE_CTE}
          SELECT SUM(o.value) AS total FROM opportunities o
          JOIN leads l ON l.id = o.lead_id
          WHERE o.is_deleted = false AND l.is_deleted = false AND l.owner_id IN (SELECT id FROM subtree)`,
         [requestingUserId]
       ),
       pool.query<{ converted: string; created: string }>(
-        `${SUBTREE_CTE}
+        `${ADMIN_AWARE_SUBTREE_CTE}
          SELECT
            COUNT(*) FILTER (WHERE l.status = 'Converted' AND l.updated_at >= now() - interval '30 days') AS converted,
            COUNT(*) FILTER (WHERE l.created_at >= now() - interval '30 days') AS created
@@ -43,7 +41,7 @@ export async function getOverview(requestingUserId: string) {
         [requestingUserId]
       ),
       pool.query<{ count: string }>(
-        `${SUBTREE_CTE}
+        `${ADMIN_AWARE_SUBTREE_CTE}
          SELECT COUNT(DISTINCT a.user_id) FROM attendance a
          WHERE a.status = 'checked_in' AND a.user_id IN (SELECT id FROM subtree)`,
         [requestingUserId]
@@ -64,7 +62,7 @@ export async function getOverview(requestingUserId: string) {
 
 export async function getPipelineByStage(requestingUserId: string) {
   const result = await pool.query<{ stage: string; count: string; total_value: string | null }>(
-    `${SUBTREE_CTE}
+    `${ADMIN_AWARE_SUBTREE_CTE}
      SELECT o.stage, COUNT(*) AS count, SUM(o.value) AS total_value
      FROM opportunities o
      JOIN leads l ON l.id = o.lead_id
@@ -83,7 +81,7 @@ export async function getPipelineByStage(requestingUserId: string) {
 
 export async function getLeadsByStatus(requestingUserId: string) {
   const result = await pool.query<{ status: string; count: string }>(
-    `${SUBTREE_CTE}
+    `${ADMIN_AWARE_SUBTREE_CTE}
      SELECT l.status, COUNT(*) AS count
      FROM leads l
      WHERE l.is_deleted = false AND l.owner_id IN (SELECT id FROM subtree)
@@ -97,7 +95,7 @@ export async function getLeadsByStatus(requestingUserId: string) {
 
 export async function getTeamPerformance(requestingUserId: string) {
   const result = await pool.query(
-    `${SUBTREE_CTE}
+    `${ADMIN_AWARE_SUBTREE_CTE}
      SELECT
        u.id AS "userId",
        u.name,
@@ -161,14 +159,14 @@ export async function getVisitHistory(requestingUserId: string, filters: VisitHi
   const whereClause = conditions.join(" AND ");
 
   const countResult = await pool.query<{ count: string }>(
-    `${SUBTREE_CTE} SELECT COUNT(*) FROM activities a JOIN leads l ON l.id = a.lead_id WHERE ${whereClause}`,
+    `${ADMIN_AWARE_SUBTREE_CTE} SELECT COUNT(*) FROM activities a JOIN leads l ON l.id = a.lead_id WHERE ${whereClause}`,
     params
   );
 
   const listParams = [...params, filters.limit, (filters.page - 1) * filters.limit];
 
   const result = await pool.query(
-    `${SUBTREE_CTE}
+    `${ADMIN_AWARE_SUBTREE_CTE}
      SELECT
        a.id, a.subject, a.status, a.details, a.created_at AS "createdAt",
        l.id AS "leadId", l.full_name AS "leadName", l.company_name AS "companyName",

@@ -1,7 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import { pool } from "../config/db";
 import { requirePermission } from "../middleware/permission-middleware";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { ROLES } from "../utils/roles";
 
 // Verifies the fix for a real permission leak: Agent (Field Sales/RM) holds

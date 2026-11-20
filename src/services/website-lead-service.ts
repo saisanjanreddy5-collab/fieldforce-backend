@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import * as leadService from "./lead-service";
 
 interface WebsiteSourceRow {

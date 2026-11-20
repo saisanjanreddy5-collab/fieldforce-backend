@@ -32,7 +32,6 @@ async function main(): Promise<void> {
   const cc1Id = cc1Row.rows[0].id;
   const managerRow = await pool.query<{ id: string; role: string }>("SELECT id, role FROM users WHERE email = 'admin@fieldforce.local'");
   const managerId = managerRow.rows[0].id;
-  const managerRole = managerRow.rows[0].role;
 
   const createdLeaveRequestIds: string[] = [];
   const createdClaimIds: string[] = [];
@@ -73,7 +72,7 @@ async function main(): Promise<void> {
     const fofoDecided = await listDecidedStepsByUser(managerId);
     assertTrue("listDecidedStepsByUser (FOFO) returns an array without crashing", Array.isArray(fofoDecided));
 
-    const history = await getApprovalHistory(managerId, managerRole, 1, 50);
+    const history = await getApprovalHistory(managerId, 1, 50);
     const leaveEntry = history.items.find((i) => i.id === `leave:${leaveRequest.id}`);
     const expenseEntry = history.items.find((i) => i.id === `expense:${claim.id}`);
     assertTrue("getApprovalHistory includes the decided leave request", leaveEntry !== undefined);
@@ -82,7 +81,7 @@ async function main(): Promise<void> {
     assertTrue("Expense entry's decision is 'rejected', matching what was actually recorded", expenseEntry?.decision === "rejected");
     assertTrue("History total reflects at least these two items", history.total >= 2);
 
-    const inbox = await getApprovalInbox(managerId, managerRole);
+    const inbox = await getApprovalInbox(managerId);
     assertTrue(
       "The now-decided items are gone from the pending Inbox, not duplicated into both views",
       !inbox.items.some((i) => i.id === `leave:${leaveRequest.id}` || i.id === `expense:${claim.id}`)

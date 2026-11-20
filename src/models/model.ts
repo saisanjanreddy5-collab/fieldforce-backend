@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { pool } from "../config/db";
 
 // A data change that must happen exactly once per database (e.g. revoking a
@@ -421,16 +422,11 @@ export async function createTables(): Promise<void> {
     `ALTER TABLE offices ADD COLUMN IF NOT EXISTS updated_by UUID REFERENCES users(id) ON DELETE SET NULL`,
     `ALTER TABLE offices ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`,
 
-    // --- Phase 3A: permission foundation (role -> permission only) ---
-    // Nothing reads this table yet - no middleware, no route, no service
-    // enforces it. users.role stays the live field everything still checks;
-    // this is purely additive groundwork for a later phase. Deliberately
-    // NOT encoding record-level scope here (own/subtree/peer/etc.) - for
-    // leads/opportunities/activities/attendance/dashboard, which have no
-    // route-level role gate today, every role is granted the action
-    // permission below, exactly matching current effective behavior; the
-    // untouched subtree/lead_shares logic elsewhere is still what decides
-    // which actual records someone can reach.
+    // Role -> permission grants, read by requirePermission (through
+    // permission-service.ts) on every gated route. Deliberately NOT encoding
+    // record-level scope (own/subtree/peer/etc.) - the subtree/lead_shares
+    // logic in the services is what decides which actual records someone
+    // can reach.
     `CREATE TABLE IF NOT EXISTS role_permissions (
       role VARCHAR(100) NOT NULL REFERENCES roles(name) ON DELETE CASCADE,
       permission VARCHAR(100) NOT NULL,
@@ -455,10 +451,9 @@ export async function createTables(): Promise<void> {
       ('admin','commission_rules.view'), ('admin','commission_rules.create'), ('admin','commission_rules.update'), ('admin','commission_rules.delete')
     ON CONFLICT (role, permission) DO NOTHING`,
 
-    // Manager: MANAGER_AND_ABOVE-gated actions (users.view, offices/levels/
-    // sales_teams write, targets/incentive_plans/commission_rules view), plus
-    // every leads/opportunities/activities/attendance/dashboard action since
-    // those routes have no gate today for any authenticated role.
+    // Manager: users.view, offices/levels/sales_teams write,
+    // targets/incentive_plans/commission_rules view, plus every
+    // leads/opportunities/activities/attendance/dashboard action.
     `INSERT INTO role_permissions (role, permission) VALUES
       ('manager','users.view'),
       ('manager','leads.view'), ('manager','leads.create'), ('manager','leads.update'), ('manager','leads.delete'), ('manager','leads.share'),
@@ -474,15 +469,13 @@ export async function createTables(): Promise<void> {
       ('manager','commission_rules.view')
     ON CONFLICT (role, permission) DO NOTHING`,
 
-    // Agent: blocked today from users/targets/incentive_plans/commission_rules
-    // (all MANAGER_AND_ABOVE or ADMIN_ONLY) and from write actions on offices/
-    // levels/sales_teams (MANAGER_AND_ABOVE) - view-only on sales_teams only.
+    // Agent: nothing on users/targets/incentive_plans/commission_rules and no
+    // write actions on offices/levels/sales_teams - view-only on sales_teams.
     // offices.view/levels.view are deliberately left off this role: those two
     // are the only permissions that make nav-config.tsx's "Sales force
     // management" item (and its Offices/Levels & axes tabs) appear at all -
     // that module is admin/manager territory, not Field Sales Executive's.
-    // Full leads/opportunities/activities/attendance/dashboard access,
-    // matching the same "no route gate today" reasoning as Manager above.
+    // Full leads/opportunities/activities/attendance/dashboard access.
     `INSERT INTO role_permissions (role, permission) VALUES
       ('agent','leads.view'), ('agent','leads.create'), ('agent','leads.update'), ('agent','leads.delete'), ('agent','leads.share'),
       ('agent','opportunities.view'), ('agent','opportunities.create'), ('agent','opportunities.update'), ('agent','opportunities.delete'),
@@ -657,12 +650,8 @@ export async function createTables(): Promise<void> {
       ('channel', 'Channel', 'No lookup data yet - toggle only', 3)
     ON CONFLICT (key) DO NOTHING`,
 
-    // --- Sales Force Management rebuild, Phase 4 (Permissions v2) ---
-    // Per-employee grants/revokes on top of the Phase 3A role baseline.
-    // Foundation only, same as role_permissions was in Phase 3A itself -
-    // nothing in requirePermission consults this table yet, so an override
-    // here changes what the Permissions screen SHOWS as this person's
-    // effective access, not what the backend actually enforces. Rows are
+    // Per-employee grants/revokes on top of the role baseline, applied by
+    // permission-service.ts's effective-permission lookup. Rows are
     // never hard-deleted on "clear" (cleared_at/cleared_by instead) so the
     // full grant/revoke history stays queryable for the override log.
     `CREATE TABLE IF NOT EXISTS user_permission_overrides (
@@ -695,12 +684,10 @@ export async function createTables(): Promise<void> {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_manager_change_log_user_id ON manager_change_log(user_id)`,
 
-    // --- Sales Force Management rebuild, Phase 8 (Approval bands) ---
-    // Configuration only, same spirit as levels.approval_ceiling (Phase 3):
-    // an escalation ladder per request type, editable and visible, but not
-    // consulted by any enforcement code, because FieldForce has no
-    // request/workflow system anywhere today to plug it into. The UI must
-    // label this "configuration only" rather than implying it's live.
+    // Approval bands: an escalation ladder per request type. Only the
+    // 'expense_claim' bands drive a live decision (expense-service.ts's
+    // resolveSecondApprover); the other request types are configuration
+    // only - nothing reads them yet.
     `CREATE TABLE IF NOT EXISTS approval_bands (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       request_type VARCHAR(30) NOT NULL CHECK (request_type IN ('discount','customer_creation','credit_limit','expense_claim')),
@@ -715,22 +702,12 @@ export async function createTables(): Promise<void> {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_approval_bands_request_type ON approval_bands(request_type)`,
 
-    // --- Sales Force Management rebuild: permission catalog retrofit ---
-    // Phase 3's closeout set a standing rule for everything built afterward:
-    // any new backend module wires to requirePermission from day one instead
-    // of requireRole, so it actually participates in this table rather than
-    // just being decoration next to routes the catalog can't influence.
-    // Phases 4, 7 and 8 (role_permissions/user_permission_overrides,
-    // manager_change_log, approval_bands) missed that and shipped on
-    // requireRole - these rows are the retrofit, seeded to reproduce exactly
-    // what those requireRole gates already allowed (see each route file for
-    // the mapping) so this is a mechanism change, not a behavior change.
-    // role_permissions.update and user_permission_overrides.create/.delete
-    // stay admin-only in role_permissions purely for this screen's own
-    // display purposes - the routes that mutate authorization data itself
-    // deliberately keep requireRole(ADMIN_ONLY) as their real gate (see
-    // role-permission-routes.ts / user-permission-override-routes.ts), so a
-    // misconfigured grant here can never lock every admin out of fixing it.
+    // Permissions for the Permissions screen itself, manager change log and
+    // approval bands - seeded to match the admin-only/manager-view access
+    // those screens started with. Every route is gated on these through
+    // requirePermission; role-permission-service.ts refuses any change that
+    // would leave no role holding role_permissions.update/.view, so a
+    // misconfigured grant can never lock everyone out of fixing it.
     `INSERT INTO role_permissions (role, permission) VALUES
       ('admin','role_permissions.view'), ('admin','role_permissions.update'),
       ('admin','user_permission_overrides.view'), ('admin','user_permission_overrides.create'), ('admin','user_permission_overrides.delete'),
@@ -841,10 +818,8 @@ export async function createTables(): Promise<void> {
     `CREATE INDEX IF NOT EXISTS idx_scheduled_transfers_status_date ON scheduled_transfers(status, effective_date)`,
     `CREATE INDEX IF NOT EXISTS idx_scheduled_transfers_from_user ON scheduled_transfers(from_user_id)`,
 
-    // Foundation only, same as approval_bands: FieldForce has no live
-    // approval-request flow anywhere for a delegate to actually receive,
-    // so this just records who covers for whom and when - configuration,
-    // not enforcement.
+    // Configuration only: no approval flow routes anything to a delegate
+    // yet, so this just records who covers for whom and when.
     `CREATE TABLE IF NOT EXISTS delegations (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -871,11 +846,9 @@ export async function createTables(): Promise<void> {
 
     // --- Sales Force Management rebuild: Permissions tab, "Field & feature
     // rules" ---
-    // Configuration only, same honesty convention as approval_bands and
-    // record_scope: nothing in FieldForce reads these 5 columns to actually
-    // gate a credit/margin field, an export button, a call-recording player
-    // or a PII-masking rule, because none of those features exist anywhere
-    // in the product yet. They're stored per level so the Permissions
+    // Configuration only: nothing in FieldForce reads these 5 columns to
+    // gate anything (exports are gated by the *.export permissions instead).
+    // They're stored per level so the Permissions
     // screen's toggles have somewhere real to write to and read back from,
     // clearly labeled as not-yet-enforced in the UI. "Bulk re-assign
     // records" is deliberately NOT one of these columns - that one mirrors
@@ -967,8 +940,8 @@ export async function createTables(): Promise<void> {
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS pushed_at TIMESTAMPTZ`,
 
     // Sequential named-approver chain for one lead's handoff - deliberately
-    // NOT built on approval_bands (that stays a flat, level-based config
-    // table with no real request/workflow behind it). Approvers here are
+    // NOT built on approval_bands (a flat, level-based ladder keyed by
+    // amount, not a per-lead reporting chain). Approvers here are
     // derived from the real manager_id chain above the lead's owner at the
     // moment onboarding starts (reporting manager, then their manager, then
     // the topmost person in that line) - never a fabricated "Ops" role,
@@ -1247,9 +1220,8 @@ export async function createTables(): Promise<void> {
     // snapshot-at-creation and two-tier-decision shape leave_requests uses;
     // second_approver_id here is resolved from approval_bands
     // (request_type='expense_claim') when a configured band for this
-    // amount calls for someone more senior than the direct manager -
-    // approval_bands existed since Phase 8 but nothing ever actually read
-    // it for a live decision until this table (see approval-band-service.ts).
+    // amount calls for someone more senior than the direct manager (see
+    // expense-service.ts's resolveSecondApprover).
     // A friendly, sequential "EXP-2618" style code - same sequence-backed
     // pattern leads.lead_number already uses, not a random/UUID-derived one.
     `CREATE SEQUENCE IF NOT EXISTS expense_claim_number_seq`,
@@ -1692,15 +1664,8 @@ Regards,', 'active', 4),
       ('admin','leads.export'), ('admin','opportunities.export'), ('admin','reports.export'), ('admin','audit_log.export'),
       ('manager','leads.export'), ('manager','opportunities.export'), ('manager','reports.export'), ('manager','audit_log.export')
     ON CONFLICT (role, permission) DO NOTHING`,
-    // Phase 2 permission migration - every route still gated by a hardcoded
-    // requireRole() check switches to requirePermission() reading this same
-    // table, so the Permissions screen's grants become real everywhere, not
-    // just for Leads/Opportunities/Activities. "levels.update" and the whole
-    // "structure_axis" module never had a permission entry at all (the PATCH
-    // routes existed, nothing in role_permissions represented them) - added
-    // here so requirePermission has something real to check, seeded to match
-    // the exact roles the old MANAGER_AND_ABOVE/open-GET gates already let
-    // through, so switching the gate doesn't change anyone's access today.
+    // levels.update and the structure_axis module, seeded to the roles that
+    // could already reach those routes (admin/manager write, agent view).
     `INSERT INTO role_permissions (role, permission) VALUES
       ('admin','levels.update'), ('manager','levels.update'),
       ('admin','structure_axis.view'), ('admin','structure_axis.update'),
@@ -2200,9 +2165,18 @@ Regards,', 'active', 4),
 
     // One active lead per mobile number (lead-service.ts createLead/
     // updateLead block a second one). The old stored "duplicate of" flag is
-    // replaced by a live computation over this index, so it is dropped.
+    // replaced by a live computation, so it is dropped. phone_key is the
+    // mobile number's last 10 digits, kept by Postgres itself, so duplicate
+    // checks are indexed equalities (computing it per row in each query made
+    // the Duplicates count compare every lead with every other lead).
     `ALTER TABLE leads DROP COLUMN IF EXISTS duplicate_of_lead_id`,
-    `CREATE INDEX IF NOT EXISTS idx_leads_phone_last10 ON leads (RIGHT(regexp_replace(phone, '\\D', '', 'g'), 10)) WHERE is_deleted = false`,
+    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS phone_key TEXT GENERATED ALWAYS AS (RIGHT(regexp_replace(phone, '\\D', '', 'g'), 10)) STORED`,
+    `CREATE INDEX IF NOT EXISTS idx_leads_phone_key ON leads (phone_key, created_at) WHERE is_deleted = false`,
+    `DROP INDEX IF EXISTS idx_leads_phone_last10`,
+    // The Leads list's default order (newest first), and the per-lead
+    // "overdue" / "next activity" lookups it shows on every row.
+    `CREATE INDEX IF NOT EXISTS idx_leads_active_created ON leads (created_at DESC) WHERE is_deleted = false`,
+    `CREATE INDEX IF NOT EXISTS idx_activities_open_by_lead ON activities (lead_id, due_date) WHERE is_deleted = false AND status <> 'completed'`,
 
     // Shared by both new hand-off actions (FLC->SLC, SLC->TLC) - one
     // permission, not two, since they're the same kind of action applied
@@ -2472,6 +2446,23 @@ Regards,', 'active', 4),
       assignee VARCHAR(255) NOT NULL,
       assigned_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
+
+    // Team membership lives in user_sales_teams (a person can be on several
+    // teams); the old single-team column on users stopped being written long
+    // ago and nothing reads it any more. Last, after the statements above
+    // that still mention it on a fresh database.
+    once("drop_users_sales_team_id", `ALTER TABLE users DROP COLUMN IF EXISTS sales_team_id`),
+
+    // Archiving a role (level) only stops it being given to anyone new - the
+    // people on it and all their data are never touched. levels.delete is the
+    // archive/restore permission, same naming as every other module's archive.
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ`,
+    `ALTER TABLE levels ADD COLUMN IF NOT EXISTS archived_by UUID REFERENCES users(id) ON DELETE SET NULL`,
+    once("grant_admin_levels_delete", `INSERT INTO role_permissions (role, permission) VALUES ('admin','levels.delete') ON CONFLICT (role, permission) DO NOTHING`),
+
+    // Claiming an unowned lead into your own Call Center queue - Call Center
+    // tier only, same as the role check this permission replaced.
+    once("grant_call_center_leads_claim", `INSERT INTO role_permissions (role, permission) VALUES ('call_center','leads.claim') ON CONFLICT (role, permission) DO NOTHING`),
   ];
 
   // One dedicated connection with the pool's per-query timeout lifted - an
@@ -2484,9 +2475,46 @@ Regards,', 'active', 4),
       key VARCHAR(100) PRIMARY KEY,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
+    // Every data change in the list (seed rows, permission grants, fix-ups -
+    // anything starting INSERT/UPDATE/DELETE) runs once per database, keyed
+    // by a hash of its SQL. Re-running them on every boot silently undid
+    // Admin decisions: a permission revoked on the Permissions screen was
+    // granted again at the next restart, and removed team members re-added.
+    // Rule for new code: never edit an existing data statement, and add new
+    // data changes as once("key", ...) - a database seeing this code for the
+    // first time marks every PLAIN data statement as done without running it
+    // (below), which would silently skip a brand-new plain one.
+    // Databases that already ran all of these on earlier boots are marked
+    // done without re-running them, so this deploy doesn't re-grant
+    // anything one last time.
+    const dataKey = (sql: string) => `data:${createHash("sha1").update(sql.replace(/\s+/g, " ").trim()).digest("hex")}`;
+    const isDataStatement = (sql: string) => /^(INSERT|UPDATE|DELETE)\b/i.test(sql.trimStart());
+    const baselined = await client.query("SELECT 1 FROM schema_once_migrations WHERE key = 'data_statements_baseline'");
+    if ((baselined.rowCount ?? 0) === 0) {
+      const existingInstall = await client.query<{ existing: boolean }>(
+        "SELECT to_regclass('public.role_permissions') IS NOT NULL AS existing"
+      );
+      if (existingInstall.rows[0]?.existing) {
+        for (const query of createTableQueries) {
+          if (typeof query === "string" && isDataStatement(query)) {
+            await client.query("INSERT INTO schema_once_migrations (key) VALUES ($1) ON CONFLICT (key) DO NOTHING", [dataKey(query)]);
+          }
+        }
+      }
+      await client.query("INSERT INTO schema_once_migrations (key) VALUES ('data_statements_baseline') ON CONFLICT (key) DO NOTHING");
+    }
+
     for (const query of createTableQueries) {
-      if (typeof query === "string") {
+      if (typeof query === "string" && !isDataStatement(query)) {
         await client.query(query);
+        continue;
+      }
+      if (typeof query === "string") {
+        const key = dataKey(query);
+        const done = await client.query("SELECT 1 FROM schema_once_migrations WHERE key = $1", [key]);
+        if ((done.rowCount ?? 0) > 0) continue;
+        await client.query(query);
+        await client.query("INSERT INTO schema_once_migrations (key) VALUES ($1) ON CONFLICT (key) DO NOTHING", [key]);
         continue;
       }
       const alreadyApplied = await client.query("SELECT 1 FROM schema_once_migrations WHERE key = $1", [query.once]);

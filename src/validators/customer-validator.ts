@@ -2,8 +2,8 @@ import { z } from "zod";
 import { paginationQuerySchema } from "./pagination";
 import { decimal12_2 } from "./money";
 
-export const CUSTOMER_STATUSES = ["active", "inactive", "on_hold"] as const;
-export const CREDIT_CATEGORIES = ["A", "B", "C", "D"] as const;
+const CUSTOMER_STATUSES = ["active", "inactive", "on_hold"] as const;
+const CREDIT_CATEGORIES = ["A", "B", "C", "D"] as const;
 
 // No create schema - a customer is never created directly, only produced by
 // a lead's status changing to 'converted' (see lead-service.ts). What's

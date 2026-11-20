@@ -1,5 +1,5 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 
 export const REQUEST_TYPES = ["discount", "customer_creation", "credit_limit", "expense_claim"] as const;
 export type ApprovalRequestType = (typeof REQUEST_TYPES)[number];
@@ -55,9 +55,9 @@ function toPublicBand(row: ApprovalBandRow) {
   };
 }
 
-// Configuration only - nothing reads this table to actually approve or
-// escalate anything, because FieldForce has no request/workflow system
-// anywhere else to enforce it against (see Phase 8 note in models/model.ts).
+// Only the 'expense_claim' bands are read for a live decision (expense-
+// service.ts's resolveSecondApprover picks a claim's second approver from
+// them); bands for the other request types are configuration only.
 export interface ListApprovalBandsFilters {
   // Shows archived bands instead of active ones - never both mixed, same
   // convention as leads/opportunities' own archived toggle.

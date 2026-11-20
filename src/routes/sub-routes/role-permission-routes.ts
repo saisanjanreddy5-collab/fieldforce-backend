@@ -11,10 +11,9 @@ router.use(requireAuth);
 
 // Fully configurable, no hardcoded exception - PATCH/reset gate on the same
 // role_permissions.update permission this route mutates. The lockout risk
-// that used to justify a hardcoded ADMIN_ONLY here is handled instead at the
-// service layer (setRolePermission/resetRoleToDefault refuse any change that
-// would leave zero roles holding role_permissions.update), so the guard
-// travels with the data rather than living in a route-level exception.
+// is handled at the service layer instead (setRolePermission/
+// resetRoleToDefault refuse any change that would leave zero roles holding
+// role_permissions.update), so the guard travels with the data.
 router.get("/", requirePermission("role_permissions.view"), rolePermissionController.list);
 router.patch("/", requirePermission("role_permissions.update"), validateBody(setRolePermissionSchema), rolePermissionController.setGrant);
 router.post(

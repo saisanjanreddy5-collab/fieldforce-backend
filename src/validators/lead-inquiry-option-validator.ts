@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const INQUIRY_OPTION_FIELD_TYPES = ["category", "source"] as const;
+const INQUIRY_OPTION_FIELD_TYPES = ["category", "source"] as const;
 
 export const listLeadInquiryOptionsQuerySchema = z.object({
   fieldType: z.enum(INQUIRY_OPTION_FIELD_TYPES).optional(),

@@ -1,5 +1,5 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 
 export const TEMPLATE_CHANNELS = ["email", "whatsapp"] as const;
 export type TemplateChannel = (typeof TEMPLATE_CHANNELS)[number];

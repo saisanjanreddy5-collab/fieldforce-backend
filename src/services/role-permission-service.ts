@@ -1,17 +1,17 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { recordAuditEvent } from "./audit-log-service";
 import { ROLES } from "../utils/roles";
 import { queueRoleHelpdeskSync } from "./frappe-helpdesk-service";
+import { clearPermissionCache } from "./permission-service";
 
 interface RolePermissionRow {
   role: string;
   permission: string;
 }
 
-// Exactly what each role was seeded with across every phase of the Phase 3A
-// catalog and its later retrofits (see model.ts's INSERT INTO
-// role_permissions blocks) - the literal, deterministic "factory settings"
+// Exactly what each role was seeded with (see model.ts's INSERT INTO
+// role_permissions statements) - the literal, deterministic "factory settings"
 // that "Reset role to default" restores, discarding whatever an admin has
 // toggled since.
 const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
@@ -23,7 +23,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "attendance.view_own", "attendance.view_team",
     "dashboard.view",
     "offices.view", "offices.create", "offices.update",
-    "levels.view", "levels.create", "levels.update",
+    "levels.view", "levels.create", "levels.update", "levels.delete",
     "structure_axis.view", "structure_axis.update",
     "sales_teams.view", "sales_teams.create",
     "targets.view", "targets.create", "targets.update", "targets.delete",
@@ -162,6 +162,7 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "leads.qualify",
     "leads.send_to_field",
     "leads.escalate",
+    "leads.claim",
     "lead_inquiry_options.view",
     "activities.view",
     "activities.create",
@@ -204,9 +205,9 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   ],
 };
 
-// The full permission catalog is derived from the table itself (admin holds
-// every entry, by Phase 3A's own design) rather than duplicated as a second
-// hardcoded list somewhere else - one source of truth, no risk of drift.
+// The full permission catalog is every permission any role holds in the
+// table, rather than a second hardcoded list - one source of truth, no
+// risk of drift.
 export async function listRolePermissionMatrix() {
   const result = await pool.query<RolePermissionRow>("SELECT role, permission FROM role_permissions ORDER BY permission ASC");
   const catalog = Array.from(new Set(result.rows.map((r) => r.permission))).sort();
@@ -245,10 +246,8 @@ async function wouldOrphanCriticalPermission(roleBeingChanged: string, permissio
   return others.rows.length === 0;
 }
 
-// Live: getPermissionsForRole reads this same table with no caching, so a
-// grant/revoke here takes effect on the very next request for every
-// requirePermission-gated route - which, after the Phase 2 migration, is
-// every route that used to be a hardcoded requireRole check.
+// Takes effect on the very next request: every write here clears
+// permission-service.ts's in-memory cache.
 export async function setRolePermission(role: string, permission: string, granted: boolean): Promise<void> {
   // The Admin tier can never lose these two - it's the only tier that can
   // fix a mistake here, and another tier merely holding "view" (e.g. the
@@ -267,6 +266,7 @@ export async function setRolePermission(role: string, permission: string, grante
   } else {
     await pool.query("DELETE FROM role_permissions WHERE role = $1 AND permission = $2", [role, permission]);
   }
+  clearPermissionCache();
   // Support access for a whole role changed - add/remove everyone on that
   // role as Helpdesk agents to match.
   if (permission === "support_tickets.view") queueRoleHelpdeskSync(role);
@@ -295,6 +295,7 @@ export async function resetRoleToDefault(role: string): Promise<void> {
       await client.query("INSERT INTO role_permissions (role, permission) VALUES ($1, $2)", [role, permission]);
     }
     await client.query("COMMIT");
+    clearPermissionCache();
     queueRoleHelpdeskSync(role);
   } catch (err) {
     await client.query("ROLLBACK");
@@ -333,6 +334,7 @@ export async function grantAdminAccessToRole(targetRole: string, actorId: string
       await client.query("INSERT INTO role_permissions (role, permission) VALUES ($1, $2)", [targetRole, permission]);
     }
     await client.query("COMMIT");
+    clearPermissionCache();
     queueRoleHelpdeskSync(targetRole);
   } catch (err) {
     await client.query("ROLLBACK");
@@ -343,7 +345,6 @@ export async function grantAdminAccessToRole(targetRole: string, actorId: string
 
   // Audited - this is a significant, powerful access change affecting every
   // employee who holds this role tier, not a routine toggle.
-  const actor = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [actorId]);
   await recordAuditEvent({
     entityType: "role_permissions",
     entityId: null,
@@ -353,7 +354,6 @@ export async function grantAdminAccessToRole(targetRole: string, actorId: string
     oldValue: null,
     newValue: `${permissions.length} permissions (mirrors Admin)`,
     actorId,
-    actorName: actor.rows[0]?.name ?? null,
     ipAddress,
   });
 }

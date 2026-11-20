@@ -1,5 +1,5 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 
 interface PipelineStageRow {
   id: string;
@@ -25,7 +25,7 @@ function toPublicStage(row: PipelineStageRow) {
   };
 }
 
-export async function listPipelineStages() {
+async function listPipelineStages() {
   const result = await pool.query<PipelineStageRow>("SELECT * FROM pipeline_stages ORDER BY sort_order ASC");
   return result.rows.map(toPublicStage);
 }

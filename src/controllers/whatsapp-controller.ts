@@ -1,7 +1,7 @@
 import path from "path";
 import { Request, Response } from "express";
-import { ApiError } from "../utils/ApiError";
-import { asyncHandler } from "../utils/asyncHandler";
+import { ApiError } from "../utils/api-error";
+import { asyncHandler } from "../utils/async-handler";
 import { sendSuccess } from "../utils/response";
 import * as whatsappService from "../services/whatsapp-service";
 

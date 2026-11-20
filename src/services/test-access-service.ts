@@ -1,13 +1,6 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
-
-const SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
+import { ApiError } from "../utils/api-error";
+import { SUBTREE_CTE } from "../utils/subtree";
 
 // Read-only simulation for the "Test access as..." picker - it never signs
 // in as the target person, it only computes what their real scope already

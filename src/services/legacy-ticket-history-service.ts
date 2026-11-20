@@ -1,4 +1,5 @@
 import { pool } from "../config/db";
+import { SUBTREE_CTE } from "../utils/subtree";
 
 // Support Tickets no longer has its own create/update/reply/webhook system
 // in this app - Frappe Helpdesk owns that entirely now, reached via SSO (see
@@ -7,13 +8,6 @@ import { pool } from "../config/db";
 // on purpose (not dropped), so this one read-only function survives solely
 // to let a Customer's own timeline keep showing tickets that were genuinely
 // raised before the cutover - nothing writes to these tables anymore.
-const TICKET_VISIBILITY_SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
 
 const TERMINAL_TICKET_STATUSES = ["Resolved", "Closed"];
 
@@ -95,7 +89,7 @@ export async function listLegacyTicketsForLead(requestingUserId: string, filters
   const whereClause = conditions.join(" AND ");
 
   const countResult = await pool.query<{ count: string }>(
-    `${TICKET_VISIBILITY_SUBTREE_CTE}
+    `${SUBTREE_CTE}
      SELECT COUNT(*) FROM support_tickets t
      INNER JOIN leads l ON l.id = t.lead_id
      WHERE ${whereClause}`,
@@ -105,7 +99,7 @@ export async function listLegacyTicketsForLead(requestingUserId: string, filters
   const limitParamIndex = params.length + 1;
   const offsetParamIndex = params.length + 2;
   const result = await pool.query<SupportTicketRow>(
-    `${TICKET_VISIBILITY_SUBTREE_CTE}
+    `${SUBTREE_CTE}
      SELECT t.*, l.full_name AS lead_full_name, u.name AS created_by_name, au.name AS assigned_to_name,
        EXISTS (SELECT 1 FROM support_ticket_messages m WHERE m.ticket_id = t.id AND m.direction = 'outbound') AS has_responded
      FROM support_tickets t

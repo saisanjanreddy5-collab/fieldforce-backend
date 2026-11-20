@@ -1,9 +1,11 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { withAdvisoryLock } from "../utils/db-lock";
+import { ApiError } from "../utils/api-error";
 import { recordAuditEvent } from "./audit-log-service";
 import { Role, ROLES } from "../utils/roles";
+import { SUBTREE_CTE } from "../utils/subtree";
 
-export const LEAVE_TYPE_KEYS = ["casual", "sick", "earned", "comp_off"] as const;
+const LEAVE_TYPE_KEYS = ["casual", "sick", "earned", "comp_off"] as const;
 export type LeaveTypeKey = (typeof LEAVE_TYPE_KEYS)[number];
 export const LEAVE_REQUEST_KINDS = ["casual", "sick", "earned", "comp_off", "half_day", "wfh"] as const;
 export type LeaveRequestKind = (typeof LEAVE_REQUEST_KINDS)[number];
@@ -109,7 +111,7 @@ function toPublicLeaveRequest(row: LeaveRequestRow) {
   };
 }
 
-export async function listLeaveTypes() {
+async function listLeaveTypes() {
   const result = await pool.query<LeaveTypeRow>("SELECT * FROM leave_types ORDER BY sort_order ASC");
   return result.rows.map(toPublicLeaveType);
 }
@@ -349,20 +351,6 @@ export async function listTeamRequests(managerId: string, requestingRole: Role) 
   return result.rows.map(toPublicLeaveRequest);
 }
 
-// Same manager-subtree rule leads/opportunities/activities already use, not
-// just direct reports (listTeamRequests above) and not just the rolling
-// "next 30 days" window that one is hardcoded to. Built for the mobile API
-// handoff: "pick any month, past or future, optionally one specific person,
-// see every real request in my reporting chain" - genuinely new query
-// capability, since nothing existing could look at a past month at all.
-const LEAVE_SUBTREE_CTE = `
-  WITH RECURSIVE subtree AS (
-    SELECT id FROM users WHERE id = $1
-    UNION
-    SELECT u.id FROM users u INNER JOIN subtree s ON u.manager_id = s.id
-  )
-`;
-
 export interface SearchLeaveRequestsFilters {
   userId?: string;
   from?: string;
@@ -371,6 +359,9 @@ export interface SearchLeaveRequestsFilters {
   limit: number;
 }
 
+// The full reporting chain beneath the requester - not just direct reports
+// (listTeamRequests above) and not just its fixed "next 30 days" window: any
+// month, past or future, optionally one person.
 export async function searchLeaveRequests(requestingUserId: string, filters: SearchLeaveRequestsFilters) {
   const conditions: string[] = ["u.id IN (SELECT id FROM subtree)"];
   const params: unknown[] = [requestingUserId];
@@ -394,13 +385,13 @@ export async function searchLeaveRequests(requestingUserId: string, filters: Sea
   const whereClause = conditions.join(" AND ");
 
   const countResult = await pool.query<{ count: string }>(
-    `${LEAVE_SUBTREE_CTE} SELECT COUNT(*) FROM leave_requests lr JOIN users u ON u.id = lr.user_id WHERE ${whereClause}`,
+    `${SUBTREE_CTE} SELECT COUNT(*) FROM leave_requests lr JOIN users u ON u.id = lr.user_id WHERE ${whereClause}`,
     params
   );
 
   const listParams = [...params, filters.limit, (filters.page - 1) * filters.limit];
   const result = await pool.query<LeaveRequestRow>(
-    `${LEAVE_SUBTREE_CTE}
+    `${SUBTREE_CTE}
      ${REQUEST_SELECT}
      WHERE ${whereClause}
      ORDER BY lr.start_date DESC
@@ -477,7 +468,14 @@ async function getRequestById(id: string): Promise<LeaveRequestRow> {
   return result.rows[0];
 }
 
-export async function createLeaveRequest(userId: string, input: CreateLeaveRequestInput) {
+// One person's requests take turns: the overlap and balance checks below
+// read existing requests, so two submitted at the same moment could both
+// pass and double-book the same days or overdraw the balance.
+export function createLeaveRequest(userId: string, input: CreateLeaveRequestInput) {
+  return withAdvisoryLock(`leave-request:${userId}`, () => createLeaveRequestNow(userId, input));
+}
+
+async function createLeaveRequestNow(userId: string, input: CreateLeaveRequestInput) {
   if (new Date(input.endDate) < new Date(input.startDate)) {
     throw new ApiError(422, "End date can't be before the start date");
   }
@@ -639,7 +637,6 @@ export async function decideLeaveRequest(requestId: string, deciderId: string, d
     throw new ApiError(409, "This request has already been decided");
   }
 
-  const actorResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [deciderId]);
   const label = `${request.user_name ?? "Unknown"} - ${request.kind.replace("_", " ")} leave`;
   await recordAuditEvent({
     entityType: "leave_request",
@@ -650,7 +647,6 @@ export async function decideLeaveRequest(requestId: string, deciderId: string, d
     oldValue: "Pending",
     newValue: decision === "approved" ? "Approved" : "Rejected",
     actorId: deciderId,
-    actorName: actorResult.rows[0]?.name ?? null,
     ipAddress,
   });
 

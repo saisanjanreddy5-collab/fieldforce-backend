@@ -4,9 +4,9 @@ import jwt from "jsonwebtoken";
 import { pool } from "../config/db";
 import { env } from "../config/env";
 import { queueEmployeeHelpdeskSync } from "./frappe-helpdesk-service";
-import { ApiError } from "../utils/ApiError";
-import { getPermissionsForRole } from "./permission-service";
-import { getLevelSecurityTier } from "./level-service";
+import { ApiError } from "../utils/api-error";
+import { getEffectivePermissions } from "./permission-service";
+import { assertLevelAssignable, getLevelSecurityTier } from "./level-service";
 import { assertActorIsRealAdmin, getNextEmployeeCode } from "./user-service";
 import { recordAuditEvent } from "./audit-log-service";
 import { Role, ROLES } from "../utils/roles";
@@ -103,12 +103,10 @@ function toPublicUser(row: UserRow) {
 }
 
 // Session-facing responses (login, /auth/me) additionally carry the user's
-// current permission set, from the same role_permissions catalog Phase 3A
-// introduced - the frontend consumes this for UX-only action gating. Kept
-// separate from toPublicUser (used elsewhere, e.g. registerUser's response)
-// since those call sites have no session/permissions concept.
+// effective permissions (role + their own overrides) - the frontend uses
+// them to show or hide actions; the backend enforces the same set.
 async function toPublicUserWithPermissions(row: UserRow) {
-  const permissions = await getPermissionsForRole(row.role);
+  const { permissions } = await getEffectivePermissions(row.id);
   return { ...toPublicUser(row), permissions };
 }
 
@@ -170,6 +168,7 @@ export async function registerUser(input: RegisterInput, actorId?: string) {
   // sync with what the account can actually do. Callers with no level
   // (seedAdmin.ts, and anyone marked Administrator/Finance with no ladder
   // position) still pass role directly.
+  if (input.levelId) await assertLevelAssignable(input.levelId);
   const role = input.levelId ? await getLevelSecurityTier(input.levelId) : input.role;
   if (role === ROLES.ADMIN && actorId) {
     await assertActorIsRealAdmin(actorId, "create an Admin account");
@@ -183,47 +182,60 @@ export async function registerUser(input: RegisterInput, actorId?: string) {
     throw new ApiError(422, "At least one pincode is required for a field employee");
   }
 
-  const result = await pool.query<UserRow>(
-    `INSERT INTO users (
-       name, email, password_hash, role, manager_id, district_id, area_id,
-       smartflo_agent_number, mobile, territory, employee_code, status, level_id, operation_type
-     )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12, 'active'), $13, $14)
-     RETURNING *`,
-    [
-      input.name,
-      input.email,
-      passwordHash,
-      role,
-      input.managerId ?? null,
-      input.districtId ?? null,
-      input.areaId ?? null,
-      input.smartfloAgentNumber ?? null,
-      input.mobile ?? null,
-      input.territory ?? null,
-      employeeCode,
-      input.status ?? null,
-      input.levelId ?? null,
-      input.operationType ?? null,
-    ]
-  );
-
-  if (input.pincodes && input.pincodes.length > 0) {
-    await pool.query(
-      `INSERT INTO employee_pincodes (user_id, pincode)
-       SELECT $1, * FROM unnest($2::varchar[])
-       ON CONFLICT (user_id, pincode) DO NOTHING`,
-      [result.rows[0].id, input.pincodes]
+  // The user and their pincodes/teams are saved together or not at all.
+  const client = await pool.connect();
+  let result;
+  try {
+    await client.query("BEGIN");
+    result = await client.query<UserRow>(
+      `INSERT INTO users (
+         name, email, password_hash, role, manager_id, district_id, area_id,
+         smartflo_agent_number, mobile, territory, employee_code, status, level_id, operation_type
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12, 'active'), $13, $14)
+       RETURNING *`,
+      [
+        input.name,
+        input.email,
+        passwordHash,
+        role,
+        input.managerId ?? null,
+        input.districtId ?? null,
+        input.areaId ?? null,
+        input.smartfloAgentNumber ?? null,
+        input.mobile ?? null,
+        input.territory ?? null,
+        employeeCode,
+        input.status ?? null,
+        input.levelId ?? null,
+        input.operationType ?? null,
+      ]
     );
-  }
 
-  if (input.salesTeamIds && input.salesTeamIds.length > 0) {
-    await pool.query(
-      `INSERT INTO user_sales_teams (user_id, sales_team_id)
-       SELECT $1, * FROM unnest($2::uuid[])
-       ON CONFLICT (user_id, sales_team_id) DO NOTHING`,
-      [result.rows[0].id, input.salesTeamIds]
-    );
+    if (input.pincodes && input.pincodes.length > 0) {
+      await client.query(
+        `INSERT INTO employee_pincodes (user_id, pincode)
+         SELECT $1, * FROM unnest($2::varchar[])
+         ON CONFLICT (user_id, pincode) DO NOTHING`,
+        [result.rows[0].id, input.pincodes]
+      );
+    }
+
+    if (input.salesTeamIds && input.salesTeamIds.length > 0) {
+      await client.query(
+        `INSERT INTO user_sales_teams (user_id, sales_team_id)
+         SELECT $1, * FROM unnest($2::uuid[])
+         ON CONFLICT (user_id, sales_team_id) DO NOTHING`,
+        [result.rows[0].id, input.salesTeamIds]
+      );
+    }
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
   }
 
   // Admin / Field Sales get their Helpdesk agent account straight away.
@@ -248,12 +260,8 @@ export async function loginUser(email: string, password: string) {
     // getUserById (not toPublicUserWithPermissions(user) directly) because
     // this plain `SELECT *` row has no manager_name/sales_team_name - those
     // only exist on the LEFT JOIN'd query getUserById already does for
-    // GET /auth/me. Skipping that join here used to leave a freshly logged-
-    // in user's salesTeamName null until their next page load silently
-    // re-fetched /auth/me - which, for a Call Center employee, meant
-    // CallCenterPage's tier lookup (TIER_BY_TEAM[user.salesTeamName])
-    // defaulted them to FLC right after login regardless of their real team,
-    // showing the wrong queue until a refresh happened to fix it for free.
+    // GET /auth/me - the login response must carry the same fields, or the
+    // Call Center page picks the wrong tier queue until the next refresh.
     user: await getUserById(user.id),
     accessToken: signAccessToken(user),
     refreshToken: await signRefreshToken(user),
@@ -273,27 +281,19 @@ export async function refreshAccessToken(refreshToken: string) {
   if (payload.purpose !== undefined) {
     throw new ApiError(401, "Invalid or expired refresh token");
   }
-  // With identical access/refresh secrets, an ordinary access token would
-  // also verify here as an old-style (no jti) refresh token - and could then
-  // be renewed forever, unaffected by logout. Old-style tokens are only
-  // trusted when the two secrets differ.
-  if (!payload.jti && env.JWT_SECRET === env.JWT_REFRESH_SECRET) {
+  // Every refresh token carries a jti (its row in refresh_tokens), so logout
+  // can revoke it. Tokens without one are an old format that logout can't
+  // revoke (and, with equal secrets, could be an access token in disguise) -
+  // they have long since expired, so they are refused outright.
+  if (!payload.jti) {
     throw new ApiError(401, "Invalid or expired refresh token");
   }
-
-  // Older, already-issued tokens signed before this field existed have no
-  // jti - left to fall back to the pre-existing signature+expiry+is_active
-  // checks alone so they keep working until they naturally expire, rather
-  // than mass-logging-out everyone the moment this deploys. Every token
-  // signed from here on has one, and is checked against revocation.
-  if (payload.jti) {
-    const tokenRow = await pool.query<{ revoked_at: string | null }>(
-      "SELECT revoked_at FROM refresh_tokens WHERE id = $1",
-      [payload.jti]
-    );
-    if (tokenRow.rows.length === 0 || tokenRow.rows[0].revoked_at !== null) {
-      throw new ApiError(401, "Invalid or expired refresh token");
-    }
+  const tokenRow = await pool.query<{ revoked_at: string | null }>(
+    "SELECT revoked_at FROM refresh_tokens WHERE id = $1",
+    [payload.jti]
+  );
+  if (tokenRow.rows.length === 0 || tokenRow.rows[0].revoked_at !== null) {
+    throw new ApiError(401, "Invalid or expired refresh token");
   }
 
   const result = await pool.query<UserRow>("SELECT * FROM users WHERE id = $1", [payload.id]);
@@ -372,7 +372,6 @@ export async function adminResetPassword(
   await pool.query("UPDATE users SET password_hash = $1 WHERE id = $2", [passwordHash, targetUserId]);
   await pool.query("UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL", [targetUserId]);
 
-  const actor = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [actorId]);
   await recordAuditEvent({
     entityType: "user",
     entityId: targetUserId,
@@ -382,7 +381,6 @@ export async function adminResetPassword(
     oldValue: null,
     newValue: null,
     actorId,
-    actorName: actor.rows[0]?.name ?? null,
     ipAddress,
   });
 }

@@ -1,11 +1,10 @@
 import { Request, Response } from "express";
-import { asyncHandler } from "../utils/asyncHandler";
+import { asyncHandler } from "../utils/async-handler";
 import { sendSuccess } from "../utils/response";
 import * as reportService from "../services/report-service";
 
 export const salespersonPerformance = asyncHandler(async (req: Request, res: Response) => {
-  const month = typeof req.query.month === "string" ? req.query.month : undefined;
-  const zoneId = typeof req.query.zoneId === "string" ? req.query.zoneId : undefined;
+  const { month, zoneId } = req.validatedQuery as { month?: string; zoneId?: string };
   const result = await reportService.getSalespersonPerformance(req.user!.id, { month, zoneId });
   sendSuccess(res, result);
 });
@@ -30,34 +29,20 @@ export const fofoCohortRetention = asyncHandler(async (req: Request, res: Respon
   sendSuccess(res, result);
 });
 
-// employeeIds arrives as a comma-separated query string (no array-query
-// precedent exists elsewhere in this codebase's GET routes - every other
-// filter here is a single scalar) - split/filtered the same way
-// CORS_ALLOWED_ORIGINS is split in config/env.ts.
-function parseEmployeeIds(value: unknown): string[] | undefined {
-  if (typeof value !== "string" || value.length === 0) return undefined;
-  const ids = value.split(",").filter(Boolean);
-  return ids.length > 0 ? ids : undefined;
-}
+type PerformanceQuery = { from?: string; to?: string; employeeIds?: string[] };
 
 export const callCenterPerformance = asyncHandler(async (req: Request, res: Response) => {
-  const from = typeof req.query.from === "string" ? req.query.from : undefined;
-  const to = typeof req.query.to === "string" ? req.query.to : undefined;
-  const employeeIds = parseEmployeeIds(req.query.employeeIds);
-  const result = await reportService.getCallCenterPerformance(req.user!.id, { from, to, employeeIds });
+  const result = await reportService.getCallCenterPerformance(req.user!.id, req.validatedQuery as PerformanceQuery);
   sendSuccess(res, result);
 });
 
 export const fieldSalesPerformance = asyncHandler(async (req: Request, res: Response) => {
-  const from = typeof req.query.from === "string" ? req.query.from : undefined;
-  const to = typeof req.query.to === "string" ? req.query.to : undefined;
-  const employeeIds = parseEmployeeIds(req.query.employeeIds);
-  const result = await reportService.getFieldSalesPerformance(req.user!.id, { from, to, employeeIds });
+  const result = await reportService.getFieldSalesPerformance(req.user!.id, req.validatedQuery as PerformanceQuery);
   sendSuccess(res, result);
 });
 
 export const listSavedViews = asyncHandler(async (req: Request, res: Response) => {
-  const result = await reportService.listSavedViews(req.user!.id, String(req.query.reportKey));
+  const result = await reportService.listSavedViews(req.user!.id, (req.validatedQuery as { reportKey: string }).reportKey);
   sendSuccess(res, result);
 });
 

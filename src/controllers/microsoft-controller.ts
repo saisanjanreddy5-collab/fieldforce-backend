@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
-import { asyncHandler } from "../utils/asyncHandler";
+import { asyncHandler } from "../utils/async-handler";
 import { sendSuccess } from "../utils/response";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { env } from "../config/env";
 import * as microsoftService from "../services/microsoft-service";
 

@@ -12,5 +12,8 @@ router.use(requireAuth);
 router.get("/", requirePermission("levels.view"), validateQuery(listLevelsQuerySchema), levelController.list);
 router.post("/", requirePermission("levels.create"), validateBody(createLevelSchema), levelController.create);
 router.patch("/:id", requirePermission("levels.update"), validateBody(updateLevelSchema), levelController.update);
+// Archive/restore a role - people on it and their data are never touched.
+router.patch("/:id/archive", requirePermission("levels.delete"), levelController.archive);
+router.patch("/:id/restore", requirePermission("levels.delete"), levelController.restore);
 
 export default router;

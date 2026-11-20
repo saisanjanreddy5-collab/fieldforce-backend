@@ -1,8 +1,8 @@
 import { Request, Response } from "express";
-import { asyncHandler } from "../utils/asyncHandler";
+import { asyncHandler } from "../utils/async-handler";
 import { sendSuccess } from "../utils/response";
 import * as customerService from "../services/customer-service";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { ROLES } from "../utils/roles";
 import { getCustomerPortalStatus, inviteCustomerToPortal, HelpdeskError } from "../services/frappe-helpdesk-service";
 

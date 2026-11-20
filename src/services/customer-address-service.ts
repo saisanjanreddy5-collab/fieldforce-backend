@@ -1,5 +1,5 @@
 import { pool } from "../config/db";
-import { ApiError } from "../utils/ApiError";
+import { ApiError } from "../utils/api-error";
 import { isCustomerInScope } from "./customer-service";
 
 interface CustomerAddressRow {
