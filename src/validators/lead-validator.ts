@@ -281,6 +281,8 @@ export const listLeadsQuerySchema = z.object({
   overdueOnly: queryBoolean,
   highScoreOnly: queryBoolean,
   unassignedOnly: queryBoolean,
+  // Active leads whose mobile number another active lead also has.
+  duplicatesOnly: queryBoolean,
   archived: queryBoolean,
   // When the lead actually came into the CRM (created_at), not any later
   // activity - a plain calendar date, inclusive on both ends (createdTo's
@@ -294,3 +296,11 @@ export const listLeadsQuerySchema = z.object({
 // Same filters as the Leads page itself, minus pagination - Export always
 // returns every matching row, not one page.
 export const listLeadsExportQuerySchema = listLeadsQuerySchema.omit({ page: true, limit: true });
+
+// The lead form's live "already exists?" check. excludeLeadId = the lead
+// being edited, so it never matches itself.
+export const duplicateCheckQuerySchema = z.object({
+  phone: z.string().trim().max(30).optional(),
+  email: z.string().trim().max(255).optional(),
+  excludeLeadId: uuid.optional(),
+});

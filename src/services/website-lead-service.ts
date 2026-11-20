@@ -219,7 +219,9 @@ export async function submitWebsiteLead(apiKey: string, input: PublicWebsiteSubm
     },
     row.created_by,
     ipAddress,
-    { requiresQualification: true }
+    // A visitor whose number is already an active lead gets logged on that
+    // lead instead of creating a second one.
+    { requiresQualification: true, onDuplicatePhone: "attach" }
   );
 
   return { leadNumber: lead.leadNumber };

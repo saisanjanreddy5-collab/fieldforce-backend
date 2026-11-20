@@ -33,10 +33,12 @@ async function main(): Promise<void> {
     const sharedPhone = "9876500081";
 
     // Lead A: already pushed (seeded directly, never via the real flow).
+    // Converted, as a pushed lead is - only then may the same number open a
+    // second lead (one active lead per mobile number).
     const leadA = await createLead({ fullName: "Repush Guard Test - Store A", phone: sharedPhone }, testadminId, undefined, {});
     createdLeadIds.push(leadA.id);
     await pool.query(
-      "UPDATE leads SET push_status = 'pushed', onboarding_app_id = 'FOFO-TESTAAAA', pushed_at = now() WHERE id = $1",
+      "UPDATE leads SET status = 'Converted', push_status = 'pushed', onboarding_app_id = 'FOFO-TESTAAAA', pushed_at = now() WHERE id = $1",
       [leadA.id]
     );
 
