@@ -349,7 +349,9 @@ export async function submitPublicCapture(
     },
     creatorId,
     ipAddress,
-    { requiresQualification: true }
+    // A visitor whose number is already an active lead gets logged on that
+    // lead instead of creating a second one (the photo below lands there too).
+    { requiresQualification: true, onDuplicatePhone: "attach" }
   );
 
   if (fieldConfig.photo && photo?.file) {

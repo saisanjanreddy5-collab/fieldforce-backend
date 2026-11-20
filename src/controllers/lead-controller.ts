@@ -25,6 +25,12 @@ export const bulkImport = asyncHandler(async (req: Request, res: Response) => {
   sendSuccess(res, result, "Import complete");
 });
 
+export const duplicateCheck = asyncHandler(async (req: Request, res: Response) => {
+  const query = req.validatedQuery as unknown as { phone?: string; email?: string; excludeLeadId?: string };
+  const result = await leadService.checkLeadDuplicates(query);
+  sendSuccess(res, result);
+});
+
 export const listTerritories = asyncHandler(async (_req: Request, res: Response) => {
   const territories = await leadService.listDistinctTerritories();
   sendSuccess(res, territories);
@@ -59,6 +65,7 @@ export const list = asyncHandler(async (req: Request, res: Response) => {
     overdueOnly?: boolean;
     highScoreOnly?: boolean;
     unassignedOnly?: boolean;
+    duplicatesOnly?: boolean;
     createdFrom?: string;
     createdTo?: string;
     archived?: boolean;
@@ -83,6 +90,7 @@ export const exportLeads = asyncHandler(async (req: Request, res: Response) => {
     overdueOnly?: boolean;
     highScoreOnly?: boolean;
     unassignedOnly?: boolean;
+    duplicatesOnly?: boolean;
     createdFrom?: string;
     createdTo?: string;
   };

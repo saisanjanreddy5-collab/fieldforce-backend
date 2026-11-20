@@ -14,6 +14,7 @@ import { validateBody, validateQuery } from "../../middleware/validate-middlewar
 import {
   bulkImportLeadsSchema,
   createLeadSchema,
+  duplicateCheckQuerySchema,
   listLeadsExportQuerySchema,
   listLeadsQuerySchema,
   shareLeadSchema,
@@ -59,6 +60,15 @@ router.post(
 // role-permission-service.ts). Always lands in the creator's own queue - see
 // createOwnQueueLead's own comment for why this isn't just POST / with a flag.
 router.post("/queue", requirePermission("leads.queue_create"), validateBody(createLeadSchema), leadController.createOwnQueueLead);
+// The lead form's live duplicate check - anyone who can create or edit a
+// lead. Mobile matches block saving (409 from create/update); email matches
+// only warn. Before GET /:id, like the other fixed paths here.
+router.get(
+  "/duplicate-check",
+  requireAnyPermission("leads.create", "leads.queue_create", "leads.update"),
+  validateQuery(duplicateCheckQuerySchema),
+  leadController.duplicateCheck
+);
 router.get("/territories", requirePermission("leads.view"), leadController.listTerritories);
 // Also leads.queue_view: Call Center's own queue uses the same Source filter.
 router.get("/sources", requireAnyPermission("leads.view", "leads.queue_view"), leadController.listSources);

@@ -2198,13 +2198,11 @@ Regards,', 'active', 4),
      SELECT v.name FROM (VALUES ('FLC Team'), ('SLC Team'), ('TLC Team')) AS v(name)
      WHERE NOT EXISTS (SELECT 1 FROM sales_teams st WHERE st.name = v.name)`,
 
-    // Self-referencing, nullable - set once at creation (createLead) when an
-    // incoming lead's phone matches an already-active lead, collapsing to
-    // the original if that match is itself already flagged, so this is
-    // always at most one hop away from the true original. Created, not
-    // rejected, per the client's own requirement to track and surface
-    // duplicates rather than silently block them.
-    `ALTER TABLE leads ADD COLUMN IF NOT EXISTS duplicate_of_lead_id UUID REFERENCES leads(id)`,
+    // One active lead per mobile number (lead-service.ts createLead/
+    // updateLead block a second one). The old stored "duplicate of" flag is
+    // replaced by a live computation over this index, so it is dropped.
+    `ALTER TABLE leads DROP COLUMN IF EXISTS duplicate_of_lead_id`,
+    `CREATE INDEX IF NOT EXISTS idx_leads_phone_last10 ON leads (RIGHT(regexp_replace(phone, '\\D', '', 'g'), 10)) WHERE is_deleted = false`,
 
     // Shared by both new hand-off actions (FLC->SLC, SLC->TLC) - one
     // permission, not two, since they're the same kind of action applied

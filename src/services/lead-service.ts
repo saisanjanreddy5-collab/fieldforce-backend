@@ -110,13 +110,9 @@ interface LeadRow {
   // lead-call-center-service.ts), so it can hide an action that would
   // otherwise just 422.
   owner_role: string | null;
-  // Set once at creation/edit time when this lead's phone matched an
-  // already-active lead (see resolveDuplicateOfLeadId) - the name/number are
-  // only joined by the handful of call sites that already bother joining
-  // owner_name/owner_role (getLeadById, listLeadsForUser,
-  // listLeadsHandedOffByUser), same precedent updateLead's plain
-  // `RETURNING *` already follows for owner_name itself.
-  duplicate_of_lead_id: string | null;
+  // Computed live (DUPLICATE_LEAD_JOIN), not stored: the oldest other active
+  // lead with the same mobile number. Only the queries that join it carry it.
+  duplicate_of_lead_id?: string | null;
   duplicate_of_full_name?: string | null;
   duplicate_of_lead_number?: number | null;
   // Mirrors isLeadInOwnerScope - true when this user can actually act on the
@@ -238,6 +234,8 @@ export interface ListLeadsFilters {
   overdueOnly?: boolean;
   highScoreOnly?: boolean;
   unassignedOnly?: boolean;
+  // Active leads sharing a mobile number with another active lead.
+  duplicatesOnly?: boolean;
   // When the lead actually came into the CRM (created_at) - plain calendar
   // dates (YYYY-MM-DD), inclusive on both ends.
   createdFrom?: string;
@@ -337,7 +335,7 @@ function toPublicLead(row: LeadRow) {
     updatedAt: row.updated_at,
     ownerName: row.owner_name,
     ownerRole: row.owner_role,
-    duplicateOfLeadId: row.duplicate_of_lead_id,
+    duplicateOfLeadId: row.duplicate_of_lead_id ?? null,
     duplicateOfFullName: row.duplicate_of_full_name ?? undefined,
     duplicateOfLeadNumber: row.duplicate_of_lead_number ?? undefined,
     inOwnerScope: row.in_owner_scope,
@@ -578,11 +576,12 @@ export async function listDistinctTerritories(): Promise<string[]> {
   return result.rows.map((row) => row.territory);
 }
 
-// A lead is still "active" - and blocks a second lead for the same phone
-// number - unless it has reached one of the two terminal outcomes. A
-// Converted or Closed Lost lead is a finished relationship, so a fresh
-// inquiry from the same number later is legitimate, not a duplicate.
+// One active lead per mobile number. A lead stops counting once it reaches
+// one of the two terminal outcomes - a Converted or Closed Lost lead is a
+// finished relationship, so a fresh inquiry from the same number later (e.g.
+// the same owner opening a second franchise) is a genuinely new lead.
 const TERMINAL_LEAD_STATUSES = ["Converted", "Closed Lost"];
+const TERMINAL_STATUS_SQL = TERMINAL_LEAD_STATUSES.map((s) => `'${s}'`).join(", ");
 
 // Compares only the last 10 digits after stripping everything but digits,
 // so "9876543210", "+91 98765 43210" and "091-9876543210" are all
@@ -592,56 +591,142 @@ function normalizePhone(phone: string): string {
   return phone.replace(/\D/g, "").slice(-10);
 }
 
-interface ActiveLeadMatch {
+// SQL twin of normalizePhone - written exactly like idx_leads_phone_last10
+// (model.ts) so Postgres can use that index for every match below.
+const phoneKey = (column: string) => `RIGHT(regexp_replace(${column}, '\\D', '', 'g'), 10)`;
+
+// Another active lead with the same mobile number as `alias`, oldest first.
+function activeTwinCondition(alias: string, twin: string): string {
+  return `${twin}.is_deleted = false AND ${twin}.id <> ${alias}.id
+    AND ${twin}.status NOT IN (${TERMINAL_STATUS_SQL})
+    AND ${alias}.status NOT IN (${TERMINAL_STATUS_SQL})
+    AND length(${phoneKey(`${alias}.phone`)}) = 10
+    AND ${phoneKey(`${twin}.phone`)} = ${phoneKey(`${alias}.phone`)}`;
+}
+
+// The "Possible duplicate" tag: computed live, so it covers duplicates
+// created before the block existed and clears itself once one of the pair is
+// closed, converted or archived. Selects dl.id/full_name/lead_number.
+const duplicateLeadJoin = (alias: string) => `
+  LEFT JOIN LATERAL (
+    SELECT dl.id, dl.full_name, dl.lead_number FROM leads dl
+    WHERE ${activeTwinCondition(alias, "dl")}
+    ORDER BY dl.created_at ASC
+    LIMIT 1
+  ) dl ON true`;
+const DUPLICATE_LEAD_COLUMNS =
+  "dl.id AS duplicate_of_lead_id, dl.full_name AS duplicate_of_full_name, dl.lead_number AS duplicate_of_lead_number";
+
+// Backs the Leads page's "Duplicates" chip - the clean-up list for pairs
+// that already exist.
+const HAS_DUPLICATE_CONDITION = `EXISTS (SELECT 1 FROM leads d WHERE ${activeTwinCondition("l", "d")})`;
+
+export interface ActiveLeadMatch {
   id: string;
   fullName: string;
   leadNumber: number | null;
+  status: string;
   ownerName: string | null;
+}
+
+async function findActiveLead(whereSql: string, value: string, excludeLeadId?: string): Promise<ActiveLeadMatch | null> {
+  const result = await pool.query<{ id: string; full_name: string; lead_number: number | null; status: string; owner_name: string | null }>(
+    `SELECT l.id, l.full_name, l.lead_number, l.status, u.name AS owner_name
+     FROM leads l
+     LEFT JOIN users u ON u.id = l.owner_id
+     WHERE l.is_deleted = false
+       AND l.status NOT IN (${TERMINAL_STATUS_SQL})
+       AND ${whereSql}
+       AND ($2::uuid IS NULL OR l.id <> $2)
+     ORDER BY l.created_at ASC
+     LIMIT 1`,
+    [value, excludeLeadId ?? null]
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  return { id: row.id, fullName: row.full_name, leadNumber: row.lead_number, status: row.status, ownerName: row.owner_name };
 }
 
 async function findActiveLeadByPhone(phone: string, excludeLeadId?: string): Promise<ActiveLeadMatch | null> {
   const normalized = normalizePhone(phone);
   if (normalized.length < 10) return null;
-
-  const result = await pool.query<{ id: string; full_name: string; lead_number: number | null; owner_name: string | null }>(
-    `SELECT l.id, l.full_name, l.lead_number, u.name AS owner_name
-     FROM leads l
-     LEFT JOIN users u ON u.id = l.owner_id
-     WHERE l.is_deleted = false
-       AND l.status NOT IN (${TERMINAL_LEAD_STATUSES.map((_, i) => `$${i + 2}`).join(", ")})
-       AND RIGHT(regexp_replace(l.phone, '\\D', '', 'g'), 10) = $1
-       AND ($${TERMINAL_LEAD_STATUSES.length + 2}::uuid IS NULL OR l.id <> $${TERMINAL_LEAD_STATUSES.length + 2})
-     LIMIT 1`,
-    [normalized, ...TERMINAL_LEAD_STATUSES, excludeLeadId ?? null]
-  );
-  const row = result.rows[0];
-  if (!row) return null;
-  return { id: row.id, fullName: row.full_name, leadNumber: row.lead_number, ownerName: row.owner_name };
+  return findActiveLead(`${phoneKey("l.phone")} = $1`, normalized, excludeLeadId);
 }
 
-// What a new/edited lead's own duplicate_of_lead_id should be set to, given
-// it now shares a phone number with an existing active lead - created and
-// flagged, not rejected, per the client's own requirement to track and
-// surface duplicates rather than block them (createLead/updateLead both use
-// this). Always collapses to that lead's own original if it's itself
-// already flagged, so a duplicate is never more than one hop from the true
-// first lead with that number, no matter how many times it's resurfaced.
-async function resolveDuplicateOfLeadId(phone: string, excludeLeadId?: string): Promise<string | null> {
-  const existing = await findActiveLeadByPhone(phone, excludeLeadId);
-  if (!existing) return null;
-  const existingRow = await pool.query<{ duplicate_of_lead_id: string | null }>(
-    "SELECT duplicate_of_lead_id FROM leads WHERE id = $1",
-    [existing.id]
-  );
-  return existingRow.rows[0]?.duplicate_of_lead_id ?? existing.id;
+async function findActiveLeadByEmail(email: string, excludeLeadId?: string): Promise<ActiveLeadMatch | null> {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return null;
+  return findActiveLead("lower(trim(l.email)) = $1", normalized, excludeLeadId);
+}
+
+function describeMatch(match: ActiveLeadMatch): string {
+  const label = match.leadNumber ? `Lead #${match.leadNumber} - ${match.fullName}` : match.fullName;
+  return `${label} (${match.status}, ${match.ownerName ? `with ${match.ownerName}` : "unassigned"})`;
+}
+
+// 409, with the same field-error shape as a 422 so the lead form puts the
+// message right under the Phone field.
+function duplicatePhoneError(match: ActiveLeadMatch): ApiError {
+  const message = `This mobile number already belongs to ${describeMatch(match)}. Open that lead instead of creating a new one.`;
+  return new ApiError(409, message, { phone: [message] });
+}
+
+// Live check behind the lead form: mobile matches block saving, email
+// matches only warn (a family or a business can share one email).
+export async function checkLeadDuplicates(input: { phone?: string; email?: string; excludeLeadId?: string }) {
+  const [phone, email] = await Promise.all([
+    input.phone ? findActiveLeadByPhone(input.phone, input.excludeLeadId) : null,
+    input.email ? findActiveLeadByEmail(input.email, input.excludeLeadId) : null,
+  ]);
+  return { phone, email };
+}
+
+// Serializes check-then-insert per mobile number, so two people saving the
+// same number at the same moment can't both slip past the duplicate check.
+async function withPhoneLock<T>(phone: string | undefined, fn: () => Promise<T>): Promise<T> {
+  const normalized = phone ? normalizePhone(phone) : "";
+  if (normalized.length < 10) return fn();
+  const client = await pool.connect();
+  try {
+    await client.query("SELECT pg_advisory_lock(hashtext($1))", [`lead-phone:${normalized}`]);
+    return await fn();
+  } finally {
+    await client.query("SELECT pg_advisory_unlock(hashtext($1))", [`lead-phone:${normalized}`]).catch(() => undefined);
+    client.release();
+  }
+}
+
+// A website/QR visitor whose number is already an active lead: no second
+// lead - the enquiry is logged on the existing lead's History instead, so
+// whoever already works it sees it.
+async function recordRepeatInquiry(match: ActiveLeadMatch, input: CreateLeadInput, ipAddress?: string | null) {
+  const details = [
+    `Via: ${input.inquirySource ?? input.source ?? "unknown source"}`,
+    input.fullName && input.fullName !== match.fullName ? `Name given: ${input.fullName}` : null,
+    input.email ? `Email: ${input.email}` : null,
+    input.addressLine1 ? `City / pin code: ${input.addressLine1}` : null,
+    input.internalNotes ? `Message: ${input.internalNotes}` : null,
+  ].filter(Boolean);
+  await recordAuditEvent({
+    entityType: "lead",
+    entityId: match.id,
+    entityLabel: match.fullName,
+    action: "repeat_inquiry",
+    summary: `Repeat enquiry from the same mobile number - ${match.fullName}`,
+    oldValue: null,
+    newValue: details.join("\n"),
+    actorId: null,
+    actorName: null,
+    ipAddress,
+  });
 }
 
 // Used to route an inbound WhatsApp reply to the right lead. Unlike
 // findActiveLeadByPhone above, this matches a lead regardless of status - a
 // Converted or Closed Lost lead's contact can still text back, and it
 // should still land somewhere. When more than one lead shares the number
-// (duplicate_of_lead_id is only ever set going forward on new/edited leads,
-// not backfilled onto old terminal ones), the most recently updated one wins.
+// (an old finished lead plus a new one, or duplicates from before the
+// one-active-lead-per-number block), the most recently updated one wins.
 export async function findLeadIdByPhone(phone: string): Promise<string | null> {
   const normalized = normalizePhone(phone);
   if (normalized.length < 10) return null;
@@ -679,6 +764,13 @@ export interface CreateLeadOptions {
   // function serves (manual form, Call Center's own queue lead, QR capture,
   // website capture), which all leave this unset and get the real send.
   skipWelcomeMessage?: boolean;
+  // When the mobile number already belongs to an active lead:
+  // "block" (default) - 409, pointing at the existing lead (manual form, Call
+  //   Center "Add lead", bulk import - which reports the row as skipped).
+  // "attach" - public website/QR forms, where nobody can act on an error: no
+  //   new lead, the enquiry is logged on the existing lead and that lead is
+  //   returned.
+  onDuplicatePhone?: "block" | "attach";
 }
 
 export async function createLead(
@@ -687,8 +779,23 @@ export async function createLead(
   ipAddress?: string | null,
   options?: CreateLeadOptions
 ) {
-  const duplicateOfLeadId = input.phone ? await resolveDuplicateOfLeadId(input.phone) : null;
+  return withPhoneLock(input.phone, async () => {
+    const existing = input.phone ? await findActiveLeadByPhone(input.phone) : null;
+    if (existing) {
+      if (options?.onDuplicatePhone !== "attach") throw duplicatePhoneError(existing);
+      await recordRepeatInquiry(existing, input, ipAddress);
+      return getLeadById(existing.id, creatorId, { skipVisibilityCheck: true });
+    }
+    return insertLead(input, creatorId, ipAddress, options);
+  });
+}
 
+async function insertLead(
+  input: CreateLeadInput,
+  creatorId: string,
+  ipAddress?: string | null,
+  options?: CreateLeadOptions
+) {
   let ownerId: string | null;
   // input.status is only ever non-undefined for a trusted internal caller
   // (see CreateLeadInput's own comment on that field) - every real
@@ -725,7 +832,6 @@ export async function createLead(
     prospect_status: input.prospectStatus,
     category: input.category,
     owner_id: ownerId,
-    duplicate_of_lead_id: duplicateOfLeadId,
     sales_team_id: input.salesTeamId,
     lead_score: input.leadScore,
     phone: input.phone,
@@ -990,11 +1096,11 @@ export async function listLeadsHandedOffByUser(requestingUserId: string) {
   const result = await pool.query<LeadRow>(
     `${SUBTREE_CTE}
      SELECT l.*, u.name AS owner_name, u.role AS owner_role,
-       dl.full_name AS duplicate_of_full_name, dl.lead_number AS duplicate_of_lead_number,
+       ${DUPLICATE_LEAD_COLUMNS},
        (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE}) AS in_owner_scope
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
-     LEFT JOIN leads dl ON dl.id = l.duplicate_of_lead_id
+     ${duplicateLeadJoin("l")}
      WHERE l.is_deleted = false
        AND EXISTS (
          SELECT 1 FROM lead_shares ls
@@ -1033,7 +1139,7 @@ export async function getLeadById(
   const result = await pool.query<LeadRow>(
     `${SUBTREE_CTE}
      SELECT l.*, u.name AS owner_name, u.role AS owner_role,
-       dl.full_name AS duplicate_of_full_name, dl.lead_number AS duplicate_of_lead_number,
+       ${DUPLICATE_LEAD_COLUMNS},
        -- Mirrors isLeadInOwnerScope exactly (same subtree membership +
        -- unassigned-admin clause) - the frontend's signal for "can I
        -- actually act on this lead" (Call/Email/Teams/WhatsApp/Edit), as
@@ -1043,7 +1149,7 @@ export async function getLeadById(
        (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE} ${TIER_TEAMMATE_CLAUSE}) AS in_owner_scope
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
-     LEFT JOIN leads dl ON dl.id = l.duplicate_of_lead_id
+     ${duplicateLeadJoin("l")}
      WHERE l.id = $2 AND l.is_deleted = false`,
     [requestingUserId, leadId]
   );
@@ -1139,6 +1245,9 @@ export function buildLeadFilterConditions(
   if (filters.unassignedOnly) {
     conditions.push(`l.owner_id IS NULL`);
   }
+  if (filters.duplicatesOnly) {
+    conditions.push(HAS_DUPLICATE_CONDITION);
+  }
   // Calendar-date bounds on created_at (not a timestamp range) - createdTo's
   // own day counts in full, so "filter to 2 Nov" doesn't quietly exclude
   // everything created after midnight that day.
@@ -1174,7 +1283,7 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
   const result = await pool.query<LeadRow>(
     `${SUBTREE_CTE}
      SELECT l.*, u.name AS owner_name, u.role AS owner_role,
-       dl.full_name AS duplicate_of_full_name, dl.lead_number AS duplicate_of_lead_number,
+       ${DUPLICATE_LEAD_COLUMNS},
        EXISTS (
          SELECT 1 FROM activities a
          WHERE a.lead_id = l.id AND a.is_deleted = false AND a.due_date < now() AND a.status <> 'completed'
@@ -1186,9 +1295,9 @@ export async function listLeadsForUser(requestingUserId: string, filters: ListLe
        (COALESCE(l.owner_id IN (SELECT id FROM subtree), false) ${UNASSIGNED_ADMIN_CLAUSE} ${TIER_TEAMMATE_CLAUSE}) AS in_owner_scope
      FROM leads l
      LEFT JOIN users u ON u.id = l.owner_id
-     LEFT JOIN leads dl ON dl.id = l.duplicate_of_lead_id
+     ${duplicateLeadJoin("l")}
      WHERE ${whereClause}
-     ORDER BY l.created_at DESC
+     ORDER BY ${filters.duplicatesOnly ? `${phoneKey("l.phone")}, l.created_at ASC` : "l.created_at DESC"}
      LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
     listParams
   );
@@ -1322,6 +1431,7 @@ export async function getQuickFilterCounts(requestingUserId: string) {
     overdue: string;
     fofo: string;
     high_score: string;
+    duplicates: string;
   }>(
     `${SUBTREE_CTE}
      SELECT
@@ -1332,7 +1442,8 @@ export async function getQuickFilterCounts(requestingUserId: string) {
          WHERE EXISTS (SELECT 1 FROM activities a WHERE a.lead_id = l.id AND a.is_deleted = false AND a.due_date < now() AND a.status <> 'completed')
        ) AS overdue,
        COUNT(*) FILTER (WHERE l.category = 'FOFO') AS fofo,
-       COUNT(*) FILTER (WHERE l.lead_score >= $2) AS high_score
+       COUNT(*) FILTER (WHERE l.lead_score >= $2) AS high_score,
+       COUNT(*) FILTER (WHERE ${HAS_DUPLICATE_CONDITION}) AS duplicates
      FROM leads l
      WHERE l.is_deleted = false
        AND (
@@ -1353,6 +1464,7 @@ export async function getQuickFilterCounts(requestingUserId: string) {
     overdue: Number(row.overdue),
     fofo: Number(row.fofo),
     highScore: Number(row.high_score),
+    duplicates: Number(row.duplicates),
   };
 }
 
@@ -1365,7 +1477,7 @@ export async function getQuickFilterCounts(requestingUserId: string) {
 // history entries further down - double-logging them here would show the
 // same change twice), internal_notes/rm_remark/lg_remark (same reason, via
 // the noteFields loop below), and every raw foreign-key id column
-// (duplicate_of_lead_id/sales_team_id/zone_id/state_id/district_id/area_id/
+// (sales_team_id/zone_id/state_id/district_id/area_id/
 // campaign_id) - showing "a1b2c3d4-... -> e5f6..." in History is worse than
 // not tracking it at all; resolving those to real names is real further
 // work, not something to fake here.
@@ -1469,11 +1581,19 @@ export async function updateLead(
   const beforeResult = await pool.query<LeadRow>("SELECT * FROM leads WHERE id = $1", [leadId]);
   const before = beforeResult.rows[0] ?? null;
 
-  // Only re-checked when the phone number is actually being changed - same
-  // flag-not-block behavior as createLead above, so editing a lead's number
-  // to match another active one re-links it instead of silently staying
-  // unflagged.
-  const duplicateOfLeadId = updates.phone ? await resolveDuplicateOfLeadId(updates.phone, leadId) : undefined;
+  // Same one-active-lead-per-number rule as createLead, checked only when
+  // the number really changes - so editing other fields of an older
+  // duplicate pair (from before this rule) is never blocked.
+  const statusAfter = updates.status ?? before?.status;
+  if (
+    updates.phone &&
+    normalizePhone(updates.phone) !== normalizePhone(before?.phone ?? "") &&
+    statusAfter &&
+    !TERMINAL_LEAD_STATUSES.includes(statusAfter)
+  ) {
+    const existing = await findActiveLeadByPhone(updates.phone, leadId);
+    if (existing) throw duplicatePhoneError(existing);
+  }
 
   const fieldMap: Record<string, unknown> = {
     full_name: updates.fullName,
@@ -1486,7 +1606,6 @@ export async function updateLead(
     prospect_status: updates.prospectStatus,
     category: updates.category,
     owner_id: updates.ownerId,
-    duplicate_of_lead_id: duplicateOfLeadId,
     sales_team_id: updates.salesTeamId,
     lead_score: updates.leadScore,
     phone: updates.phone,
@@ -1608,10 +1727,10 @@ export async function updateLead(
        ) AS in_owner_scope
      )
      SELECT updated.*, u.name AS owner_name, u.role AS owner_role,
-       dl.full_name AS duplicate_of_full_name, dl.lead_number AS duplicate_of_lead_number
+       ${DUPLICATE_LEAD_COLUMNS}
      FROM updated
      LEFT JOIN users u ON u.id = updated.owner_id
-     LEFT JOIN leads dl ON dl.id = updated.duplicate_of_lead_id`,
+     ${duplicateLeadJoin("updated")}`,
     params
   );
   const after = result.rows[0];
