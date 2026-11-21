@@ -2463,6 +2463,11 @@ Regards,', 'active', 4),
     // Claiming an unowned lead into your own Call Center queue - Call Center
     // tier only, same as the role check this permission replaced.
     once("grant_call_center_leads_claim", `INSERT INTO role_permissions (role, permission) VALUES ('call_center','leads.claim') ON CONFLICT (role, permission) DO NOTHING`),
+
+    // Territory is unique per person, so a blank territory saved as '' (not
+    // NULL) blocked the next new user who also left it blank. New users now
+    // save NULL; this clears the blanks already saved.
+    once("blank_territory_to_null", `UPDATE users SET territory = NULL WHERE territory = ''`),
   ];
 
   // One dedicated connection with the pool's per-query timeout lifted - an
