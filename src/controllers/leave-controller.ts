@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { getEffectivePermissions } from "../services/permission-service";
 import { asyncHandler } from "../utils/async-handler";
 import { sendSuccess } from "../utils/response";
 import * as leaveService from "../services/leave-service";
@@ -33,9 +34,14 @@ export const listPendingApprovals = asyncHandler(async (req: Request, res: Respo
   sendSuccess(res, await leaveService.listPendingApprovals(req.user!.id));
 });
 
+// Admins (leave_requests.view_all) see every pending item waiting on someone else, view only.
+export const listPendingOversight = asyncHandler(async (req: Request, res: Response) => {
+  sendSuccess(res, await leaveService.listPendingOversight(req.user!.id));
+});
+
 export const search = asyncHandler(async (req: Request, res: Response) => {
   const query = req.validatedQuery as unknown as { userId?: string; from?: string; to?: string; page: number; limit: number };
-  sendSuccess(res, await leaveService.searchLeaveRequests(req.user!.id, query));
+  sendSuccess(res, await leaveService.searchLeaveRequests(req.user!.id, query, (await getEffectivePermissions(req.user!.id)).permissions.includes("leave_requests.view_all")));
 });
 
 export const create = asyncHandler(async (req: Request, res: Response) => {

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import * as leaveController from "../../controllers/leave-controller";
 import { requireAuth } from "../../middleware/auth-middleware";
-import { requirePermission } from "../../middleware/permission-middleware";
+import { requireAnyPermission, requirePermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
 import {
   createLeaveRequestSchema,
@@ -38,11 +38,13 @@ router.get("/context", requirePermission("leave_requests.view"), leaveController
 router.get("/mine", requirePermission("leave_requests.view"), leaveController.listMine);
 router.get("/team", requirePermission("leave_requests.approve"), leaveController.listTeam);
 router.get("/pending-approvals", requirePermission("leave_requests.approve"), leaveController.listPendingApprovals);
+// Oversight (Admins): every pending request waiting on someone else, view only.
+router.get("/pending-oversight", requirePermission("leave_requests.view_all"), leaveController.listPendingOversight);
 // Mobile API handoff - same gate as /team (direct reports), widened to the
 // whole reporting chain plus a real month/date filter, not a new privilege.
 router.get(
   "/search",
-  requirePermission("leave_requests.approve"),
+  requireAnyPermission("leave_requests.approve", "leave_requests.view_all"),
   validateQuery(searchLeaveRequestsQuerySchema),
   leaveController.search
 );

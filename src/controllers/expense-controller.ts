@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { getEffectivePermissions } from "../services/permission-service";
 import { asyncHandler } from "../utils/async-handler";
 import { sendSuccess } from "../utils/response";
 import { ApiError } from "../utils/api-error";
@@ -15,7 +16,8 @@ export const listMine = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const listTeam = asyncHandler(async (req: Request, res: Response) => {
-  sendSuccess(res, await expenseService.listTeamClaims(req.user!.id));
+  const { permissions } = await getEffectivePermissions(req.user!.id);
+  sendSuccess(res, await expenseService.listTeamClaims(req.user!.id, permissions.includes("expense_claims.view_all")));
 });
 
 export const listPendingApprovals = asyncHandler(async (req: Request, res: Response) => {
@@ -24,7 +26,7 @@ export const listPendingApprovals = asyncHandler(async (req: Request, res: Respo
 
 export const search = asyncHandler(async (req: Request, res: Response) => {
   const query = req.validatedQuery as unknown as { userId?: string; from?: string; to?: string; page: number; limit: number };
-  sendSuccess(res, await expenseService.searchExpenseClaims(req.user!.id, query));
+  sendSuccess(res, await expenseService.searchExpenseClaims(req.user!.id, query, (await getEffectivePermissions(req.user!.id)).permissions.includes("expense_claims.view_all")));
 });
 
 // Multipart request (a receipt file rides alongside the form fields), so
