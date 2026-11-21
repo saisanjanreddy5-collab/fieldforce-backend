@@ -53,6 +53,8 @@ interface LeaveRequestRow {
   updated_at: string;
   user_name?: string;
   cover_user_name?: string | null;
+  approver_name?: string | null;
+  second_approver_name?: string | null;
 }
 
 export interface CreateLeaveRequestInput {
@@ -102,9 +104,11 @@ function toPublicLeaveRequest(row: LeaveRequestRow) {
     coverUserName: row.cover_user_name ?? null,
     status: row.status,
     approverId: row.approver_id,
+    approverName: row.approver_name ?? null,
     approverDecision: row.approver_decision,
     approverDecidedAt: row.approver_decided_at,
     secondApproverId: row.second_approver_id,
+    secondApproverName: row.second_approver_name ?? null,
     secondApproverDecision: row.second_approver_decision,
     secondApproverDecidedAt: row.second_approver_decided_at,
     createdAt: row.created_at,
@@ -314,10 +318,13 @@ export async function getBalances(userId: string) {
 }
 
 const REQUEST_SELECT = `
-  SELECT lr.*, u.name AS user_name, cu.name AS cover_user_name
+  SELECT lr.*, u.name AS user_name, cu.name AS cover_user_name,
+    av.name AS approver_name, sav.name AS second_approver_name
   FROM leave_requests lr
   JOIN users u ON u.id = lr.user_id
   LEFT JOIN users cu ON cu.id = lr.cover_user_id
+  LEFT JOIN users av ON av.id = lr.approver_id
+  LEFT JOIN users sav ON sav.id = lr.second_approver_id
 `;
 
 export async function listMyRequests(userId: string) {
@@ -362,8 +369,10 @@ export interface SearchLeaveRequestsFilters {
 // The full reporting chain beneath the requester - not just direct reports
 // (listTeamRequests above) and not just its fixed "next 30 days" window: any
 // month, past or future, optionally one person.
-export async function searchLeaveRequests(requestingUserId: string, filters: SearchLeaveRequestsFilters) {
-  const conditions: string[] = ["u.id IN (SELECT id FROM subtree)"];
+// viewAll (leave_requests.view_all - Admins): every request in the company,
+// not just the requester's reporting chain.
+export async function searchLeaveRequests(requestingUserId: string, filters: SearchLeaveRequestsFilters, viewAll = false) {
+  const conditions: string[] = [viewAll ? "true" : "u.id IN (SELECT id FROM subtree)"];
   const params: unknown[] = [requestingUserId];
 
   if (filters.userId) {
@@ -422,6 +431,18 @@ export async function listPendingApprovals(userId: string) {
     [userId, await isAdminUser(userId)]
   );
   return result.rows.map(toPublicLeaveRequest);
+}
+
+// Oversight for Admins (leave_requests.view_all): every pending request in
+// the company that is waiting on someone else - view only. What this user
+// can decide themselves is already in listPendingApprovals.
+export async function listPendingOversight(userId: string) {
+  const [all, mine] = await Promise.all([
+    pool.query<LeaveRequestRow>(`${REQUEST_SELECT} WHERE lr.status = 'pending' AND lr.user_id <> $1 ORDER BY lr.created_at ASC`, [userId]),
+    listPendingApprovals(userId),
+  ]);
+  const actionable = new Set(mine.map((r) => r.id));
+  return all.rows.filter((r) => !actionable.has(r.id)).map(toPublicLeaveRequest);
 }
 
 // For the Approvals inbox's "approved this week" stat - every decision this

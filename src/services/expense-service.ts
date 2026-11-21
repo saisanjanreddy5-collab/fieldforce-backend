@@ -287,10 +287,12 @@ export async function listMyClaims(userId: string) {
 }
 
 // Direct reports only, same "reporting manager" framing Leave uses - not
-// the whole subtree.
-export async function listTeamClaims(managerId: string) {
+// the whole subtree. viewAll (expense_claims.view_all - Admins): every other
+// person's claim in the company, to see - deciding still belongs to each
+// claim's own approver.
+export async function listTeamClaims(managerId: string, viewAll = false) {
   const result = await pool.query<ExpenseClaimRow>(
-    `${CLAIM_SELECT} WHERE u.manager_id = $1 ORDER BY ec.created_at DESC`,
+    `${CLAIM_SELECT} WHERE ${viewAll ? "ec.user_id <> $1" : "u.manager_id = $1"} ORDER BY ec.created_at DESC`,
     [managerId]
   );
   return result.rows.map(toPublicExpenseClaim);
@@ -306,8 +308,10 @@ export interface SearchExpenseClaimsFilters {
 
 // The full reporting chain beneath the requester (not just direct reports
 // like listTeamClaims above), for any date range, optionally one person.
-export async function searchExpenseClaims(requestingUserId: string, filters: SearchExpenseClaimsFilters) {
-  const conditions: string[] = ["u.id IN (SELECT id FROM subtree)"];
+// viewAll (expense_claims.view_all - Admins): every claim in the company,
+// not just the requester's reporting chain.
+export async function searchExpenseClaims(requestingUserId: string, filters: SearchExpenseClaimsFilters, viewAll = false) {
+  const conditions: string[] = [viewAll ? "true" : "u.id IN (SELECT id FROM subtree)"];
   const params: unknown[] = [requestingUserId];
 
   if (filters.userId) {

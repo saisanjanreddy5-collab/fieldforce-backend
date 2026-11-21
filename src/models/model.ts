@@ -2468,6 +2468,11 @@ Regards,', 'active', 4),
     // NULL) blocked the next new user who also left it blank. New users now
     // save NULL; this clears the blanks already saved.
     once("blank_territory_to_null", `UPDATE users SET territory = NULL WHERE territory = ''`),
+
+    // Oversight: Admins see every leave request and expense claim (view
+    // only) - deciding stays with each person's reporting manager.
+    once("grant_admin_leave_view_all", `INSERT INTO role_permissions (role, permission) VALUES ('admin','leave_requests.view_all') ON CONFLICT (role, permission) DO NOTHING`),
+    once("grant_admin_expense_view_all", `INSERT INTO role_permissions (role, permission) VALUES ('admin','expense_claims.view_all') ON CONFLICT (role, permission) DO NOTHING`),
   ];
 
   // One dedicated connection with the pool's per-query timeout lifted - an
