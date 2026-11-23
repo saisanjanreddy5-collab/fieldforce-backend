@@ -40,8 +40,8 @@ function sendNoHelpdeskAccess(res: Response): void {
         `<body style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f6f7f9;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px">` +
         `<div style="max-width:420px;background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:28px;text-align:center">` +
         `<h1 style="font-size:20px;margin:0 0 8px;color:#111827">No access to Support tickets</h1>` +
-        `<p style="color:#4b5563;font-size:14px;line-height:1.5;margin:0 0 20px">Your FieldForce account doesn't have access to the support helpdesk. If you think you need it, ask your administrator.</p>` +
-        `<a href="${back}" style="display:inline-block;background:#1354e0;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-size:14px">Back to FieldForce</a>` +
+        `<p style="color:#4b5563;font-size:14px;line-height:1.5;margin:0 0 20px">Your CRM account doesn't have access to the support helpdesk. If you think you need it, ask your administrator.</p>` +
+        `<a href="${back}" style="display:inline-block;background:#1354e0;color:#fff;text-decoration:none;padding:10px 18px;border-radius:8px;font-size:14px">Back to CRM</a>` +
         `</div></body></html>`
     );
 }

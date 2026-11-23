@@ -4,8 +4,17 @@ import { sendSuccess } from "../utils/response";
 import * as leadService from "../services/lead-service";
 import * as leadCallCenterService from "../services/lead-call-center-service";
 import * as leadExportService from "../services/lead-export-service";
+import { ROLES } from "../utils/roles";
 
 export const create = asyncHandler(async (req: Request, res: Response) => {
+  // Call Center creating from the Leads page gets exactly the same result as
+  // their queue's own "Add lead": the lead lands in their own queue - they
+  // can't pick another owner or skip qualification this way.
+  if (req.user!.role === ROLES.CALL_CENTER) {
+    const lead = await leadCallCenterService.createOwnQueueLead(req.body, req.user!.id, req.ip);
+    sendSuccess(res, lead, "Lead added to your queue", 201);
+    return;
+  }
   const lead = await leadService.createLead(req.body, req.user!.id, req.ip);
   sendSuccess(res, lead, "Lead created", 201);
 });

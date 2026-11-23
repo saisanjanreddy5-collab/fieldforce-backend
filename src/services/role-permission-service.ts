@@ -147,14 +147,16 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
     "payments.view", "payments.create", "payments.update", "payments.delete",
   ],
   // A real, separate account for Call Center employees - their own queue
-  // only (add a contact who called in directly via leads.queue_create, view/
+  // (add a contact who called in directly via leads.queue_create, view/
   // update the leads assigned to them, log a call, mark Qualified, and push
-  // a Qualified lead to Field Sales themselves), never the full Leads module
-  // (leads.queue_view/leads.queue_create are deliberately their own
-  // permissions, not leads.view/leads.create - see lead-routes.ts's GET / and
-  // POST /queue routes) and never the general Reassign/Swap action (that
-  // stays Admin/Manager only).
+  // a Qualified lead to Field Sales themselves), plus the Leads page itself
+  // (View/Create/Edit, by client request). A lead they create from the Leads
+  // page still lands in their own queue exactly like the queue's own Add
+  // lead (lead-controller.ts create) - never assigned to someone else. The
+  // general Reassign/Swap action stays Admin/Manager only.
   [ROLES.CALL_CENTER]: [
+    "leads.view",
+    "leads.create",
     "leads.queue_view",
     "leads.queue_create",
     "leads.update",

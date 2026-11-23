@@ -83,7 +83,7 @@ export async function registerFofoUser(input: RegisterFofoUserInput): Promise<Re
     if (isTokenRejection(response.status, message)) {
       throw new ApiError(
         502,
-        `Not pushed - SKIA's onboarding system (${server}) refused FieldForce's access token ("${message}"). Nothing was saved on this lead. The SKIA team needs to issue a valid token for this server; then push again.`
+        `Not pushed - SKIA's onboarding system (${server}) refused the CRM's access token ("${message}"). Nothing was saved on this lead. The SKIA team needs to issue a valid token for this server; then push again.`
       );
     }
     throw new ApiError(502, `Not pushed - SKIA's onboarding system (${server}) rejected the registration: ${message}. Nothing was saved on this lead.`);

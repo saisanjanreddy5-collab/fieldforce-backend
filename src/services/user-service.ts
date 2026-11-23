@@ -189,6 +189,17 @@ export async function assertActorIsRealAdmin(actorId: string | undefined, action
 }
 
 export async function updateUser(id: string, updates: UpdateUserInput, changedBy: string) {
+  // Admins sit at the top of the org and report to no one. Someone moved
+  // INTO the Admin level loses their manager with that same save.
+  const newRole = updates.levelId ? await getLevelSecurityTier(updates.levelId) : undefined;
+  const currentRole = (await pool.query<{ role: string }>("SELECT role FROM users WHERE id = $1", [id])).rows[0]?.role;
+  if ((newRole ?? currentRole) === ROLES.ADMIN) {
+    if (updates.managerId) {
+      throw new ApiError(422, "Admins sit at the top of the org and don't report to anyone");
+    }
+    if (newRole === ROLES.ADMIN && currentRole !== ROLES.ADMIN) updates = { ...updates, managerId: "" };
+  }
+
   const managerIdProvided = updates.managerId !== undefined;
   let previousManagerId: string | null = null;
   if (managerIdProvided) {
@@ -269,7 +280,7 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
   // their real security tier, not just the label shown for them. Clearing
   // the level (levelId === "") leaves role untouched - there's no tier to
   // derive from "no level".
-  const role = updates.levelId ? await getLevelSecurityTier(updates.levelId) : undefined;
+  const role = newRole;
 
   // Nobody changes their own level (a self-promotion would survive the end
   // of a temporary "Grant full Administrator access"), and only a real Admin
