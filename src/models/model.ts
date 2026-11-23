@@ -2473,6 +2473,27 @@ Regards,', 'active', 4),
     // only) - deciding stays with each person's reporting manager.
     once("grant_admin_leave_view_all", `INSERT INTO role_permissions (role, permission) VALUES ('admin','leave_requests.view_all') ON CONFLICT (role, permission) DO NOTHING`),
     once("grant_admin_expense_view_all", `INSERT INTO role_permissions (role, permission) VALUES ('admin','expense_claims.view_all') ON CONFLICT (role, permission) DO NOTHING`),
+
+    // Call Center gets the Leads page too - View and Create (Edit they
+    // already had). A lead they create there still lands in their own queue.
+    once(
+      "grant_call_center_leads_view_create",
+      `INSERT INTO role_permissions (role, permission) VALUES ('call_center','leads.view'), ('call_center','leads.create') ON CONFLICT (role, permission) DO NOTHING`
+    ),
+
+    // Admins sit at the top of the org and report to no one (the app now
+    // refuses a manager for them). Clears any manager already saved on an
+    // Admin, recorded in the manager change history like any other change.
+    once(
+      "admins_report_to_no_one",
+      `WITH old AS (
+         SELECT id, manager_id FROM users WHERE role = 'admin' AND manager_id IS NOT NULL FOR UPDATE
+       ), cleared AS (
+         UPDATE users u SET manager_id = NULL, updated_at = now() FROM old WHERE u.id = old.id RETURNING u.id, old.manager_id
+       )
+       INSERT INTO manager_change_log (user_id, old_manager_id, new_manager_id, changed_by)
+       SELECT id, manager_id, NULL, NULL FROM cleared`
+    ),
   ];
 
   // One dedicated connection with the pool's per-query timeout lifted - an
@@ -2490,29 +2511,14 @@ Regards,', 'active', 4),
     // by a hash of its SQL. Re-running them on every boot silently undid
     // Admin decisions: a permission revoked on the Permissions screen was
     // granted again at the next restart, and removed team members re-added.
-    // Rule for new code: never edit an existing data statement, and add new
-    // data changes as once("key", ...) - a database seeing this code for the
-    // first time marks every PLAIN data statement as done without running it
-    // (below), which would silently skip a brand-new plain one.
-    // Databases that already ran all of these on earlier boots are marked
-    // done without re-running them, so this deploy doesn't re-grant
-    // anything one last time.
+    // Rule for new code: never edit an existing data statement - add a new
+    // one (an edited statement has a new hash and runs again).
+    // A database seeing this runner for the first time runs every data
+    // statement once (exactly what older code did on every boot) and records
+    // it - so a server upgrading from an older version still gets every seed
+    // and fix-up it hadn't run yet. From then on each runs never again.
     const dataKey = (sql: string) => `data:${createHash("sha1").update(sql.replace(/\s+/g, " ").trim()).digest("hex")}`;
     const isDataStatement = (sql: string) => /^(INSERT|UPDATE|DELETE)\b/i.test(sql.trimStart());
-    const baselined = await client.query("SELECT 1 FROM schema_once_migrations WHERE key = 'data_statements_baseline'");
-    if ((baselined.rowCount ?? 0) === 0) {
-      const existingInstall = await client.query<{ existing: boolean }>(
-        "SELECT to_regclass('public.role_permissions') IS NOT NULL AS existing"
-      );
-      if (existingInstall.rows[0]?.existing) {
-        for (const query of createTableQueries) {
-          if (typeof query === "string" && isDataStatement(query)) {
-            await client.query("INSERT INTO schema_once_migrations (key) VALUES ($1) ON CONFLICT (key) DO NOTHING", [dataKey(query)]);
-          }
-        }
-      }
-      await client.query("INSERT INTO schema_once_migrations (key) VALUES ('data_statements_baseline') ON CONFLICT (key) DO NOTHING");
-    }
 
     for (const query of createTableQueries) {
       if (typeof query === "string" && !isDataStatement(query)) {

@@ -199,7 +199,8 @@ export async function registerUser(input: RegisterInput, actorId?: string) {
         input.email,
         passwordHash,
         role,
-        input.managerId || null,
+        // Admins sit at the top of the org - they never report to anyone.
+        role === ROLES.ADMIN ? null : input.managerId || null,
         input.districtId || null,
         input.areaId || null,
         input.smartfloAgentNumber || null,

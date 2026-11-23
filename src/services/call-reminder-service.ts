@@ -38,7 +38,7 @@ async function sendReminderEmail(row: DueCallRow): Promise<void> {
         subject: `Call back reminder - ${row.lead_full_name}`,
         body: {
           contentType: "Text",
-          content: `Hi ${row.rep_name},\n\nThis is your reminder to call back ${row.lead_full_name}, scheduled for ${when}.\n${phoneLine}\n\nOpen FieldForce to log the outcome once you've called.`,
+          content: `Hi ${row.rep_name},\n\nThis is your reminder to call back ${row.lead_full_name}, scheduled for ${when}.\n${phoneLine}\n\nOpen the CRM to log the outcome once you've called.`,
         },
         toRecipients: [{ emailAddress: { address: row.rep_email } }],
       },
