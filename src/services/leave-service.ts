@@ -540,6 +540,15 @@ async function createLeaveRequestNow(userId: string, input: CreateLeaveRequestIn
     throw new ApiError(422, "You already have a leave request covering some of these dates");
   }
 
+  // Cover must be someone the picker would offer: an active colleague in
+  // the same role (the API is reachable directly, not just via the form).
+  if (input.coverUserId) {
+    const candidates = await listCoverCandidates(userId);
+    if (!candidates.some((c) => c.id === input.coverUserId)) {
+      throw new ApiError(422, "Cover must be an active colleague in the same role as you");
+    }
+  }
+
   // Days already asked for but not yet decided count against the balance
   // too - otherwise several pending requests could each fit the balance on
   // their own and all be approved, together far exceeding it.
@@ -696,20 +705,28 @@ export async function cancelLeaveRequest(requestId: string, userId: string) {
 // name, and peers to offer as "cover") - deliberately not a call into
 // GET /users, which is manager+ only and an agent applying for leave never
 // holds that permission.
+async function listCoverCandidates(userId: string): Promise<{ id: string; name: string }[]> {
+  const result = await pool.query<{ id: string; name: string }>(
+    `SELECT u.id, u.name FROM users u
+     WHERE u.role = (SELECT role FROM users WHERE id = $1) AND u.id <> $1 AND u.is_active = true
+     ORDER BY u.name ASC`,
+    [userId]
+  );
+  return result.rows;
+}
+
 export async function getLeaveContext(userId: string) {
   const managerId = await getDirectManagerId(userId);
   let managerName: string | null = null;
-  let peers: { id: string; name: string }[] = [];
 
   if (managerId) {
     const managerResult = await pool.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [managerId]);
     managerName = managerResult.rows[0]?.name ?? null;
-    const peersResult = await pool.query<{ id: string; name: string }>(
-      "SELECT id, name FROM users WHERE manager_id = $1 AND id != $2 AND is_active = true ORDER BY name ASC",
-      [managerId, userId]
-    );
-    peers = peersResult.rows;
   }
+  // Who can cover you: active colleagues in the same role (Call Center ->
+  // Call Center, Field Sales -> Field Sales, Admin -> Admin) - someone who
+  // can actually do your work while you're away.
+  const peers = await listCoverCandidates(userId);
 
   const reportsResult = await pool.query<{ id: string; name: string }>(
     "SELECT id, name FROM users WHERE manager_id = $1 AND is_active = true ORDER BY name ASC",
