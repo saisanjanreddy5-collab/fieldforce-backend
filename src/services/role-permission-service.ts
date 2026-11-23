@@ -207,12 +207,15 @@ const DEFAULT_ROLE_PERMISSIONS: Record<string, string[]> = {
   ],
 };
 
-// The full permission catalog is every permission any role holds in the
-// table, rather than a second hardcoded list - one source of truth, no
-// risk of drift.
+// The full permission catalog: every permission any role holds, plus every
+// permission in the defaults. Without the defaults, switching a permission
+// off for every role made its column vanish from the Permissions screen -
+// with no way left to switch it back on.
 export async function listRolePermissionMatrix() {
   const result = await pool.query<RolePermissionRow>("SELECT role, permission FROM role_permissions ORDER BY permission ASC");
-  const catalog = Array.from(new Set(result.rows.map((r) => r.permission))).sort();
+  const catalog = Array.from(
+    new Set([...result.rows.map((r) => r.permission), ...Object.values(DEFAULT_ROLE_PERMISSIONS).flat()])
+  ).sort();
   const grants: Record<string, string[]> = {
     [ROLES.ADMIN]: [],
     [ROLES.MANAGER]: [],
