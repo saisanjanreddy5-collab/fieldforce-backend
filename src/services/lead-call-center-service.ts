@@ -49,6 +49,8 @@ export interface SwapCandidate {
   id: string;
   name: string;
   email: string;
+  // COCO / FOFO / Both - null for tiers without one (e.g. Call Center swaps)
+  operationType?: string | null;
 }
 
 interface LeadAssignmentFacts {
@@ -77,30 +79,32 @@ async function getLeadAssignmentFacts(leadId: string): Promise<LeadAssignmentFac
   return result.rows[0];
 }
 
-// Only COCO/FOFO carry a real Operation Type to match against - every other
-// lead category (Stockist, B2B, Lifestyle, ...) has no field-coverage
-// concept at all, so those leads match on pincode alone rather than being
-// unmatchable because no field employee has that operation type set.
-function operationTypeFilterFor(category: string | null): "COCO" | "FOFO" | null {
+// Only COCO/FOFO carry a real Operation Type - used to list the closest
+// match first, never to hide anyone.
+function operationTypeFor(category: string | null): "COCO" | "FOFO" | null {
   return category === "COCO" || category === "FOFO" ? category : null;
 }
 
-// Active field employees who actually cover this pincode (and, when the
-// lead's category is COCO/FOFO, whose own Operation Type matches it or is
-// 'Both'). Deliberately allows more than one match - that overlap is
-// intentional (see employee_pincodes), not a data problem to resolve here.
+// Everyone who can receive this lead: EVERY active Field Sales employee who
+// covers its pincode (client rule - all of them, so the sender can pick).
+// Field Sales only: their access tier AND their level must both be Field
+// Sales, so a Call Center (or any other) account never appears here, even
+// with pincodes on file. People whose Operation Type matches the lead's
+// category (COCO/FOFO, or 'Both') are listed first, then by name.
 async function getFieldCandidates(pincode: string | null, category: string | null): Promise<SwapCandidate[]> {
-  if (!pincode) return [];
-  const operationFilter = operationTypeFilterFor(category);
+  const pin = pincode?.trim();
+  if (!pin) return [];
 
   const result = await pool.query<SwapCandidate>(
-    `SELECT DISTINCT u.id, u.name, u.email
+    `SELECT u.id, u.name, u.email, u.operation_type AS "operationType"
      FROM users u
-     JOIN employee_pincodes ep ON ep.user_id = u.id
-     WHERE u.role = 'agent' AND u.is_active = true AND ep.pincode = $1
-       AND ($2::varchar IS NULL OR u.operation_type = $2 OR u.operation_type = 'Both')
-     ORDER BY u.name ASC`,
-    [pincode, operationFilter]
+     LEFT JOIN levels lv ON lv.id = u.level_id
+     WHERE u.role = 'agent' AND u.is_active = true
+       AND (lv.id IS NULL OR lv.security_tier = 'agent')
+       AND EXISTS (SELECT 1 FROM employee_pincodes ep WHERE ep.user_id = u.id AND TRIM(ep.pincode) = $1)
+     ORDER BY CASE WHEN $2::varchar IS NOT NULL AND (u.operation_type = $2 OR u.operation_type = 'Both') THEN 0 ELSE 1 END,
+              u.name ASC`,
+    [pin, operationTypeFor(category)]
   );
   return result.rows;
 }
@@ -409,7 +413,7 @@ export async function sendToField(
   let ownerId = chosenOwnerId;
   if (!ownerId) {
     if (candidates.length > 1) {
-      throw new ApiError(422, "More than one field employee covers this pincode - choose one.", { candidates });
+      throw new ApiError(422, `${candidates.length} field employees cover pincode ${facts.pincode} - choose one.`, { candidates, pincode: facts.pincode });
     }
     ownerId = candidates[0].id;
   } else if (!candidates.some((c) => c.id === ownerId)) {
