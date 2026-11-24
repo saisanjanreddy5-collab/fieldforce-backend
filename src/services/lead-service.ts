@@ -808,15 +808,14 @@ async function resolveStartingOwner(
   // HTTP-driven create omits it and gets the computed default below.
   let status = input.status;
   if (options?.requiresQualification && input.ownerId === undefined) {
-    // assignToCreator (the Call Center workspace's own "Add lead" action)
-    // keeps today's instant-FLC behavior unchanged - the agent logging this
-    // contact mid-call is already working it, no gate needed. Every other
-    // marketing-sourced path (bulk import, website form, QR campaign) now
-    // lands on 'New' first, same as a manually-created lead always has -
-    // "FLC" is a deliberate click, not an automatic landing spot, for any of
-    // them.
+    // Every new lead starts at 'New' - however it was created (Call Center's
+    // own "Add lead", bulk import, website form, QR campaign). The stages
+    // then go New -> FLC -> SLC -> Qualified -> Send to Field Sales, and
+    // "Start FLC" is always a deliberate click, never an automatic landing
+    // spot (client rule). assignToCreator only decides the owner: a lead a
+    // Call Center agent adds stays in their own queue.
     ownerId = options.assignToCreator ? creatorId : await resolveTierAssignee(FLC_STAGE);
-    status = status ?? (options.assignToCreator ? FLC_STAGE : "New");
+    status = status ?? "New";
   } else {
     ownerId = input.ownerId ?? (await resolveAutoAssignee(input, creatorId));
   }

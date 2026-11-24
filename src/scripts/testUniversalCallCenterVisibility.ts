@@ -1,6 +1,6 @@
 import { pool } from "../config/db";
 import { createLead, isLeadVisibleToUser, listLeadsHandedOffByUser } from "../services/lead-service";
-import { escalateToSlc, qualifyLead, sendToField, logCallDisposition } from "../services/lead-call-center-service";
+import { escalateToSlc, qualifyLead, sendToField, logCallDisposition, startFlc } from "../services/lead-call-center-service";
 import { globalSearch } from "../services/global-search-service";
 
 // Verifies the client-confirmed, explicit follow-up to today's "universal
@@ -40,7 +40,8 @@ async function main(): Promise<void> {
       { requiresQualification: true, assignToCreator: true }
     );
     createdLeadIds.push(lead.id);
-    assertEqual("assignToCreator lands directly at FLC", lead.status, "FLC");
+    assertEqual("a new lead starts at New, even one a Call Center agent adds", lead.status, "New");
+    await startFlc(lead.id, cc1Id);
     await escalateToSlc(lead.id, cc1Id);
     await logCallDisposition(lead.id, { disposition: "Call Done And Interested" }, cc1Id);
     await qualifyLead(lead.id, cc1Id);
