@@ -26,12 +26,12 @@ export const uploadDocument = asyncHandler(async (req: Request, res: Response) =
   if (!req.file) {
     throw new ApiError(422, "A file is required");
   }
-  const document = await leadDocumentService.saveUploadedFile(String(req.params.leadId), String(req.body.docType), req.file, req.user!.id);
+  const document = await leadDocumentService.saveUploadedFile(String(req.params.leadId), String(req.body.docType), req.file, req.user!.id, req.ip);
   sendSuccess(res, document, "Document uploaded", 201);
 });
 
 export const updateDocumentStatus = asyncHandler(async (req: Request, res: Response) => {
-  const document = await leadDocumentService.updateDocumentStatus(String(req.params.documentId), req.body.status, req.body.notes);
+  const document = await leadDocumentService.updateDocumentStatus(String(req.params.documentId), req.body.status, req.body.notes, req.user!.id, req.ip);
   sendSuccess(res, document, "Document status updated");
 });
 
@@ -46,7 +46,7 @@ export const downloadDocument = asyncHandler(async (req: Request, res: Response)
 });
 
 export const deleteDocument = asyncHandler(async (req: Request, res: Response) => {
-  const document = await leadDocumentService.deleteDocumentFile(String(req.params.documentId));
+  const document = await leadDocumentService.deleteDocumentFile(String(req.params.documentId), req.user!.id, req.ip);
   sendSuccess(res, document, "Document removed");
 });
 
@@ -78,6 +78,6 @@ export const restoreArchivedDocument = asyncHandler(async (req: Request, res: Re
   if (!visible) {
     throw new ApiError(403, "You do not have access to this document");
   }
-  const document = await leadDocumentService.restoreArchivedDocument(archiveId);
+  const document = await leadDocumentService.restoreArchivedDocument(archiveId, req.user!.id, req.ip);
   sendSuccess(res, document, "Document restored");
 });

@@ -78,10 +78,20 @@ async function applyDueTransfers(): Promise<void> {
         continue;
       }
       if (row.transfer_type === "bulk_reassign" && row.from_user_id && row.to_user_id) {
-        await client.query("UPDATE leads SET owner_id = $1, updated_at = now() WHERE owner_id = $2 AND is_deleted = false", [
-          row.to_user_id,
-          row.from_user_id,
-        ]);
+        const moved = await client.query<{ id: string }>(
+          "UPDATE leads SET owner_id = $1, updated_at = now() WHERE owner_id = $2 AND is_deleted = false RETURNING id",
+          [row.to_user_id, row.from_user_id]
+        );
+        // Each moved lead's History shows the reassignment, by whoever
+        // scheduled the transfer.
+        await client.query(
+          `INSERT INTO audit_log (entity_type, entity_id, entity_label, action, summary, old_value, new_value, actor_id, actor_name)
+           SELECT 'lead', l.id, l.full_name, 'owner_reassigned', 'Scheduled transfer - ' || l.full_name,
+                  (SELECT name FROM users WHERE id = $2), (SELECT name FROM users WHERE id = $3),
+                  $4::uuid, (SELECT name FROM users WHERE id = $4::uuid)
+           FROM leads l WHERE l.id = ANY($1::uuid[])`,
+          [moved.rows.map((r) => r.id), row.from_user_id, row.to_user_id, row.created_by]
+        );
         // Without this, any lead in this batch that had already converted
         // leaves its customer account permanently attached to from_user_id
         // - the departed/previous rep keeps access to real accounts
@@ -95,9 +105,16 @@ async function applyDueTransfers(): Promise<void> {
       } else if (row.transfer_type === "territory" && row.from_user_id && row.new_territory) {
         await client.query("UPDATE users SET territory = $1 WHERE id = $2", [row.new_territory, row.from_user_id]);
         if (row.old_territory) {
-          await client.query(
-            "UPDATE leads SET territory = $1, updated_at = now() WHERE owner_id = $2 AND territory = $3 AND is_deleted = false",
+          const moved = await client.query<{ id: string }>(
+            "UPDATE leads SET territory = $1, updated_at = now() WHERE owner_id = $2 AND territory = $3 AND is_deleted = false RETURNING id",
             [row.new_territory, row.from_user_id, row.old_territory]
+          );
+          await client.query(
+            `INSERT INTO audit_log (entity_type, entity_id, entity_label, action, summary, old_value, new_value, actor_id, actor_name)
+             SELECT 'lead', l.id, l.full_name, 'lead_field_updated', 'updated the territory (scheduled transfer)', $2, $3,
+                    $4::uuid, (SELECT name FROM users WHERE id = $4::uuid)
+             FROM leads l WHERE l.id = ANY($1::uuid[])`,
+            [moved.rows.map((r) => r.id), row.old_territory, row.new_territory, row.created_by]
           );
         }
       }

@@ -51,7 +51,7 @@ export const upload = asyncHandler(async (req: Request, res: Response) => {
   if (!GENERAL_DOC_TYPES.has(docType)) {
     throw new ApiError(422, "This document type is uploaded from FOFO onboarding");
   }
-  const document = await leadDocumentService.saveUploadedFile(leadId, docType, req.file, req.user!.id);
+  const document = await leadDocumentService.saveUploadedFile(leadId, docType, req.file, req.user!.id, req.ip);
   sendSuccess(res, document, "Document uploaded", 201);
 });
 
@@ -71,6 +71,6 @@ export const remove = asyncHandler(async (req: Request, res: Response) => {
   if (!GENERAL_DOC_TYPES.has(docType)) {
     throw new ApiError(422, "This document is managed from FOFO onboarding");
   }
-  const document = await leadDocumentService.deleteDocumentFile(documentId);
+  const document = await leadDocumentService.deleteDocumentFile(documentId, req.user!.id, req.ip);
   sendSuccess(res, document, "Document removed");
 });
