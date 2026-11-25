@@ -1,7 +1,6 @@
 import { pool } from "../config/db";
 import { createLeaveRequest, decideLeaveRequest, listDecidedByUser as listDecidedLeaveByUser, listPendingApprovals as listPendingLeaveApprovals } from "../services/leave-service";
 import { createExpenseClaim, decideExpenseClaim, listDecidedByUser as listDecidedExpenseByUser } from "../services/expense-service";
-import { listDecidedStepsByUser } from "../services/fofo-onboarding-service";
 import { getApprovalHistory, getApprovalInbox } from "../services/approvals-inbox-service";
 
 // Covers WEB-014: the Approvals Inbox only ever showed pending items, with
@@ -68,9 +67,6 @@ async function main(): Promise<void> {
 
     const decidedExpense = await listDecidedExpenseByUser(managerId);
     assertTrue("listDecidedByUser (expense) includes the decided claim", decidedExpense.some((c) => c.id === claim.id));
-
-    const fofoDecided = await listDecidedStepsByUser(managerId);
-    assertTrue("listDecidedStepsByUser (FOFO) returns an array without crashing", Array.isArray(fofoDecided));
 
     const history = await getApprovalHistory(managerId, 1, 50);
     const leaveEntry = history.items.find((i) => i.id === `leave:${leaveRequest.id}`);

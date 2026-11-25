@@ -4,11 +4,7 @@ import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
 import { documentUpload } from "../../services/lead-document-service";
-import {
-  decideStepSchema,
-  listFofoOnboardingsQuerySchema,
-  updateDocumentStatusSchema,
-} from "../../validators/fofo-onboarding-validator";
+import { listFofoOnboardingsQuerySchema, updateDocumentStatusSchema } from "../../validators/fofo-onboarding-validator";
 
 const router = Router();
 
@@ -21,13 +17,7 @@ router.get(
   fofoOnboardingController.list
 );
 router.get("/:leadId", requirePermission("fofo_onboarding.view"), fofoOnboardingController.getHandoff);
-router.patch(
-  "/steps/:stepId/decide",
-  requirePermission("fofo_onboarding.manage"),
-  validateBody(decideStepSchema),
-  fofoOnboardingController.decideStep
-);
-router.post("/:leadId/push", requirePermission("fofo_onboarding.manage"), fofoOnboardingController.push);
+router.post("/:leadId/push", requirePermission("fofo_onboarding.push"), fofoOnboardingController.push);
 
 router.post(
   "/:leadId/documents",

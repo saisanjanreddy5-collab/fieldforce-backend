@@ -939,31 +939,6 @@ export async function createTables(): Promise<void> {
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS onboarding_app_id VARCHAR(50)`,
     `ALTER TABLE leads ADD COLUMN IF NOT EXISTS pushed_at TIMESTAMPTZ`,
 
-    // Sequential named-approver chain for one lead's handoff - deliberately
-    // NOT built on approval_bands (a flat, level-based ladder keyed by
-    // amount, not a per-lead reporting chain). Approvers here are
-    // derived from the real manager_id chain above the lead's owner at the
-    // moment onboarding starts (reporting manager, then their manager, then
-    // the topmost person in that line) - never a fabricated "Ops" role,
-    // since FieldForce has no such role. The third step's status starts
-    // 'not_applicable' unless the lead's real expected_value exceeds
-    // 1,500,000 (matching the reference's "value > ₹15L" condition, applied
-    // for real rather than shown as static text).
-    `CREATE TABLE IF NOT EXISTS lead_approval_steps (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
-      step_order INTEGER NOT NULL,
-      role_label VARCHAR(100) NOT NULL,
-      approver_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-      status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','not_applicable')),
-      condition_note VARCHAR(255),
-      decided_by UUID REFERENCES users(id) ON DELETE SET NULL,
-      decided_at TIMESTAMPTZ,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      UNIQUE (lead_id, step_order)
-    )`,
-    `CREATE INDEX IF NOT EXISTS idx_lead_approval_steps_lead_id ON lead_approval_steps(lead_id)`,
-
     // Real per-document status + file, replacing DocumentsTab.tsx's
     // component-state-only mock. One row per document type per lead,
     // created on first view (same lazy-create spirit as
@@ -987,8 +962,8 @@ export async function createTables(): Promise<void> {
     // New module, wired to requirePermission from day one per the
     // post-Phase-3 rule. Agents get view+upload_document (they're the ones
     // on the ground with the applicant's paperwork) but not manage
-    // (approve/reject/push stays a manager+ decision, same split as the
-    // rest of the app's approval-adjacent actions).
+    // (verifying documents stays a manager+ decision). Push has its own
+    // permission - see grant_fofo_onboarding_push below.
     `INSERT INTO role_permissions (role, permission) VALUES
       ('admin','fofo_onboarding.view'), ('admin','fofo_onboarding.manage'), ('admin','fofo_onboarding.upload_document')
     ON CONFLICT (role, permission) DO NOTHING`,
@@ -1490,18 +1465,13 @@ Regards,', 'active', 4),
     // resolveAutoAssignee (lead-service.ts) now skips inactive rules too.
     `ALTER TABLE assignment_rules ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true`,
 
-    // Settings > Approvals. A small generic key/value store, not a
-    // dedicated table for this one threshold - the same shape can hold
-    // whatever the next scalar setting turns out to be, instead of a new
-    // single-purpose table every time. Seeded with the real value
-    // fofo-onboarding-service.ts's HIGH_VALUE_THRESHOLD was hardcoded to;
-    // that file now reads this row instead of the constant.
+    // A small generic key/value store for scalar app settings, instead of a
+    // new single-purpose table for each one.
     `CREATE TABLE IF NOT EXISTS app_settings (
       key VARCHAR(100) PRIMARY KEY,
       value TEXT NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`,
-    `INSERT INTO app_settings (key, value) VALUES ('high_value_deal_threshold', '1500000') ON CONFLICT (key) DO NOTHING`,
     `INSERT INTO role_permissions (role, permission) VALUES
       ('admin','app_settings.view'), ('admin','app_settings.manage')
     ON CONFLICT (role, permission) DO NOTHING`,
@@ -2493,6 +2463,19 @@ Regards,', 'active', 4),
        )
        INSERT INTO manager_change_log (user_id, old_manager_id, new_manager_id, changed_by)
        SELECT id, manager_id, NULL, NULL FROM cleared`
+    ),
+
+    // FOFO push no longer waits for any approval (client decision
+    // 2026-11-25): an interested client is pushed to SKIA FOFO straight away,
+    // by the field person who owns the lead. So the reporting-chain approval
+    // table and its "high value deal" threshold go, and pushing gets its own
+    // permission that Field Sales holds too (fofo_onboarding.manage now only
+    // means verifying documents).
+    once("drop_fofo_approval_chain", `DROP TABLE IF EXISTS lead_approval_steps`),
+    once("drop_high_value_threshold_setting", `DELETE FROM app_settings WHERE key = 'high_value_deal_threshold'`),
+    once(
+      "grant_fofo_onboarding_push",
+      `INSERT INTO role_permissions (role, permission) VALUES ('admin','fofo_onboarding.push'), ('manager','fofo_onboarding.push'), ('agent','fofo_onboarding.push') ON CONFLICT (role, permission) DO NOTHING`
     ),
   ];
 

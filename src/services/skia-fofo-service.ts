@@ -39,8 +39,8 @@ function isTokenRejection(status: number, message: string): boolean {
   return status === 401 || status === 403 || /(invalid|expired|wrong).{0,20}token|token.{0,20}(invalid|expired)/i.test(message);
 }
 
-// Every call here originates from this CRM pushing an already-approved FOFO
-// handoff, never from the store app itself - so is_from_cmr is always true,
+// Every call here originates from this CRM pushing a FOFO lead, never from
+// the store app itself - so is_from_cmr is always true,
 // not a per-call choice.
 export async function registerFofoUser(input: RegisterFofoUserInput): Promise<RegisterFofoUserResult> {
   if (!isSkiaFofoConfigured()) {
