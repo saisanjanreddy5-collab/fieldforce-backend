@@ -1,9 +1,8 @@
 import { getEffectivePermissions } from "./permission-service";
 import * as leaveService from "./leave-service";
 import * as expenseService from "./expense-service";
-import * as fofoOnboardingService from "./fofo-onboarding-service";
 
-export type ApprovalItemType = "onboarding_push" | "leave" | "expense";
+export type ApprovalItemType = "leave" | "expense";
 
 export interface ApprovalQueueItem {
   id: string;
@@ -20,13 +19,11 @@ export interface ApprovalQueueItem {
   stepLabel: string;
   isPolicyBreach: boolean;
   refId: string;
-  /** Full underlying leave/expense record for the detail panel - FOFO detail
-   *  instead fetches the real approval chain via GET /fofo-onboarding/:leadId,
-   *  since a single pending step doesn't carry the other steps or documents. */
+  /** Full underlying leave/expense record for the detail panel. */
   raw: unknown;
 }
 
-// Synthesized, not a real configured setting - none of these three
+// Synthesized, not a real configured setting - neither of these
 // subsystems has an enforced SLA deadline anywhere in the schema
 // (approval_bands.sla_hours exists but nothing reads it). 48h just mirrors
 // the "over 2 days" framing consistently across every item type.
@@ -87,27 +84,6 @@ async function buildExpenseItems(userId: string): Promise<ApprovalQueueItem[]> {
       raw: c,
     };
   });
-}
-
-async function buildFofoItems(userId: string): Promise<ApprovalQueueItem[]> {
-  const steps = await fofoOnboardingService.listPendingApprovalStepsForUser(userId);
-  return steps.map((s) => ({
-    id: `onboarding_push:${s.stepId}`,
-    type: "onboarding_push",
-    typeLabel: "Onboarding push",
-    title: s.storeName ? `${s.storeName}${s.storeCity ? ` — ${s.storeCity}` : ""}` : s.fullName,
-    subtitle: `FOFO · Lead #${s.leadNumber ?? "—"} · raised by ${s.ownerName ?? "Unknown"}`,
-    value: s.expectedValue,
-    valueLabel: s.expectedValue !== null ? formatMoney(s.expectedValue) : "—",
-    raisedByName: s.ownerName,
-    createdAt: s.createdAt,
-    waitingHours: waitingHoursSince(s.createdAt),
-    isSlaBreach: waitingHoursSince(s.createdAt) > SLA_BREACH_HOURS,
-    stepLabel: s.roleLabel,
-    isPolicyBreach: false,
-    refId: s.leadId,
-    raw: s,
-  }));
 }
 
 export interface ApprovalHistoryItem extends ApprovalQueueItem {
@@ -176,29 +152,6 @@ async function buildExpenseHistoryItems(userId: string): Promise<ApprovalHistory
   });
 }
 
-async function buildFofoHistoryItems(userId: string): Promise<ApprovalHistoryItem[]> {
-  const steps = await fofoOnboardingService.listDecidedStepsByUser(userId);
-  return steps.map((s) => ({
-    id: `onboarding_push:${s.stepId}`,
-    type: "onboarding_push",
-    typeLabel: "Onboarding push",
-    title: s.storeName ? `${s.storeName}${s.storeCity ? ` — ${s.storeCity}` : ""}` : s.fullName,
-    subtitle: `FOFO · Lead #${s.leadNumber ?? "—"} · raised by ${s.ownerName ?? "Unknown"}`,
-    value: s.expectedValue,
-    valueLabel: s.expectedValue !== null ? formatMoney(s.expectedValue) : "—",
-    raisedByName: s.ownerName,
-    createdAt: s.createdAt,
-    waitingHours: waitingHoursSince(s.createdAt),
-    isSlaBreach: false,
-    stepLabel: s.roleLabel,
-    isPolicyBreach: false,
-    refId: s.leadId,
-    raw: s,
-    decision: s.status,
-    decidedAt: s.decidedAt,
-  }));
-}
-
 export interface ApprovalHistoryResult {
   items: ApprovalHistoryItem[];
   total: number;
@@ -206,18 +159,17 @@ export interface ApprovalHistoryResult {
 
 // Merged and sorted in app code, same pattern getApprovalInbox already uses
 // for its own pending items - each source's own query is already capped at
-// a sane 300 rows (see listDecidedByUser/listDecidedStepsByUser), so a true
+// a sane 300 rows (see listDecidedByUser), so a true
 // cross-source SQL OFFSET isn't worth the complexity at this volume; page/
 // limit slice the merged, newest-first feed instead.
 export async function getApprovalHistory(userId: string, page: number, limit: number): Promise<ApprovalHistoryResult> {
   const { permissions } = await getEffectivePermissions(userId);
-  const [leaveItems, expenseItems, fofoItems] = await Promise.all([
+  const [leaveItems, expenseItems] = await Promise.all([
     permissions.includes("leave_requests.approve") ? buildLeaveHistoryItems(userId) : Promise.resolve([]),
     permissions.includes("expense_claims.approve") ? buildExpenseHistoryItems(userId) : Promise.resolve([]),
-    permissions.includes("fofo_onboarding.manage") ? buildFofoHistoryItems(userId) : Promise.resolve([]),
   ]);
 
-  const all = [...leaveItems, ...expenseItems, ...fofoItems].sort(
+  const all = [...leaveItems, ...expenseItems].sort(
     (a, b) => new Date(b.decidedAt).getTime() - new Date(a.decidedAt).getTime()
   );
 
@@ -236,13 +188,12 @@ export interface ApprovalInboxStats {
 
 export async function getApprovalInbox(userId: string): Promise<{ items: ApprovalQueueItem[]; stats: ApprovalInboxStats }> {
   const { permissions } = await getEffectivePermissions(userId);
-  const [leaveItems, expenseItems, fofoItems] = await Promise.all([
+  const [leaveItems, expenseItems] = await Promise.all([
     permissions.includes("leave_requests.approve") ? buildLeaveItems(userId) : Promise.resolve([]),
     permissions.includes("expense_claims.approve") ? buildExpenseItems(userId) : Promise.resolve([]),
-    permissions.includes("fofo_onboarding.manage") ? buildFofoItems(userId) : Promise.resolve([]),
   ]);
 
-  const items = [...leaveItems, ...expenseItems, ...fofoItems].sort(
+  const items = [...leaveItems, ...expenseItems].sort(
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
   );
 
@@ -251,7 +202,6 @@ export async function getApprovalInbox(userId: string): Promise<{ items: Approva
     await Promise.all([
       permissions.includes("leave_requests.approve") ? leaveService.listDecidedThisWeek(userId) : Promise.resolve([]),
       permissions.includes("expense_claims.approve") ? expenseService.listDecidedThisWeek(userId) : Promise.resolve([]),
-      permissions.includes("fofo_onboarding.manage") ? fofoOnboardingService.listDecidedStepsThisWeek(userId) : Promise.resolve([]),
     ])
   ).flat();
 

@@ -26,12 +26,3 @@ export async function setSetting(key: string, value: string) {
   const row = result.rows[0];
   return { key: row.key, value: row.value, updatedAt: row.updated_at };
 }
-
-// Small typed helper for callers that need this as a real number (the
-// high-value deal threshold), not the raw string every row is stored as.
-export async function getNumericSetting(key: string, fallback: number): Promise<number> {
-  const result = await pool.query<AppSettingRow>("SELECT value FROM app_settings WHERE key = $1", [key]);
-  const raw = result.rows[0]?.value;
-  const parsed = raw !== undefined ? Number(raw) : NaN;
-  return Number.isFinite(parsed) ? parsed : fallback;
-}

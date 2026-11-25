@@ -3,230 +3,37 @@ import { pool } from "../config/db";
 import { ApiError } from "../utils/api-error";
 import * as leadService from "./lead-service";
 import * as leadDocumentService from "./lead-document-service";
-import { getNumericSetting } from "./app-settings-service";
 import { recordAuditEvent } from "./audit-log-service";
 import { registerFofoUser } from "./skia-fofo-service";
 import { SUBTREE_CTE } from "../utils/subtree";
 
-// A deal size above which the "Regional Head" condition actually applies -
-// real, not cosmetic: below this, the third approval step is auto-marked
-// not_applicable instead of waiting forever. Was a hardcoded constant;
-// Settings > Approvals now edits this same app_settings row for real, so a
-// policy change here takes effect on the next lead without a redeploy.
-const DEFAULT_HIGH_VALUE_THRESHOLD = 1_500_000;
-
-async function getHighValueThreshold(): Promise<number> {
-  return getNumericSetting("high_value_deal_threshold", DEFAULT_HIGH_VALUE_THRESHOLD);
-}
-
-interface ApprovalStepRow {
-  id: string;
-  lead_id: string;
-  step_order: number;
-  role_label: string;
-  approver_user_id: string | null;
-  status: "pending" | "approved" | "rejected" | "not_applicable";
-  condition_note: string | null;
-  decided_by: string | null;
-  decided_at: string | null;
-  created_at: string;
-}
-
-function toPublicStep(row: ApprovalStepRow, approverName: string | null, isCurrentTurn: boolean) {
-  return {
-    id: row.id,
-    leadId: row.lead_id,
-    stepOrder: row.step_order,
-    roleLabel: row.role_label,
-    approverUserId: row.approver_user_id,
-    approverName,
-    status: row.status,
-    conditionNote: row.condition_note,
-    decidedBy: row.decided_by,
-    decidedAt: row.decided_at,
-    isCurrentTurn,
-  };
-}
-
-// Named approvers are derived from the real manager_id chain above the
-// lead's owner - never a fabricated "Ops" role, since FieldForce has no
-// such role. Step 1 = owner's direct manager, step 2 = their manager
-// (skip-level), step 3 = the topmost person in that same line, required
-// only when the lead's real expected_value clears the configured threshold.
-async function deriveApprovalChain(leadId: string, ownerId: string, expectedValue: number | null): Promise<void> {
-  const existing = await pool.query("SELECT 1 FROM lead_approval_steps WHERE lead_id = $1 LIMIT 1", [leadId]);
-  if ((existing.rowCount ?? 0) > 0) return;
-
-  const chainResult = await pool.query<{ id: string }>(
-    `WITH RECURSIVE chain AS (
-       SELECT id, manager_id, 0 AS depth FROM users WHERE id = $1
-       UNION ALL
-       SELECT u.id, u.manager_id, c.depth + 1
-       FROM users u INNER JOIN chain c ON u.id = c.manager_id
-       WHERE c.depth < 20
-     )
-     SELECT id FROM chain WHERE depth > 0 ORDER BY depth ASC`,
-    [ownerId]
-  );
-  const chain = chainResult.rows.map((r) => r.id);
-
-  const steps: { order: number; role: string; approverId: string; status: string; note: string | null }[] = [];
-  if (chain.length >= 1) {
-    steps.push({ order: 1, role: "Reporting manager approval", approverId: chain[0], status: "pending", note: null });
-  }
-  if (chain.length >= 2) {
-    steps.push({ order: 2, role: "Senior approval", approverId: chain[1], status: "pending", note: null });
-  }
-  if (chain.length >= 3 && chain[chain.length - 1] !== chain[1]) {
-    const threshold = await getHighValueThreshold();
-    const isHighValue = expectedValue !== null && expectedValue > threshold;
-    steps.push({
-      order: 3,
-      role: "Regional head approval",
-      approverId: chain[chain.length - 1],
-      status: isHighValue ? "pending" : "not_applicable",
-      note: `Required only when expected value exceeds ₹${(threshold / 100000).toFixed(0)}L`,
-    });
-  }
-
-  for (const step of steps) {
-    await pool.query(
-      `INSERT INTO lead_approval_steps (lead_id, step_order, role_label, approver_user_id, status, condition_note)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (lead_id, step_order) DO NOTHING`,
-      [leadId, step.order, step.role, step.approverId, step.status, step.note]
-    );
-  }
-}
-
-async function listApprovalSteps(leadId: string, ownerId: string, expectedValue: number | null) {
-  await deriveApprovalChain(leadId, ownerId, expectedValue);
-
-  const result = await pool.query<ApprovalStepRow & { approver_name: string | null }>(
-    `SELECT s.*, u.name AS approver_name FROM lead_approval_steps s
-     LEFT JOIN users u ON u.id = s.approver_user_id
-     WHERE s.lead_id = $1 ORDER BY s.step_order ASC`,
-    [leadId]
-  );
-
-  // A step is "waiting" (not yet its turn) rather than genuinely "pending"
-  // until every earlier step has resolved - matches the reference's visual
-  // distinction between an active Pending step and later Waiting ones.
-  // approved/not_applicable count as resolved; a rejection kills the whole
-  // chain (matches decideStep/pushToOnboardingApp), so nothing after it is
-  // ever a current turn.
-  let priorResolved = true;
-  let chainRejected = false;
-  return result.rows.map((row) => {
-    if (row.status === "rejected") chainRejected = true;
-    const isCurrentTurn = row.status === "pending" && priorResolved && !chainRejected;
-    if (row.status === "pending") {
-      priorResolved = false;
-    }
-    return toPublicStep(row, row.approver_name, isCurrentTurn);
-  });
-}
-
-export async function decideStep(
-  stepId: string,
-  decision: "approved" | "rejected",
-  requestingUserId: string,
-  requestingRole: string,
-  ipAddress?: string | null
-) {
-  const stepResult = await pool.query<ApprovalStepRow>("SELECT * FROM lead_approval_steps WHERE id = $1", [stepId]);
-  if (stepResult.rows.length === 0) {
-    throw new ApiError(404, "Approval step not found");
-  }
-  const step = stepResult.rows[0];
-
-  if (requestingRole !== "admin" && step.approver_user_id !== requestingUserId) {
-    throw new ApiError(403, "Only the assigned approver can decide this step");
-  }
-  if (step.status !== "pending") {
-    throw new ApiError(422, "This step has already been decided");
-  }
-
-  // A rejection anywhere kills the whole chain - matches pushToOnboardingApp,
-  // which already blocks on any rejected step regardless of position. Without
-  // this, a later step could still be approved after an earlier rejection,
-  // leaving a confusing "partially approved but overall rejected" handoff.
-  const anyRejected = await pool.query("SELECT 1 FROM lead_approval_steps WHERE lead_id = $1 AND status = 'rejected' LIMIT 1", [
-    step.lead_id,
-  ]);
-  if ((anyRejected.rowCount ?? 0) > 0) {
-    throw new ApiError(422, "This handoff already has a rejected step - no further steps can be decided");
-  }
-
-  const priorPending = await pool.query(
-    "SELECT 1 FROM lead_approval_steps WHERE lead_id = $1 AND step_order < $2 AND status = 'pending' LIMIT 1",
-    [step.lead_id, step.step_order]
-  );
-  if ((priorPending.rowCount ?? 0) > 0) {
-    throw new ApiError(422, "Earlier approval steps must be resolved first");
-  }
-
-  // Guarded by "AND status = 'pending'" (not just the pre-read above) so a
-  // concurrent/duplicate decision on the same step can't silently overwrite
-  // this one - the loser's UPDATE affects zero rows and surfaces a conflict.
-  const decided = await pool.query(
-    "UPDATE lead_approval_steps SET status = $1, decided_by = $2, decided_at = now() WHERE id = $3 AND status = 'pending'",
-    [decision, requestingUserId, stepId]
-  );
-  if (decided.rowCount === 0) {
-    throw new ApiError(422, "This step has already been decided");
-  }
-
-  const leadResult = await pool.query<{ full_name: string; store_name: string | null }>(
-    "SELECT full_name, store_name FROM leads WHERE id = $1",
-    [step.lead_id]
-  );
-  const leadLabel = leadResult.rows[0]?.store_name ?? leadResult.rows[0]?.full_name ?? "Unknown lead";
-  await recordAuditEvent({
-    entityType: "fofo_approval_step",
-    entityId: stepId,
-    entityLabel: leadLabel,
-    action: "approval_decided",
-    summary: `Approval ${decision} - ${leadLabel}`,
-    oldValue: "Pending",
-    newValue: decision === "approved" ? "Approved" : "Rejected",
-    actorId: requestingUserId,
-    ipAddress,
-  });
-
-  return step.lead_id;
-}
-
-// requestingRole mirrors decideStep's own admin bypass (below) - an admin
-// who can already decide a step regardless of subtree/approver match needs
-// to be able to open the page that leads to that decision in the first
-// place, or the bypass there is unreachable in practice.
+// Admins open any handoff (the same admin-sees-everything rule as
+// listFofoOnboardings below); everyone else only leads they can see.
 export async function getHandoff(leadId: string, requestingUserId: string, requestingRole: string) {
   const skipVisibilityCheck = requestingRole === "admin";
   const lead = await leadService.getLeadById(leadId, requestingUserId, { skipVisibilityCheck });
-  const steps = await listApprovalSteps(leadId, lead.ownerId!, lead.expectedValue);
   const documents = await leadDocumentService.listDocuments(leadId);
   // Fetched here (not left to the frontend's own separate /leads/:id/consent
   // call) so it shares the exact same admin bypass as the lead above - an
   // admin viewing a handoff outside their subtree was otherwise getting the
-  // lead fine but a 403 on this one, which the page treated as a total
-  // failure to load (see FofoHandoffDetail.tsx's Promise.all).
+  // lead fine but a 403 on this one.
   const consent = await leadService.getLeadConsent(leadId, requestingUserId, { skipVisibilityCheck });
-  return { lead, approvalSteps: steps, documents, consent };
+  return { lead, documents, consent };
 }
 
-// Validates every approval step is resolved (approved or not_applicable),
-// registers the store owner's SKIA FOFO app login via skia-fofo-service, then
-// records a real timestamp and a generated reference code so the "pushed"
-// state is genuine, persisted data rather than a UI-only toggle. If the SKIA
-// FOFO call fails, nothing here is marked pushed - the whole point of this
-// step is that "pushed" means a real app account exists over there, not just
-// that someone clicked the button.
+// Registers the store owner's SKIA FOFO app login via skia-fofo-service, then
+// records a real timestamp and a generated reference code so "pushed" is
+// genuine, persisted data rather than a UI-only toggle. No approval and no
+// handoff step is required (client decision 2026-11-25: an interested client
+// is pushed straight away, the field person fills the 5 steps only if they
+// want to). The one hard requirement is the lead's mobile number, because
+// that number IS the store owner's SKIA FOFO login. If the SKIA FOFO call
+// fails, nothing here is marked pushed.
 // Leads with a push currently in flight in this process - a double-click
 // (or two people pressing it together) must not register the store twice.
 const pushesInFlight = new Set<string>();
 
-export async function pushToOnboardingApp(leadId: string, requestingUserId: string, requestingRole: string) {
+export async function pushToOnboardingApp(leadId: string, requestingUserId: string, requestingRole: string, ipAddress?: string | null) {
   const inScope = await leadService.isLeadInOwnerScope(leadId, requestingUserId);
   if (!inScope) {
     throw new ApiError(403, "You do not have access to this lead");
@@ -236,58 +43,29 @@ export async function pushToOnboardingApp(leadId: string, requestingUserId: stri
   }
   pushesInFlight.add(leadId);
   try {
-    return await pushToOnboardingAppOnce(leadId, requestingUserId, requestingRole);
+    return await pushToOnboardingAppOnce(leadId, requestingUserId, requestingRole, ipAddress);
   } finally {
     pushesInFlight.delete(leadId);
   }
 }
 
-async function pushToOnboardingAppOnce(leadId: string, requestingUserId: string, requestingRole: string) {
-
-  const leadResult = await pool.query<{ full_name: string; phone: string | null; push_status: string; pushed_at: string | null; owner_id: string | null; expected_value: string | null }>(
-    "SELECT full_name, phone, push_status, pushed_at, owner_id, expected_value FROM leads WHERE id = $1",
+async function pushToOnboardingAppOnce(leadId: string, requestingUserId: string, requestingRole: string, ipAddress?: string | null) {
+  const leadResult = await pool.query<{ full_name: string; store_name: string | null; phone: string | null; push_status: string; pushed_at: string | null }>(
+    "SELECT full_name, store_name, phone, push_status, pushed_at FROM leads WHERE id = $1 AND is_deleted = false",
     [leadId]
   );
   const lead = leadResult.rows[0];
+  if (!lead) {
+    throw new ApiError(404, "Lead not found");
+  }
   // Client-confirmed: the same person legitimately owns many franchises (one
   // lead each, one push each) - that's fine and must stay fine. What's never
-  // fine is THIS one lead being pushed a second time - nothing here used to
-  // check that, so clicking the button again re-sent the same phone number
-  // to SKIA FOFO, which correctly rejected it as already registered. That
-  // external rejection was real, just surfaced far too late (after a full
-  // approval chain) and far too confusingly for what is actually a simple,
-  // locally-known fact.
-  if (lead?.push_status === "pushed") {
+  // fine is THIS one lead being pushed a second time.
+  if (lead.push_status === "pushed") {
     throw new ApiError(422, `This lead was already pushed to the onboarding app on ${new Date(lead.pushed_at!).toLocaleDateString()}`);
   }
-
-  // The approval chain is normally created the first time someone opens
-  // the handoff - make sure it exists here too, so pushing straight away
-  // can never skip it.
-  if (lead?.owner_id) {
-    await deriveApprovalChain(leadId, lead.owner_id, lead.expected_value === null ? null : Number(lead.expected_value));
-  }
-  // The "Regional head approval" step was marked not-applicable or pending
-  // from the expected value at the moment the chain was first built. If the
-  // value has since been raised above the threshold, that approval is now
-  // required - reopen it rather than pushing a high-value store without it.
-  const highValueThreshold = await getHighValueThreshold();
-  if (lead?.expected_value !== null && lead?.expected_value !== undefined && Number(lead.expected_value) > highValueThreshold) {
-    await pool.query(
-      "UPDATE lead_approval_steps SET status = 'pending' WHERE lead_id = $1 AND step_order = 3 AND status = 'not_applicable'",
-      [leadId]
-    );
-  }
-  const steps = await pool.query<ApprovalStepRow>("SELECT * FROM lead_approval_steps WHERE lead_id = $1", [leadId]);
-  if (steps.rows.some((s) => s.status === "rejected")) {
-    throw new ApiError(422, "This handoff has a rejected approval step and cannot be pushed");
-  }
-  if (steps.rows.some((s) => s.status === "pending")) {
-    throw new ApiError(422, "All approval steps must be approved before pushing");
-  }
-
-  if (!lead?.phone) {
-    throw new ApiError(422, "This lead has no phone number on file - required to register the store app user");
+  if (!lead.phone) {
+    throw new ApiError(422, "Add the client's mobile number to this lead first - it becomes their SKIA FOFO app login");
   }
 
   const registration = await registerFofoUser({ userName: lead.full_name, phoneNumber: lead.phone });
@@ -297,6 +75,20 @@ async function pushToOnboardingAppOnce(leadId: string, requestingUserId: string,
     "UPDATE leads SET push_status = 'pushed', onboarding_app_id = $1, pushed_at = now(), updated_at = now() WHERE id = $2 AND push_status <> 'pushed'",
     [onboardingAppId, leadId]
   );
+
+  // With no approver any more, this is the record of who pushed and when.
+  const leadLabel = lead.store_name ?? lead.full_name;
+  await recordAuditEvent({
+    entityType: "lead",
+    entityId: leadId,
+    entityLabel: leadLabel,
+    action: "pushed_to_onboarding",
+    summary: `Pushed to SKIA FOFO onboarding app - ${leadLabel} (${onboardingAppId})`,
+    oldValue: "Not pushed",
+    newValue: "Pushed",
+    actorId: requestingUserId,
+    ipAddress,
+  });
 
   const handoff = await getHandoff(leadId, requestingUserId, requestingRole);
   const message = registration.alreadyRegistered
@@ -312,11 +104,8 @@ const LIST_COLUMNS = `
   l.created_at AS "createdAt"
 `;
 
-// Same admin-sees-everything rule as getHandoff/decideStep, for the same
-// reason: an admin who can already open and decide any FOFO approval
-// regardless of subtree (see getHandoff's own comment) should see that same
-// lead listed here too - the two screens disagreeing which admin "owns" a
-// handoff is exactly the confusing state this is meant to avoid.
+// Same admin-sees-everything rule as getHandoff: an admin who can open any
+// handoff sees every FOFO lead listed here too.
 export async function listFofoOnboardings(requestingUserId: string, requestingRole: string, page: number, limit: number) {
   const scopeClause = requestingRole === "admin" ? "true" : "l.owner_id IN (SELECT id FROM subtree)";
 
@@ -343,104 +132,4 @@ export async function listFofoOnboardings(requestingUserId: string, requestingRo
     leads: result.rows.map((row) => ({ ...row, expectedValue: row.expectedValue === null ? null : Number(row.expectedValue) })),
     total: Number(countResult.rows[0].count),
   };
-}
-
-interface PendingStepRow {
-  step_id: string;
-  lead_id: string;
-  lead_number: number | null;
-  full_name: string;
-  store_name: string | null;
-  store_city: string | null;
-  owner_name: string | null;
-  expected_value: string | null;
-  step_order: number;
-  role_label: string;
-  condition_note: string | null;
-  created_at: string;
-}
-
-// For the Approvals inbox - "pending on me right now" across every FOFO
-// handoff, not scoped to one lead. A step only counts when it's genuinely
-// this approver's current turn: the same two conditions listApprovalSteps's
-// isCurrentTurn and decideStep both already enforce (nothing earlier in the
-// same lead's chain still pending, nothing in that chain already rejected).
-export async function listPendingApprovalStepsForUser(userId: string) {
-  const result = await pool.query<PendingStepRow>(
-    `SELECT s.id AS step_id, s.lead_id, l.lead_number, l.full_name, l.store_name, l.store_city,
-       u.name AS owner_name, l.expected_value, s.step_order, s.role_label, s.condition_note, s.created_at
-     FROM lead_approval_steps s
-     JOIN leads l ON l.id = s.lead_id
-     LEFT JOIN users u ON u.id = l.owner_id
-     WHERE s.approver_user_id = $1 AND s.status = 'pending'
-       AND NOT EXISTS (SELECT 1 FROM lead_approval_steps s2 WHERE s2.lead_id = s.lead_id AND s2.status = 'rejected')
-       AND NOT EXISTS (SELECT 1 FROM lead_approval_steps s2 WHERE s2.lead_id = s.lead_id AND s2.step_order < s.step_order AND s2.status = 'pending')
-     ORDER BY s.created_at ASC`,
-    [userId]
-  );
-  return result.rows.map((row) => ({
-    stepId: row.step_id,
-    leadId: row.lead_id,
-    leadNumber: row.lead_number,
-    fullName: row.full_name,
-    storeName: row.store_name,
-    storeCity: row.store_city,
-    ownerName: row.owner_name,
-    expectedValue: row.expected_value === null ? null : Number(row.expected_value),
-    stepOrder: row.step_order,
-    roleLabel: row.role_label,
-    conditionNote: row.condition_note,
-    createdAt: row.created_at,
-  }));
-}
-
-// For the Approvals History tab - full decision history on steps this user
-// personally decided, not just the last 7 days (see listDecidedStepsThisWeek
-// below, used only for the inbox's aggregate stat). Same cap reasoning as
-// leave-service's own listDecidedByUser - a generous safety ceiling, not a
-// business cap, since every past decision must stay visible here.
-export async function listDecidedStepsByUser(userId: string) {
-  const result = await pool.query<
-    PendingStepRow & { decided_at: string; status: "approved" | "rejected" }
-  >(
-    `SELECT s.id AS step_id, s.lead_id, l.lead_number, l.full_name, l.store_name, l.store_city,
-       u.name AS owner_name, l.expected_value, s.step_order, s.role_label, s.condition_note, s.created_at,
-       s.decided_at, s.status
-     FROM lead_approval_steps s
-     JOIN leads l ON l.id = s.lead_id
-     LEFT JOIN users u ON u.id = l.owner_id
-     WHERE s.decided_by = $1 AND s.status IN ('approved', 'rejected')
-     ORDER BY s.decided_at DESC
-     LIMIT 10000`,
-    [userId]
-  );
-  return result.rows.map((row) => ({
-    stepId: row.step_id,
-    leadId: row.lead_id,
-    leadNumber: row.lead_number,
-    fullName: row.full_name,
-    storeName: row.store_name,
-    storeCity: row.store_city,
-    ownerName: row.owner_name,
-    expectedValue: row.expected_value === null ? null : Number(row.expected_value),
-    stepOrder: row.step_order,
-    roleLabel: row.role_label,
-    conditionNote: row.condition_note,
-    createdAt: row.created_at,
-    decidedAt: row.decided_at,
-    status: row.status,
-  }));
-}
-
-// For the Approvals inbox's "approved this week" stat - see leave-service's
-// listDecidedThisWeek, same shape (this one has no second-tier distinction,
-// just decided_by directly).
-export async function listDecidedStepsThisWeek(userId: string) {
-  const result = await pool.query<{ created_at: string; decided_at: string }>(
-    `SELECT created_at, decided_at FROM lead_approval_steps
-     WHERE decided_by = $1 AND decided_at IS NOT NULL AND decided_at > now() - interval '7 days'
-       AND status IN ('approved', 'rejected')`,
-    [userId]
-  );
-  return result.rows;
 }
