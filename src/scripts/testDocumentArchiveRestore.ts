@@ -1,7 +1,8 @@
 import { pool } from "../config/db";
-import { createLead } from "../services/lead-service";
+import { createLead, getLeadTimeline } from "../services/lead-service";
 import {
   saveUploadedFile,
+  updateDocumentStatus,
   deleteDocumentFile,
   listDocuments,
   listArchivedDocuments,
@@ -48,7 +49,8 @@ async function main(): Promise<void> {
     const panDoc = liveBeforeDelete.find((d) => d.docType === "pan_card")!;
     assertTrue("Live slot currently has v2", panDoc.originalFilename === "pan-v2.pdf");
 
-    await deleteDocumentFile(panDoc.id);
+    await updateDocumentStatus(panDoc.id, "verified", undefined, testadminId);
+    await deleteDocumentFile(panDoc.id, testadminId);
     const liveAfterDelete = await listDocuments(lead.id);
     assertTrue("Live slot is empty after deleting", !liveAfterDelete.find((d) => d.docType === "pan_card")!.hasFile);
 
@@ -57,7 +59,7 @@ async function main(): Promise<void> {
     const v2Entry = historyAfterDelete.find((e) => e.originalFilename === "pan-v2.pdf");
     assertTrue("v2's entry is marked 'deleted'", v2Entry?.archivedReason === "deleted");
 
-    const restored = await restoreArchivedDocument(v2Entry!.id);
+    const restored = await restoreArchivedDocument(v2Entry!.id, testadminId);
     assertTrue("Restoring brings the file back as the live document", restored.hasFile && restored.originalFilename === "pan-v2.pdf");
 
     const liveAfterRestore = await listDocuments(lead.id);
@@ -68,7 +70,7 @@ async function main(): Promise<void> {
 
     // Restoring v1 now (while v2 is live) must archive v2 first, not just overwrite it.
     const v1Entry = historyAfterRestore.find((e) => e.originalFilename === "pan-v1.pdf");
-    await restoreArchivedDocument(v1Entry!.id);
+    await restoreArchivedDocument(v1Entry!.id, testadminId);
     const historyAfterSecondRestore = await listArchivedDocuments(lead.id, "pan_card");
     assertTrue(
       "Restoring a different version archives whatever was live first - 3 entries now",
@@ -79,6 +81,18 @@ async function main(): Promise<void> {
       "Live slot now shows v1 again",
       liveAfterSecondRestore.find((d) => d.docType === "pan_card")!.originalFilename === "pan-v1.pdf"
     );
+
+    // Every document action shows in the lead's History tab, by who did it.
+    const timeline = await getLeadTimeline(lead.id, testadminId);
+    const docEvents = timeline.filter((e) => e.kind === "audit" && e.event!.action.startsWith("document_")).map((e) => e.event!);
+    const actions = docEvents.map((e) => e.action);
+    assertTrue("History: lead created entry", timeline.some((e) => e.kind === "audit" && e.event!.action === "created"));
+    assertTrue("History: upload logged", actions.includes("document_uploaded"));
+    assertTrue("History: replace logged (pan-v1.pdf -> pan-v2.pdf)", docEvents.some((e) => e.action === "document_replaced" && e.oldValue === "pan-v1.pdf" && e.newValue === "pan-v2.pdf"));
+    assertTrue("History: verify logged", docEvents.some((e) => e.action === "document_status_changed" && e.newValue === "Verified"));
+    assertTrue("History: remove logged", actions.includes("document_removed"));
+    assertTrue("History: both restores logged", actions.filter((a) => a === "document_restored").length === 2);
+    assertTrue("History: every document entry names who did it", docEvents.every((e) => e.actorName !== null));
 
     console.log(`\n${failures === 0 ? "ALL ASSERTIONS PASSED" : `${failures} ASSERTION(S) FAILED`}`);
   } finally {

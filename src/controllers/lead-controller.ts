@@ -128,12 +128,12 @@ export const restore = asyncHandler(async (req: Request, res: Response) => {
 });
 
 export const share = asyncHandler(async (req: Request, res: Response) => {
-  await leadService.shareLead(String(req.params.id), req.body.userId, req.user!.id);
+  await leadService.shareLead(String(req.params.id), req.body.userId, req.user!.id, req.ip);
   sendSuccess(res, null, "Lead shared", 201);
 });
 
 export const unshare = asyncHandler(async (req: Request, res: Response) => {
-  await leadService.unshareLead(String(req.params.id), String(req.params.userId), req.user!.id);
+  await leadService.unshareLead(String(req.params.id), String(req.params.userId), req.user!.id, req.ip);
   sendSuccess(res, null, "Share removed");
 });
 

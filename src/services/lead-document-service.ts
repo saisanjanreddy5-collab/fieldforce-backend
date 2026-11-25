@@ -4,6 +4,7 @@ import crypto from "crypto";
 import multer from "multer";
 import { pool } from "../config/db";
 import { ApiError } from "../utils/api-error";
+import { recordAuditEvent } from "./audit-log-service";
 
 const DOCUMENT_TYPES = ["pan_card", "gst_certificate", "shop_photos", "rent_agreement", "cancelled_cheque", "consent_form"] as const;
 export type DocumentType = (typeof DOCUMENT_TYPES)[number];
@@ -113,11 +114,47 @@ export async function getDocumentType(documentId: string): Promise<string> {
   return (await getDocumentRow(documentId)).doc_type;
 }
 
+const DOCUMENT_STATUS_LABELS: Record<string, string> = {
+  not_uploaded: "Not uploaded",
+  in_review: "In review",
+  verified: "Verified",
+  missing: "Missing",
+};
+
+// Every document action lands in the lead's History tab.
+async function logDocumentEvent(
+  leadId: string,
+  action: string,
+  summary: string,
+  oldValue: string | null,
+  newValue: string | null,
+  actorId: string | null,
+  ipAddress?: string | null
+) {
+  const lead = await pool.query<{ full_name: string }>("SELECT full_name FROM leads WHERE id = $1", [leadId]);
+  await recordAuditEvent({
+    entityType: "lead",
+    entityId: leadId,
+    entityLabel: lead.rows[0]?.full_name ?? "Unknown lead",
+    action,
+    summary,
+    oldValue,
+    newValue,
+    actorId,
+    ipAddress,
+  });
+}
+
+function docLabel(docType: string): string {
+  return DOCUMENT_TYPE_LABELS[docType as DocumentType] ?? docType;
+}
+
 export async function saveUploadedFile(
   leadId: string,
   docType: string,
   file: Express.Multer.File,
-  uploadedByUserId: string
+  uploadedByUserId: string,
+  ipAddress?: string | null
 ) {
   if (!DOCUMENT_TYPES.includes(docType as DocumentType)) {
     fs.unlink(file.path, () => undefined);
@@ -153,16 +190,43 @@ export async function saveUploadedFile(
      RETURNING *`,
     [leadId, docType, file.path, file.originalname, uploadedByUserId]
   );
+  await logDocumentEvent(
+    leadId,
+    previous?.file_path ? "document_replaced" : "document_uploaded",
+    `${previous?.file_path ? "replaced" : "uploaded"} the ${docLabel(docType)}`,
+    previous?.original_filename ?? null,
+    file.originalname,
+    uploadedByUserId,
+    ipAddress
+  );
   return toPublicDocument(result.rows[0]);
 }
 
-export async function updateDocumentStatus(documentId: string, status: "verified" | "missing" | "in_review", notes?: string) {
+export async function updateDocumentStatus(
+  documentId: string,
+  status: "verified" | "missing" | "in_review",
+  notes: string | undefined,
+  actorId: string,
+  ipAddress?: string | null
+) {
+  const before = await getDocumentRow(documentId);
   const result = await pool.query<DocumentRow>(
     `UPDATE lead_documents SET status = $1, notes = COALESCE($2, notes), updated_at = now() WHERE id = $3 RETURNING *`,
     [status, notes ?? null, documentId]
   );
   if (result.rows.length === 0) {
     throw new ApiError(404, "Document not found");
+  }
+  if (before.status !== status || (notes && notes !== before.notes)) {
+    await logDocumentEvent(
+      before.lead_id,
+      "document_status_changed",
+      `marked the ${docLabel(before.doc_type)} as ${DOCUMENT_STATUS_LABELS[status] ?? status}${notes ? ` - "${notes}"` : ""}`,
+      DOCUMENT_STATUS_LABELS[before.status] ?? before.status,
+      DOCUMENT_STATUS_LABELS[status] ?? status,
+      actorId,
+      ipAddress
+    );
   }
   return toPublicDocument(result.rows[0]);
 }
@@ -236,7 +300,7 @@ export async function getArchivedDocumentFile(archiveId: string): Promise<{ file
 // Pulls an old version back into the live slot. Whatever is currently live
 // (if anything) is archived first with reason 'replaced', same as a normal
 // re-upload - nothing is ever silently overwritten and lost, even here.
-export async function restoreArchivedDocument(archiveId: string) {
+export async function restoreArchivedDocument(archiveId: string, actorId: string, ipAddress?: string | null) {
   const archiveResult = await pool.query<DocumentArchiveRow>("SELECT * FROM lead_document_archive WHERE id = $1", [archiveId]);
   if (archiveResult.rows.length === 0) {
     throw new ApiError(404, "Archived document not found");
@@ -270,10 +334,19 @@ export async function restoreArchivedDocument(archiveId: string) {
   if (result.rows.length === 0) {
     throw new ApiError(404, "Document not found");
   }
+  await logDocumentEvent(
+    archived.lead_id,
+    "document_restored",
+    `restored an earlier ${docLabel(archived.doc_type)}`,
+    live?.original_filename ?? null,
+    archived.original_filename,
+    actorId,
+    ipAddress
+  );
   return toPublicDocument(result.rows[0]);
 }
 
-export async function deleteDocumentFile(documentId: string) {
+export async function deleteDocumentFile(documentId: string, actorId: string, ipAddress?: string | null) {
   const row = await getDocumentRow(documentId);
   // Archived (logged + kept on disk), never unlinked - same "never destroy
   // data" rule as every other delete action in this app.
@@ -289,5 +362,8 @@ export async function deleteDocumentFile(documentId: string) {
      WHERE id = $1 RETURNING *`,
     [documentId]
   );
+  if (row.file_path) {
+    await logDocumentEvent(row.lead_id, "document_removed", `removed the ${docLabel(row.doc_type)}`, row.original_filename, null, actorId, ipAddress);
+  }
   return toPublicDocument(result.rows[0]);
 }

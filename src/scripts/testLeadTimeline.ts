@@ -1,10 +1,11 @@
 import { pool } from "../config/db";
 import { createLead, getLeadTimeline } from "../services/lead-service";
-import { logCallDisposition, escalateToSlc } from "../services/lead-call-center-service";
+import { logCallDisposition, escalateToSlc, startFlc } from "../services/lead-call-center-service";
 import { addComment } from "../services/activity-service";
 
 // Verifies the Lead Detail "History" tab's backing endpoint (getLeadTimeline):
-// a call logged, a remark left on it, and a tier escalation must all show up
+// the lead being created, FLC being started, a call logged, a remark left on
+// it, and a tier escalation must all show up
 // merged into one feed, newest first, each one correctly attributed to the
 // real person who did it - not just the underlying data existing somewhere.
 
@@ -30,6 +31,8 @@ async function main(): Promise<void> {
     undefined,
     { requiresQualification: true, assignToCreator: true }
   );
+  // Every lead starts at New - FLC is started before working it.
+  await startFlc(lead.id, cc1Id);
 
   await logCallDisposition(lead.id, { disposition: "Call Done And Interested", notes: "Spoke to the customer, good sign" }, cc1Id);
   const activityRow = await pool.query<{ id: string }>(
@@ -43,7 +46,7 @@ async function main(): Promise<void> {
 
   const timeline = await getLeadTimeline(lead.id, cc1Id);
 
-  assertEqual("Timeline has exactly 3 entries (call + remark + escalation)", timeline.length, 3);
+  assertEqual("Timeline has exactly 5 entries (created + FLC started + call + remark + escalation)", timeline.length, 5);
   assertEqual("Newest entry is the escalation", timeline[0]?.kind, "audit");
   assertEqual("Escalation is attributed to the real actor", timeline[0]?.event?.actorName, cc1Name);
   assertEqual("Middle entry is the remark", timeline[1]?.kind, "comment");
@@ -54,8 +57,12 @@ async function main(): Promise<void> {
   assertEqual("Call is attributed to the real actor", timeline[2]?.activity?.createdByName, cc1Name);
   assertEqual("Call's logged disposition came through", timeline[2]?.activity?.details.disposition, "Call Done And Interested");
 
+  const firstTwo = timeline.slice(3).map((e) => e.event?.action).sort();
+  assertEqual("The two oldest entries are the lead being created and FLC being started", firstTwo.join(","), "created,status_changed");
+  assertTrue("Created entry is attributed to the real creator", timeline.slice(3).every((e) => e.event?.actorName === cc1Name));
+
   const dates = timeline.map((e) => new Date(e.date).getTime());
-  assertTrue("Entries are sorted newest first", dates[0] >= dates[1] && dates[1] >= dates[2]);
+  assertTrue("Entries are sorted newest first", dates.every((d, i) => i === 0 || dates[i - 1] >= d));
 
   console.log(`\n${failures === 0 ? "ALL ASSERTIONS PASSED" : `${failures} ASSERTION(S) FAILED`}`);
 

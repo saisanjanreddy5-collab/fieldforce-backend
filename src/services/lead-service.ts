@@ -739,6 +739,9 @@ export interface CreateLeadOptions {
   //   new lead, the enquiry is logged on the existing lead and that lead is
   //   returned.
   onDuplicatePhone?: "block" | "attach";
+  // Shown in the lead's History "created" entry (e.g. "bulk import") for
+  // entry points capture_channel doesn't already describe.
+  createdVia?: string;
 }
 
 export async function createLead(
@@ -769,7 +772,7 @@ export async function createLead(
       if (options?.onDuplicatePhone !== "attach") throw duplicatePhoneError(existing);
       await recordRepeatInquiry(existing, input, ipAddress, client);
     } else {
-      lead = await insertLead(client, input, creatorId, ownerId, status, ipAddress);
+      lead = await insertLead(client, input, creatorId, ownerId, status, ipAddress, options?.createdVia);
     }
     await client.query("COMMIT");
   } catch (err) {
@@ -828,7 +831,8 @@ async function insertLead(
   creatorId: string,
   ownerId: string | null,
   status: string | undefined,
-  ipAddress?: string | null
+  ipAddress?: string | null,
+  createdVia?: string
 ): Promise<LeadRow> {
   const { columns, placeholders, values } = buildInsert({
     full_name: input.fullName,
@@ -909,6 +913,24 @@ async function insertLead(
   );
 
   const lead = result.rows[0];
+
+  // The first entry in the lead's History: who created it, how, at which
+  // stage and for whom. Website/QR leads have no person behind them, so
+  // they're shown as System.
+  const isPublicForm = lead.capture_channel === "website" || lead.capture_channel === "qr";
+  const via = lead.capture_channel === "website" ? "the website form" : lead.capture_channel === "qr" ? "a QR code" : createdVia;
+  const ownerName = ownerId ? (await db.query<{ name: string }>("SELECT name FROM users WHERE id = $1", [ownerId])).rows[0]?.name : null;
+  await recordAuditEvent({
+    entityType: "lead",
+    entityId: lead.id,
+    entityLabel: lead.full_name,
+    action: "created",
+    summary: `created this lead${via ? ` via ${via}` : ""}`,
+    oldValue: null,
+    newValue: `${lead.status} · ${ownerName ?? "Unassigned"}`,
+    actorId: isPublicForm ? null : creatorId,
+    ipAddress,
+  }, db);
 
   if (input.consent) {
     const captured = input.consent.captured ?? false;
@@ -1015,7 +1037,7 @@ export async function bulkImportLeads(rows: Record<string, unknown>[], creatorId
         { ...row, phone: cleanImportedMobile(row.phone), altPhone: cleanImportedMobile(row.altPhone), ownerId: assignedOwnerId ?? undefined },
         creatorId,
         undefined,
-        { requiresQualification: true, skipWelcomeMessage: true }
+        { requiresQualification: true, skipWelcomeMessage: true, createdVia: "bulk import" }
       );
       result.created++;
     } catch (err) {
@@ -1953,27 +1975,62 @@ export async function restoreLead(leadId: string, requestingUserId: string, ipAd
   }
 }
 
-export async function shareLead(leadId: string, targetUserId: string, sharedByUserId: string): Promise<void> {
+// Who a share was given to / taken from, for the lead's History entry.
+async function shareHistoryLabels(leadId: string, targetUserId: string) {
+  const result = await pool.query<{ full_name: string; target_name: string | null }>(
+    "SELECT l.full_name, (SELECT name FROM users WHERE id = $2) AS target_name FROM leads l WHERE l.id = $1",
+    [leadId, targetUserId]
+  );
+  return { leadLabel: result.rows[0]?.full_name ?? "Unknown lead", targetName: result.rows[0]?.target_name ?? "Unknown user" };
+}
+
+export async function shareLead(leadId: string, targetUserId: string, sharedByUserId: string, ipAddress?: string | null): Promise<void> {
   const inScope = await isLeadInOwnerScope(leadId, sharedByUserId);
   if (!inScope) {
     throw new ApiError(403, "You do not have access to this lead");
   }
 
-  await pool.query(
+  const inserted = await pool.query(
     `INSERT INTO lead_shares (lead_id, shared_with_user_id, shared_by_user_id)
      VALUES ($1, $2, $3)
      ON CONFLICT (lead_id, shared_with_user_id) DO NOTHING`,
     [leadId, targetUserId, sharedByUserId]
   );
+  if ((inserted.rowCount ?? 0) === 0) return; // already shared - nothing changed
+  const { leadLabel, targetName } = await shareHistoryLabels(leadId, targetUserId);
+  await recordAuditEvent({
+    entityType: "lead",
+    entityId: leadId,
+    entityLabel: leadLabel,
+    action: "shared",
+    summary: `shared this lead with ${targetName}`,
+    oldValue: null,
+    newValue: targetName,
+    actorId: sharedByUserId,
+    ipAddress,
+  });
 }
 
-export async function unshareLead(leadId: string, targetUserId: string, requestingUserId: string): Promise<void> {
+export async function unshareLead(leadId: string, targetUserId: string, requestingUserId: string, ipAddress?: string | null): Promise<void> {
   const inScope = await isLeadInOwnerScope(leadId, requestingUserId);
   if (!inScope) {
     throw new ApiError(403, "You do not have access to this lead");
   }
 
-  await pool.query("DELETE FROM lead_shares WHERE lead_id = $1 AND shared_with_user_id = $2", [leadId, targetUserId]);
+  const removed = await pool.query("DELETE FROM lead_shares WHERE lead_id = $1 AND shared_with_user_id = $2", [leadId, targetUserId]);
+  if ((removed.rowCount ?? 0) === 0) return;
+  const { leadLabel, targetName } = await shareHistoryLabels(leadId, targetUserId);
+  await recordAuditEvent({
+    entityType: "lead",
+    entityId: leadId,
+    entityLabel: leadLabel,
+    action: "unshared",
+    summary: `stopped sharing this lead with ${targetName}`,
+    oldValue: targetName,
+    newValue: null,
+    actorId: requestingUserId,
+    ipAddress,
+  });
 }
 
 export async function listLeadShares(leadId: string, requestingUserId: string) {
@@ -2022,10 +2079,13 @@ export async function getLeadTimeline(leadId: string, requestingUserId: string):
     throw new ApiError(403, "You do not have access to this lead");
   }
 
-  const [activities, auditEvents] = await Promise.all([
+  // Consent events are stored under entity "consent" with the lead's own id.
+  const [activities, leadEvents, consentEvents] = await Promise.all([
     listActivitiesForLead(leadId, requestingUserId),
     listAuditLogForEntity("lead", leadId),
+    listAuditLogForEntity("consent", leadId),
   ]);
+  const auditEvents = [...leadEvents, ...consentEvents];
   const comments = await listCommentsForActivities(activities.map((a) => a.id));
   const activityById = new Map(activities.map((a) => [a.id, a]));
 

@@ -250,6 +250,35 @@ export async function convertLeadToOpportunity(leadId: string, input: Opportunit
     // keeps its existing customer.
     const newCustomerId = await createCustomerFromLead(leadResult.rows[0], client);
 
+    // The lead's own History: the opportunity created from it, and the lead
+    // moving to Converted (the first time only - later opportunities leave
+    // the stage as it is).
+    const leadLabel = leadResult.rows[0].full_name;
+    const opportunityLabel = result.rows[0].name ?? leadLabel;
+    await recordAuditEvent({
+      entityType: "lead",
+      entityId: leadId,
+      entityLabel: leadLabel,
+      action: "opportunity_created",
+      summary: `created the opportunity "${opportunityLabel}"`,
+      oldValue: null,
+      newValue: opportunityLabel,
+      actorId: requestingUserId,
+    }, client);
+    const previousStatus = stageCheck.rows[0].status;
+    if (previousStatus !== "Converted") {
+      await recordAuditEvent({
+        entityType: "lead",
+        entityId: leadId,
+        entityLabel: leadLabel,
+        action: "status_changed",
+        summary: `Stage changed - ${leadLabel}`,
+        oldValue: previousStatus,
+        newValue: "Converted",
+        actorId: requestingUserId,
+      }, client);
+    }
+
     await client.query("COMMIT");
     if (newCustomerId) queueCustomerHelpdeskSync(newCustomerId);
 
@@ -489,6 +518,19 @@ export async function updateOpportunity(id: string, updates: OpportunityInput, r
       entityLabel: before.label,
       action: "stage_changed",
       summary: `Stage changed - ${before.label}`,
+      oldValue: before.stage,
+      newValue: updates.stage,
+      actorId: requestingUserId,
+    });
+    // Same move on the lead's own History - a deal won or lost is part of
+    // the lead's story too.
+    const leadRow = await pool.query<{ full_name: string }>("SELECT full_name FROM leads WHERE id = $1", [result.rows[0].lead_id]);
+    await recordAuditEvent({
+      entityType: "lead",
+      entityId: result.rows[0].lead_id,
+      entityLabel: leadRow.rows[0]?.full_name ?? before.label,
+      action: "opportunity_stage_changed",
+      summary: `moved the opportunity "${before.label}"`,
       oldValue: before.stage,
       newValue: updates.stage,
       actorId: requestingUserId,
