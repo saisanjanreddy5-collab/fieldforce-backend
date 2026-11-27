@@ -8,6 +8,7 @@ import { ApiError } from "../utils/api-error";
 import { getEffectivePermissions } from "./permission-service";
 import { assertLevelAssignable, getLevelSecurityTier } from "./level-service";
 import { assertActorIsRealAdmin, getNextEmployeeCode } from "./user-service";
+import { listUserTerritories, resolveTerritories, saveTerritories, TerritoryInput } from "./user-territory-service";
 import { recordAuditEvent } from "./audit-log-service";
 import { Role, ROLES } from "../utils/roles";
 
@@ -70,6 +71,7 @@ export interface RegisterInput {
   levelId?: string;
   operationType?: "COCO" | "FOFO" | "Both";
   pincodes?: string[];
+  territories?: TerritoryInput[];
 }
 
 function toPublicUser(row: UserRow) {
@@ -178,8 +180,11 @@ export async function registerUser(input: RegisterInput, actorId?: string) {
   // Call Center -> Field Sales engine (lead-call-center-service.ts) - this
   // mirrors the frontend's own required-field rule as a defense-in-depth
   // check, since this service is reachable directly via the API too.
-  if (role === ROLES.AGENT && (!input.pincodes || input.pincodes.length === 0)) {
-    throw new ApiError(422, "At least one pincode is required for a field employee");
+  // Locations picked -> their pincodes are added to any typed ones.
+  const resolved = input.territories ? await resolveTerritories(input.territories) : undefined;
+  const pincodes = [...new Set([...(resolved?.pincodes ?? []), ...(input.pincodes ?? [])])];
+  if (role === ROLES.AGENT && pincodes.length === 0) {
+    throw new ApiError(422, "Pick at least one location or pincode for a field employee");
   }
 
   // The user and their pincodes/teams are saved together or not at all.
@@ -213,13 +218,16 @@ export async function registerUser(input: RegisterInput, actorId?: string) {
       ]
     );
 
-    if (input.pincodes && input.pincodes.length > 0) {
+    if (pincodes.length > 0) {
       await client.query(
         `INSERT INTO employee_pincodes (user_id, pincode)
          SELECT $1, * FROM unnest($2::varchar[])
          ON CONFLICT (user_id, pincode) DO NOTHING`,
-        [result.rows[0].id, input.pincodes]
+        [result.rows[0].id, pincodes]
       );
+    }
+    if (resolved) {
+      await saveTerritories(client, result.rows[0].id, resolved.territories);
     }
 
     if (input.salesTeamIds && input.salesTeamIds.length > 0) {
@@ -241,7 +249,8 @@ export async function registerUser(input: RegisterInput, actorId?: string) {
 
   // Admin / Field Sales get their Helpdesk agent account straight away.
   queueEmployeeHelpdeskSync(result.rows[0].id);
-  return toPublicUser(result.rows[0]);
+  const [saved] = await listUserTerritories(result.rows[0].id);
+  return { ...toPublicUser(result.rows[0]), pincodes, territories: saved?.territories ?? [] };
 }
 
 export async function loginUser(email: string, password: string) {

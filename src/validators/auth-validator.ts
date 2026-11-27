@@ -40,6 +40,20 @@ export const registerSchema = z
     // purpose (see employee_pincodes), so more than one person can list the
     // same pincode.
     pincodes: z.array(z.string().trim().min(1)).optional(),
+    // The locations this person covers (see user-territory-service.ts) -
+    // their pincodes are filled from these, plus any `pincodes` sent too.
+    territories: z
+      .array(
+        z
+          .object({
+            stateId: z.string().uuid(),
+            cityId: z.string().uuid().optional(),
+            areaId: z.string().uuid().optional(),
+          })
+          .refine((t) => !t.areaId || t.cityId, { message: "cityId is required with areaId", path: ["cityId"] })
+      )
+      .max(500)
+      .optional(),
   })
   .refine((data) => Boolean(data.role) || Boolean(data.levelId), {
     message: "Either a role or a level is required",

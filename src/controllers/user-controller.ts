@@ -3,6 +3,7 @@ import { asyncHandler } from "../utils/async-handler";
 import { sendSuccess } from "../utils/response";
 import * as userService from "../services/user-service";
 import * as authService from "../services/auth-service";
+import * as userTerritoryService from "../services/user-territory-service";
 
 export const list = asyncHandler(async (req: Request, res: Response) => {
   const query = req.validatedQuery as unknown as { page: number; limit: number };
@@ -30,8 +31,11 @@ export const nextEmployeeCode = asyncHandler(async (_req: Request, res: Response
   sendSuccess(res, { employeeCode: await userService.getNextEmployeeCode() });
 });
 
-export const listTerritories = asyncHandler(async (_req: Request, res: Response) => {
-  sendSuccess(res, await userService.listDistinctTerritories());
+// Each person's locations (state/city/area with names + pincode) and the
+// pincodes they give them. ?userId= narrows it to one person.
+export const listTerritories = asyncHandler(async (req: Request, res: Response) => {
+  const { userId } = req.validatedQuery as unknown as { userId?: string };
+  sendSuccess(res, await userTerritoryService.listUserTerritories(userId, req.user!.id));
 });
 
 // Self-service - always targets the authenticated caller's own id, never

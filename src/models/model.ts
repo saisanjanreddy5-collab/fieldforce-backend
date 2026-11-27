@@ -2477,6 +2477,67 @@ Regards,', 'active', 4),
       "grant_fofo_onboarding_push",
       `INSERT INTO role_permissions (role, permission) VALUES ('admin','fofo_onboarding.push'), ('manager','fofo_onboarding.push'), ('agent','fofo_onboarding.push') ON CONFLICT (role, permission) DO NOTHING`
     ),
+
+    // --- Location master: State -> City -> Area from the India Post pincode
+    // directory. pincode_directory is a 1:1 copy of the government file's
+    // columns, imported by hand (pgAdmin/DBeaver CSV import) - every column
+    // is plain text so a stray "NA" never makes the import fail. Then
+    // `npm run sync:locations` fills districts (= cities) and areas (= post
+    // offices) from it. No FK into it: re-importing a newer file never
+    // touches the ids users/leads point at.
+    `CREATE TABLE IF NOT EXISTS pincode_directory (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      circle_name VARCHAR(150),
+      region_name VARCHAR(150),
+      division_name VARCHAR(150),
+      office_name VARCHAR(150),
+      pincode VARCHAR(10),
+      office_type VARCHAR(20),
+      delivery VARCHAR(30),
+      district VARCHAR(150),
+      state_name VARCHAR(150),
+      latitude VARCHAR(30),
+      longitude VARCHAR(30)
+    )`,
+    `ALTER TABLE areas ADD COLUMN IF NOT EXISTS pincode VARCHAR(6)`,
+    `ALTER TABLE areas ADD COLUMN IF NOT EXISTS latitude NUMERIC(9,6)`,
+    `ALTER TABLE areas ADD COLUMN IF NOT EXISTS longitude NUMERIC(9,6)`,
+    // Two post offices can share a name inside one district (different
+    // pincodes), so the old (name, district) uniqueness would reject real rows.
+    `ALTER TABLE areas DROP CONSTRAINT IF EXISTS areas_name_district_id_key`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS uq_areas_name_district_pincode ON areas(name, district_id, pincode)`,
+    `CREATE INDEX IF NOT EXISTS idx_areas_pincode ON areas(pincode)`,
+    // The directory covers every state/UT; the original seed above had 24.
+    // The rest, with their official GST state codes, under the nearest of
+    // the four existing zones (the North-East goes under East).
+    `INSERT INTO states (name, zone_id, gst_code)
+     SELECT v.name, z.id, v.code FROM zones z
+     JOIN (VALUES
+       ('Arunachal Pradesh','East','12'), ('Nagaland','East','13'), ('Manipur','East','14'),
+       ('Mizoram','East','15'), ('Tripura','East','16'), ('Meghalaya','East','17'), ('Sikkim','East','11'),
+       ('Andaman and Nicobar Islands','East','35'), ('Chhattisgarh','West','22'),
+       ('Dadra and Nagar Haveli and Daman and Diu','West','26'), ('Ladakh','North','38'), ('Lakshadweep','South','31')
+     ) AS v(name, zone, code)
+     ON z.name = v.zone
+     ON CONFLICT (name, zone_id) DO NOTHING`,
+
+    // The locations a person covers - many per person. Only a state = the
+    // whole state; state + city = the whole city; all three = that one area.
+    // Saving these also rebuilds the person's employee_pincodes from them
+    // (user-territory-service.ts), so lead matching follows the locations.
+    `CREATE TABLE IF NOT EXISTS user_territories (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      state_id UUID NOT NULL REFERENCES states(id) ON DELETE RESTRICT,
+      district_id UUID REFERENCES districts(id) ON DELETE RESTRICT,
+      area_id UUID REFERENCES areas(id) ON DELETE RESTRICT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (area_id IS NULL OR district_id IS NOT NULL)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_user_territories_user_id ON user_territories(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_user_territories_state_id ON user_territories(state_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_user_territories_district_id ON user_territories(district_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_user_territories_area_id ON user_territories(area_id)`,
   ];
 
   // One dedicated connection with the pool's per-query timeout lifted - an
