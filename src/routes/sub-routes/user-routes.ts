@@ -4,13 +4,25 @@ import * as testAccessController from "../../controllers/test-access-controller"
 import { requireAuth } from "../../middleware/auth-middleware";
 import { requirePermission } from "../../middleware/permission-middleware";
 import { validateBody, validateQuery } from "../../middleware/validate-middleware";
-import { adminResetPasswordSchema, listUsersQuerySchema, updateOwnProfileSchema, updateUserSchema } from "../../validators/user-validator";
+import {
+  adminResetPasswordSchema,
+  listUsersQuerySchema,
+  listUserTerritoriesQuerySchema,
+  updateOwnProfileSchema,
+  updateUserSchema,
+} from "../../validators/user-validator";
 
 const router = Router();
 
 router.get("/", requireAuth, requirePermission("users.view"), validateQuery(listUsersQuerySchema), userController.list);
 router.get("/next-employee-code", requireAuth, requirePermission("users.create"), userController.nextEmployeeCode);
-router.get("/territories", requireAuth, requirePermission("users.view"), userController.listTerritories);
+router.get(
+  "/territories",
+  requireAuth,
+  requirePermission("users.view"),
+  validateQuery(listUserTerritoriesQuerySchema),
+  userController.listTerritories
+);
 // Registered before /:id so Express doesn't treat "me" as an id param.
 // Self-service, not a tiered authorization action - stays ungated by design.
 router.patch("/me", requireAuth, validateBody(updateOwnProfileSchema), userController.updateOwnProfile);

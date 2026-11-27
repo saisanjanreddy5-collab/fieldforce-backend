@@ -14,3 +14,15 @@ export const listStates = asyncHandler(async (req: Request, res: Response) => {
   const result = await geographyService.listStates(zoneId, page, limit);
   sendSuccess(res, result);
 });
+
+export const listCities = asyncHandler(async (req: Request, res: Response) => {
+  const { stateId, search } = req.validatedQuery as unknown as { stateId: string; search?: string };
+  const cities = await geographyService.listCities(stateId, search);
+  sendSuccess(res, { cities });
+});
+
+export const listAreas = asyncHandler(async (req: Request, res: Response) => {
+  const filters = req.validatedQuery as unknown as { cityId?: string; pincode?: string; search?: string };
+  const areas = await geographyService.listAreas(filters);
+  sendSuccess(res, { areas });
+});

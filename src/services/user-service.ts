@@ -5,6 +5,7 @@ import { Role, ROLES } from "../utils/roles";
 import { queueEmployeeHelpdeskSync } from "./frappe-helpdesk-service";
 import { clearPermissionCache } from "./permission-service";
 import { SUBTREE_CTE } from "../utils/subtree";
+import { resolveTerritories, saveTerritories, TERRITORIES_JOIN, TerritoryDetail, TerritoryInput } from "./user-territory-service";
 
 // EMP-001, EMP-002, ... - picks up from whatever the highest real numeric
 // code already is, same MAX()+1 convention lead_number/claim_number already
@@ -20,18 +21,6 @@ export async function getNextEmployeeCode(): Promise<string> {
   return `EMP-${String(next).padStart(3, "0")}`;
 }
 
-// Distinct territory values already assigned to someone - lead-service.ts
-// has its own version of this over the leads table (what territories leads
-// mention), but the auto-assignment match in resolveAutoAssignee() checks
-// against users.territory, so this is the list that actually matters for
-// picking a non-colliding value here.
-export async function listDistinctTerritories(): Promise<string[]> {
-  const result = await pool.query<{ territory: string }>(
-    "SELECT DISTINCT territory FROM users WHERE territory IS NOT NULL AND territory <> '' ORDER BY territory ASC"
-  );
-  return result.rows.map((row) => row.territory);
-}
-
 export interface UpdateUserInput {
   name?: string;
   managerId?: string;
@@ -45,6 +34,7 @@ export interface UpdateUserInput {
   isActive?: boolean;
   operationType?: string;
   pincodes?: string[];
+  territories?: TerritoryInput[];
 }
 
 interface UserRow {
@@ -70,6 +60,7 @@ interface UserRow {
   customer_category_id: string | null;
   operation_type: string | null;
   pincodes: string[] | null;
+  territories: TerritoryDetail[] | null;
   is_active: boolean;
   created_at: string;
 }
@@ -101,6 +92,8 @@ function toPublicUser(row: UserRow) {
     customerCategoryId: row.customer_category_id,
     operationType: row.operation_type,
     pincodes: row.pincodes ?? [],
+    // Each location with the names behind its ids (state/city/area/pincode).
+    territories: row.territories ?? [],
     isActive: row.is_active,
     createdAt: row.created_at,
   };
@@ -144,7 +137,7 @@ export async function listUsers(requestingUserId: string, requestingRole: Role, 
     // disappear with no way back to re-enable it.
     const countResult = await pool.query<{ count: string }>("SELECT COUNT(*) FROM users");
     const result = await pool.query<UserRow>(
-      `SELECT u.*, ep.pincodes, st.sales_team_ids FROM users u ${PINCODES_JOIN} ${SALES_TEAMS_JOIN} ORDER BY u.name ASC LIMIT $1 OFFSET $2`,
+      `SELECT u.*, ep.pincodes, st.sales_team_ids, terr.territories FROM users u ${PINCODES_JOIN} ${SALES_TEAMS_JOIN} ${TERRITORIES_JOIN} ORDER BY u.name ASC LIMIT $1 OFFSET $2`,
       [limit, offset]
     );
     return { users: result.rows.map(toPublicUser), total: Number(countResult.rows[0].count) };
@@ -160,10 +153,11 @@ export async function listUsers(requestingUserId: string, requestingRole: Role, 
 
   const result = await pool.query<UserRow>(
     `${SUBTREE_CTE}
-     SELECT u.*, ep.pincodes, st.sales_team_ids FROM users u
+     SELECT u.*, ep.pincodes, st.sales_team_ids, terr.territories FROM users u
      INNER JOIN subtree s ON u.id = s.id
      ${PINCODES_JOIN}
      ${SALES_TEAMS_JOIN}
+     ${TERRITORIES_JOIN}
      WHERE u.is_active = true
      ORDER BY u.name ASC
      LIMIT $2 OFFSET $3`,
@@ -317,14 +311,20 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
     }
   }
 
+  // Locations sent -> the pincode list is rebuilt from them (every pincode
+  // in the picked areas / whole cities / whole states), plus any pincodes
+  // sent alongside. Not sent -> pincodes behave exactly as before.
+  const resolved = updates.territories !== undefined ? await resolveTerritories(updates.territories) : undefined;
+  const pincodes = resolved ? [...new Set([...resolved.pincodes, ...(updates.pincodes ?? [])])] : updates.pincodes;
+
   // Same defense-in-depth check as registerUser - a field employee can never
   // be left with zero pincodes, whether that's this update's new role or
   // their existing one (levelId not being touched this time).
-  if (updates.pincodes !== undefined && updates.pincodes.length === 0) {
+  if (pincodes !== undefined && pincodes.length === 0) {
     const effectiveRole =
       role ?? (await pool.query<{ role: string }>("SELECT role FROM users WHERE id = $1", [id])).rows[0]?.role;
     if (effectiveRole === ROLES.AGENT) {
-      throw new ApiError(422, "At least one pincode is required for a field employee");
+      throw new ApiError(422, "Pick at least one location or pincode for a field employee");
     }
   }
 
@@ -368,16 +368,19 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
     // separate employee_pincodes table), so it's handled here regardless of
     // whether any other field changed, and submitting [] deliberately clears
     // every pincode this person covers.
-    if (updates.pincodes !== undefined) {
+    if (pincodes !== undefined) {
       await client.query("DELETE FROM employee_pincodes WHERE user_id = $1", [id]);
-      if (updates.pincodes.length > 0) {
+      if (pincodes.length > 0) {
         await client.query(
           `INSERT INTO employee_pincodes (user_id, pincode)
            SELECT $1, * FROM unnest($2::varchar[])
            ON CONFLICT (user_id, pincode) DO NOTHING`,
-          [id, updates.pincodes]
+          [id, pincodes]
         );
       }
+    }
+    if (resolved) {
+      await saveTerritories(client, id, resolved.territories);
     }
 
     // Same full-replace pattern as pincodes above - a full replace, not a
@@ -397,7 +400,7 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
 
     if (setClauses.length === 0) {
       const existing = await client.query<UserRow>(
-        `SELECT u.*, ep.pincodes, st.sales_team_ids FROM users u ${PINCODES_JOIN} ${SALES_TEAMS_JOIN} WHERE u.id = $1`,
+        `SELECT u.*, ep.pincodes, st.sales_team_ids, terr.territories FROM users u ${PINCODES_JOIN} ${SALES_TEAMS_JOIN} ${TERRITORIES_JOIN} WHERE u.id = $1`,
         [id]
       );
       if (existing.rows.length === 0) {
@@ -445,7 +448,7 @@ export async function updateUser(id: string, updates: UpdateUserInput, changedBy
   clearPermissionCache();
 
   const final = await pool.query<UserRow>(
-    `SELECT u.*, ep.pincodes, st.sales_team_ids FROM users u ${PINCODES_JOIN} ${SALES_TEAMS_JOIN} WHERE u.id = $1`,
+    `SELECT u.*, ep.pincodes, st.sales_team_ids, terr.territories FROM users u ${PINCODES_JOIN} ${SALES_TEAMS_JOIN} ${TERRITORIES_JOIN} WHERE u.id = $1`,
     [id]
   );
   // Level/role, name or active-state changes move their Helpdesk access too

@@ -18,6 +18,16 @@ export const updateOwnProfileSchema = z.object({
   smartfloAgentNumber: z.string().min(1, "Enter a phone number").optional(),
 });
 
+// One location a person covers (see user-territory-service.ts). An area
+// needs its city, so the API can check the area really is in that city.
+const territorySchema = z
+  .object({
+    stateId: z.string().uuid(),
+    cityId: z.string().uuid().optional(),
+    areaId: z.string().uuid().optional(),
+  })
+  .refine((t) => !t.areaId || t.cityId, { message: "cityId is required with areaId", path: ["cityId"] });
+
 export const updateUserSchema = z.object({
   name: z.string().min(1, "Name is required").optional(),
   managerId: z.string().uuid().or(z.literal("")).optional(),
@@ -40,9 +50,16 @@ export const updateUserSchema = z.object({
   // covers.
   operationType: z.enum(["COCO", "FOFO", "Both"]).or(z.literal("")).optional(),
   pincodes: z.array(z.string().trim().min(1)).optional(),
+  // Full replace, [] clears. When sent, the person's pincodes are rebuilt
+  // from these locations (plus any `pincodes` sent in the same request).
+  territories: z.array(territorySchema).max(500).optional(),
 });
 
 export const listUsersQuerySchema = paginationQuerySchema;
+
+export const listUserTerritoriesQuerySchema = z.object({
+  userId: z.string().uuid().optional(),
+});
 
 // Admin-initiated - no currentPassword proof needed here (unlike
 // changePasswordSchema in auth-validator.ts): the admin is proving their
